@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "cainban": {
+      "command": "go",
+      "args": [
+        "run",
+        "/Users/emhamin/cainban/cmd/cainban/main.go",
+        "mcp"
+      ],
+      "cwd": "/Users/emhamin/cainban"
+    }
+  }
+}

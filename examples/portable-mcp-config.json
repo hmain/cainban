@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cainban": {
+      "command": "/Users/emhamin/cainban/cainban",
+      "args": ["mcp"]
+    }
+  }
+}
