@@ -200,6 +200,27 @@ func (s *Server) handleToolsList(req *MCPRequest) *MCPResponse {
 			},
 		},
 		{
+			Name:        "update_task_priority",
+			Description: "Update the priority of a task",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"id": map[string]interface{}{
+						"type":        "integer",
+						"description": "Task ID to update",
+					},
+					"priority": map[string]interface{}{
+						"description": "Priority level (none, low, medium, high, critical or 0-4)",
+						"oneOf": []interface{}{
+							map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 4},
+							map[string]interface{}{"type": "string", "enum": []string{"none", "low", "medium", "high", "critical"}},
+						},
+					},
+				},
+				"required": []string{"id", "priority"},
+			},
+		},
+		{
 			Name:        "update_task",
 			Description: "Update a task's title and description",
 			InputSchema: map[string]interface{}{
@@ -260,6 +281,8 @@ func (s *Server) handleToolsCall(req *MCPRequest) *MCPResponse {
 		return s.handleUpdateTaskStatus(req, params.Arguments)
 	case "get_task":
 		return s.handleGetTask(req, params.Arguments)
+	case "update_task_priority":
+		return s.handleUpdateTaskPriority(req, params.Arguments)
 	case "update_task":
 		return s.handleUpdateTask(req, params.Arguments)
 	default:
@@ -354,9 +377,13 @@ func (s *Server) handleListTasks(req *MCPRequest, args map[string]interface{}) *
 					"text": fmt.Sprintf("\n%s:", strings.ToUpper(string(status))),
 				})
 				for _, t := range statusTasks {
+					priorityStr := ""
+					if t.Priority > 0 {
+						priorityStr = fmt.Sprintf(" [%s]", task.GetPriorityName(t.Priority))
+					}
 					content = append(content, map[string]interface{}{
 						"type": "text",
-						"text": fmt.Sprintf("• #%d %s", t.ID, t.Title),
+						"text": fmt.Sprintf("• #%d%s %s", t.ID, priorityStr, t.Title),
 					})
 				}
 			}
@@ -433,6 +460,44 @@ func (s *Server) handleGetTask(req *MCPRequest, args map[string]interface{}) *MC
 				},
 			},
 			"task": t,
+		},
+	}
+}
+
+// handleUpdateTaskPriority handles the update_task_priority tool call
+func (s *Server) handleUpdateTaskPriority(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	idFloat, ok := args["id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "Invalid or missing task ID")
+	}
+	id := int(idFloat)
+
+	priority, ok := args["priority"]
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "Missing priority")
+	}
+
+	if !task.IsValidPriority(priority) {
+		return s.errorResponse(req.ID, -32602, "Invalid priority level")
+	}
+
+	if err := s.taskSystem.UpdatePriority(id, priority); err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to update task priority: %v", err))
+	}
+
+	priorityLevel, _ := task.ParsePriority(priority)
+	priorityName := task.GetPriorityName(priorityLevel)
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("Task #%d priority updated to %s (%d)", id, priorityName, priorityLevel),
+				},
+			},
 		},
 	}
 }

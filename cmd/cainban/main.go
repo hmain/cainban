@@ -33,6 +33,8 @@ func main() {
 		handleGet(os.Args[2:])
 	case "update":
 		handleUpdate(os.Args[2:])
+	case "priority":
+		handlePriority(os.Args[2:])
 	case "board":
 		handleBoard(os.Args[2:])
 	case "mcp":
@@ -56,6 +58,7 @@ func printUsage() {
 	fmt.Println("  cainban move <id> <status>           Move task between columns")
 	fmt.Println("  cainban get <id>                     Get task details")
 	fmt.Println("  cainban update <id> <title> [description] Update task")
+	fmt.Println("  cainban priority <id> <level>           Set task priority")
 	fmt.Println("  cainban board <command>              Board management")
 	fmt.Println("  cainban mcp                          Start MCP server")
 	fmt.Println("  cainban version                      Show version")
@@ -67,6 +70,7 @@ func printUsage() {
 	fmt.Println("  cainban board create <name> [desc]   Create new board")
 	fmt.Println("  cainban board delete <name>          Delete board")
 	fmt.Println()
+	fmt.Println("Priority levels: none, low, medium, high, critical (or 0-4)")
 	fmt.Println("Statuses: todo, doing, done")
 }
 
@@ -212,7 +216,11 @@ func handleList(args []string) {
 		if statusTasks, exists := tasksByStatus[status]; exists && len(statusTasks) > 0 {
 			fmt.Printf("\n%s:\n", strings.ToUpper(string(status)))
 			for _, t := range statusTasks {
-				fmt.Printf("  #%d %s\n", t.ID, t.Title)
+				priorityStr := ""
+				if t.Priority > 0 {
+					priorityStr = fmt.Sprintf(" [%s]", task.GetPriorityName(t.Priority))
+				}
+				fmt.Printf("  #%d%s %s\n", t.ID, priorityStr, t.Title)
 				if t.Description != "" {
 					fmt.Printf("      %s\n", t.Description)
 				}
@@ -284,6 +292,9 @@ func handleGet(args []string) {
 	fmt.Printf("Board: %s\n", boardName)
 	fmt.Printf("Task #%d [%s]\n", t.ID, t.Status)
 	fmt.Printf("Title: %s\n", t.Title)
+	if t.Priority > 0 {
+		fmt.Printf("Priority: %s (%d)\n", task.GetPriorityName(t.Priority), t.Priority)
+	}
 	if t.Description != "" {
 		fmt.Printf("Description: %s\n", t.Description)
 	}
@@ -323,6 +334,51 @@ func handleUpdate(args []string) {
 	}
 
 	fmt.Printf("Updated task #%d in board '%s': %s\n", id, boardName, title)
+}
+
+func handlePriority(args []string) {
+	if len(args) < 2 {
+		fmt.Println("Error: task ID and priority level required")
+		fmt.Println("Usage: cainban priority <id> <level>")
+		fmt.Println("Priority levels: none, low, medium, high, critical (or 0-4)")
+		os.Exit(1)
+	}
+
+	id, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Printf("Error: invalid task ID '%s'\n", args[0])
+		os.Exit(1)
+	}
+
+	priority := args[1]
+	
+	// Try to parse as integer first, but keep as interface{}
+	var priorityValue interface{} = priority
+	if priorityInt, err := strconv.Atoi(priority); err == nil {
+		priorityValue = priorityInt
+	}
+
+	if !task.IsValidPriority(priorityValue) {
+		fmt.Printf("Error: invalid priority '%s'\n", args[1])
+		fmt.Println("Valid priorities: none, low, medium, high, critical (or 0-4)")
+		os.Exit(1)
+	}
+
+	db, taskSystem, boardName, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if err := taskSystem.UpdatePriority(id, priorityValue); err != nil {
+		fmt.Printf("Error updating task priority: %v\n", err)
+		os.Exit(1)
+	}
+
+	priorityLevel, _ := task.ParsePriority(priorityValue)
+	priorityName := task.GetPriorityName(priorityLevel)
+	fmt.Printf("Updated task #%d priority to %s (%d) in board '%s'\n", id, priorityName, priorityLevel, boardName)
 }
 
 func handleBoard(args []string) {

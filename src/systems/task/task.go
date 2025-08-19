@@ -16,6 +16,73 @@ const (
 	StatusDone  Status = "done"
 )
 
+// Priority levels
+const (
+	PriorityNone   = 0
+	PriorityLow    = 1
+	PriorityMedium = 2
+	PriorityHigh   = 3
+	PriorityCritical = 4
+)
+
+// PriorityNames maps priority levels to names
+var PriorityNames = map[int]string{
+	PriorityNone:     "none",
+	PriorityLow:      "low",
+	PriorityMedium:   "medium",
+	PriorityHigh:     "high",
+	PriorityCritical: "critical",
+}
+
+// PriorityLevels maps names to priority levels
+var PriorityLevels = map[string]int{
+	"none":     PriorityNone,
+	"low":      PriorityLow,
+	"medium":   PriorityMedium,
+	"high":     PriorityHigh,
+	"critical": PriorityCritical,
+}
+
+// IsValidPriority checks if a priority level is valid
+func IsValidPriority(priority interface{}) bool {
+	switch p := priority.(type) {
+	case int:
+		return p >= PriorityNone && p <= PriorityCritical
+	case string:
+		_, exists := PriorityLevels[strings.ToLower(p)]
+		return exists
+	default:
+		return false
+	}
+}
+
+// ParsePriority converts string or int to priority level
+func ParsePriority(priority interface{}) (int, error) {
+	switch p := priority.(type) {
+	case int:
+		if !IsValidPriority(p) {
+			return 0, fmt.Errorf("invalid priority level: %d (must be 0-4)", p)
+		}
+		return p, nil
+	case string:
+		level, exists := PriorityLevels[strings.ToLower(p)]
+		if !exists {
+			return 0, fmt.Errorf("invalid priority name: %s (must be none, low, medium, high, critical)", p)
+		}
+		return level, nil
+	default:
+		return 0, fmt.Errorf("priority must be int or string")
+	}
+}
+
+// GetPriorityName returns the name for a priority level
+func GetPriorityName(priority int) string {
+	if name, exists := PriorityNames[priority]; exists {
+		return name
+	}
+	return "unknown"
+}
+
 // ValidStatuses returns all valid task statuses
 func ValidStatuses() []Status {
 	return []Status{StatusTodo, StatusDoing, StatusDone}
@@ -246,6 +313,36 @@ func (s *System) Delete(id int) error {
 
 	if rowsAffected == 0 {
 		return fmt.Errorf("task with id %d not found", id)
+	}
+
+	return nil
+}
+
+// UpdatePriority updates a task's priority
+func (s *System) UpdatePriority(id int, priority interface{}) error {
+	priorityLevel, err := ParsePriority(priority)
+	if err != nil {
+		return err
+	}
+
+	query := `
+		UPDATE tasks 
+		SET priority = ?, updated_at = CURRENT_TIMESTAMP 
+		WHERE id = ?
+	`
+
+	result, err := s.db.Exec(query, priorityLevel, id)
+	if err != nil {
+		return fmt.Errorf("failed to update task priority: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check update result: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("task with ID %d not found", id)
 	}
 
 	return nil
