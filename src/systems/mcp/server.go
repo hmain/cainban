@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 
 	"github.com/hmain/cainban/src/systems/task"
 )
@@ -331,19 +332,34 @@ func (s *Server) handleListTasks(req *MCPRequest, args map[string]interface{}) *
 		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to list tasks: %v", err))
 	}
 
-	// Format tasks for display
+	// Format tasks for display with board context
 	var content []map[string]interface{}
 	if len(tasks) == 0 {
 		content = append(content, map[string]interface{}{
 			"type": "text",
-			"text": "No tasks found",
+			"text": "No tasks found in current board",
 		})
 	} else {
+		// Group by status for better display
+		tasksByStatus := make(map[task.Status][]*task.Task)
 		for _, t := range tasks {
-			content = append(content, map[string]interface{}{
-				"type": "text",
-				"text": fmt.Sprintf("#%d [%s] %s", t.ID, t.Status, t.Title),
-			})
+			tasksByStatus[t.Status] = append(tasksByStatus[t.Status], t)
+		}
+
+		statuses := []task.Status{task.StatusTodo, task.StatusDoing, task.StatusDone}
+		for _, status := range statuses {
+			if statusTasks, exists := tasksByStatus[status]; exists && len(statusTasks) > 0 {
+				content = append(content, map[string]interface{}{
+					"type": "text",
+					"text": fmt.Sprintf("\n%s:", strings.ToUpper(string(status))),
+				})
+				for _, t := range statusTasks {
+					content = append(content, map[string]interface{}{
+						"type": "text",
+						"text": fmt.Sprintf("• #%d %s", t.ID, t.Title),
+					})
+				}
+			}
 		}
 	}
 

@@ -3,10 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/hmain/cainban/src/systems/board"
 	"github.com/hmain/cainban/src/systems/mcp"
 	"github.com/hmain/cainban/src/systems/storage"
 	"github.com/hmain/cainban/src/systems/task"
@@ -22,7 +22,7 @@ func main() {
 
 	switch command {
 	case "init":
-		handleInit()
+		handleInit(os.Args[2:])
 	case "add":
 		handleAdd(os.Args[2:])
 	case "list":
@@ -33,6 +33,8 @@ func main() {
 		handleGet(os.Args[2:])
 	case "update":
 		handleUpdate(os.Args[2:])
+	case "board":
+		handleBoard(os.Args[2:])
 	case "mcp":
 		handleMCP()
 	case "version":
@@ -48,48 +50,90 @@ func printUsage() {
 	fmt.Println("cainban - AI-centric kanban board")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  cainban init                     Initialize new board")
-	fmt.Println("  cainban add <title> [description] Add new task")
-	fmt.Println("  cainban list [status]            List all tasks or by status")
-	fmt.Println("  cainban move <id> <status>       Move task between columns")
-	fmt.Println("  cainban get <id>                 Get task details")
+	fmt.Println("  cainban init [board-name]            Initialize new board")
+	fmt.Println("  cainban add <title> [description]    Add new task")
+	fmt.Println("  cainban list [status]                List all tasks or by status")
+	fmt.Println("  cainban move <id> <status>           Move task between columns")
+	fmt.Println("  cainban get <id>                     Get task details")
 	fmt.Println("  cainban update <id> <title> [description] Update task")
-	fmt.Println("  cainban mcp                      Start MCP server")
-	fmt.Println("  cainban version                  Show version")
+	fmt.Println("  cainban board <command>              Board management")
+	fmt.Println("  cainban mcp                          Start MCP server")
+	fmt.Println("  cainban version                      Show version")
+	fmt.Println()
+	fmt.Println("Board commands:")
+	fmt.Println("  cainban board list                   List all boards")
+	fmt.Println("  cainban board current                Show current board")
+	fmt.Println("  cainban board switch <name>          Switch to board")
+	fmt.Println("  cainban board create <name> [desc]   Create new board")
+	fmt.Println("  cainban board delete <name>          Delete board")
 	fmt.Println()
 	fmt.Println("Statuses: todo, doing, done")
 }
 
-func getDBPath() string {
-	homeDir, err := os.UserHomeDir()
+func getCurrentBoardDB() (*storage.DB, *task.System, string, error) {
+	boardSystem := board.New()
+	
+	// Get current board name
+	boardName, err := boardSystem.GetCurrentBoard()
 	if err != nil {
-		return "./cainban.db"
+		return nil, nil, "", fmt.Errorf("failed to get current board: %w", err)
 	}
-	return filepath.Join(homeDir, ".cainban", "cainban.db")
-}
-
-func initDB() (*storage.DB, *task.System, error) {
-	db, err := storage.New(getDBPath())
+	
+	// Get database path for current board
+	dbPath := boardSystem.GetBoardPath(boardName)
+	
+	// Initialize database
+	db, err := storage.New(dbPath)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to initialize database: %w", err)
+		return nil, nil, "", fmt.Errorf("failed to initialize database: %w", err)
 	}
 
 	taskSystem := task.New(db.Conn())
-	return db, taskSystem, nil
+	return db, taskSystem, boardName, nil
 }
 
-func handleInit() {
-	fmt.Println("Initializing cainban board...")
+func handleInit(args []string) {
+	boardSystem := board.New()
 	
-	db, _, err := initDB()
+	var boardName string
+	if len(args) > 0 {
+		boardName = args[0]
+	} else {
+		// Try to detect project board name
+		boardName = boardSystem.DetectProjectBoard()
+		if boardName != "default" {
+			fmt.Printf("Auto-detected board name: %s\n", boardName)
+		}
+	}
+	
+	fmt.Printf("Initializing cainban board: %s\n", boardName)
+	
+	// Create board if it doesn't exist
+	if boardName != "default" {
+		_, err := boardSystem.CreateBoard(boardName, fmt.Sprintf("Board for %s", boardName))
+		if err != nil && !strings.Contains(err.Error(), "already exists") {
+			fmt.Printf("Error creating board: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	
+	// Set as current board
+	if err := boardSystem.SetCurrentBoard(boardName); err != nil {
+		fmt.Printf("Error setting current board: %v\n", err)
+		os.Exit(1)
+	}
+	
+	// Initialize database
+	dbPath := boardSystem.GetBoardPath(boardName)
+	db, err := storage.New(dbPath)
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf("Error initializing database: %v\n", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
-	fmt.Printf("Board initialized at: %s\n", db.Path())
-	fmt.Println("You can now add tasks with: cainban add \"Your task title\"")
+	fmt.Printf("Board '%s' initialized at: %s\n", boardName, dbPath)
+	fmt.Printf("You can now add tasks with: cainban add \"Your task title\"\n")
 }
 
 func handleAdd(args []string) {
@@ -105,7 +149,7 @@ func handleAdd(args []string) {
 		description = strings.Join(args[1:], " ")
 	}
 
-	db, taskSystem, err := initDB()
+	db, taskSystem, boardName, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -118,14 +162,14 @@ func handleAdd(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Created task #%d: %s\n", createdTask.ID, createdTask.Title)
+	fmt.Printf("Created task #%d in board '%s': %s\n", createdTask.ID, boardName, createdTask.Title)
 	if createdTask.Description != "" {
 		fmt.Printf("Description: %s\n", createdTask.Description)
 	}
 }
 
 func handleList(args []string) {
-	db, taskSystem, err := initDB()
+	db, taskSystem, boardName, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -149,6 +193,8 @@ func handleList(args []string) {
 		fmt.Printf("Error listing tasks: %v\n", err)
 		os.Exit(1)
 	}
+
+	fmt.Printf("Board: %s\n", boardName)
 
 	if len(tasks) == 0 {
 		fmt.Println("No tasks found")
@@ -194,7 +240,7 @@ func handleMove(args []string) {
 		os.Exit(1)
 	}
 
-	db, taskSystem, err := initDB()
+	db, taskSystem, boardName, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -206,7 +252,7 @@ func handleMove(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Moved task #%d to %s\n", id, status)
+	fmt.Printf("Moved task #%d to %s in board '%s'\n", id, status, boardName)
 }
 
 func handleGet(args []string) {
@@ -222,7 +268,7 @@ func handleGet(args []string) {
 		os.Exit(1)
 	}
 
-	db, taskSystem, err := initDB()
+	db, taskSystem, boardName, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -235,6 +281,7 @@ func handleGet(args []string) {
 		os.Exit(1)
 	}
 
+	fmt.Printf("Board: %s\n", boardName)
 	fmt.Printf("Task #%d [%s]\n", t.ID, t.Status)
 	fmt.Printf("Title: %s\n", t.Title)
 	if t.Description != "" {
@@ -263,7 +310,7 @@ func handleUpdate(args []string) {
 		description = strings.Join(args[2:], " ")
 	}
 
-	db, taskSystem, err := initDB()
+	db, taskSystem, boardName, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -275,13 +322,132 @@ func handleUpdate(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("Updated task #%d: %s\n", id, title)
+	fmt.Printf("Updated task #%d in board '%s': %s\n", id, boardName, title)
+}
+
+func handleBoard(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Error: board command required")
+		fmt.Println("Usage: cainban board <command>")
+		fmt.Println("Commands: list, current, switch, create, delete")
+		os.Exit(1)
+	}
+
+	boardSystem := board.New()
+	command := args[0]
+
+	switch command {
+	case "list":
+		boards, err := boardSystem.ListBoards()
+		if err != nil {
+			fmt.Printf("Error listing boards: %v\n", err)
+			os.Exit(1)
+		}
+
+		if len(boards) == 0 {
+			fmt.Println("No boards found")
+			return
+		}
+
+		currentBoard, _ := boardSystem.GetCurrentBoard()
+		fmt.Println("Available boards:")
+		for _, b := range boards {
+			marker := "  "
+			if b.Name == currentBoard {
+				marker = "* "
+			}
+			fmt.Printf("%s%s\n", marker, b.Name)
+			if b.Description != "" {
+				fmt.Printf("    %s\n", b.Description)
+			}
+		}
+
+	case "current":
+		currentBoard, err := boardSystem.GetCurrentBoard()
+		if err != nil {
+			fmt.Printf("Error getting current board: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Current board: %s\n", currentBoard)
+
+	case "switch":
+		if len(args) < 2 {
+			fmt.Println("Error: board name required")
+			fmt.Println("Usage: cainban board switch <name>")
+			os.Exit(1)
+		}
+
+		boardName := args[1]
+		
+		// Check if board exists
+		_, err := boardSystem.GetBoard(boardName)
+		if err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
+		}
+
+		if err := boardSystem.SetCurrentBoard(boardName); err != nil {
+			fmt.Printf("Error switching board: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Switched to board: %s\n", boardName)
+
+	case "create":
+		if len(args) < 2 {
+			fmt.Println("Error: board name required")
+			fmt.Println("Usage: cainban board create <name> [description]")
+			os.Exit(1)
+		}
+
+		boardName := args[1]
+		description := ""
+		if len(args) > 2 {
+			description = strings.Join(args[2:], " ")
+		}
+
+		board, err := boardSystem.CreateBoard(boardName, description)
+		if err != nil {
+			fmt.Printf("Error creating board: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Initialize the database
+		db, err := storage.New(board.Path)
+		if err != nil {
+			fmt.Printf("Error initializing board database: %v\n", err)
+			os.Exit(1)
+		}
+		db.Close()
+
+		fmt.Printf("Created board '%s' at: %s\n", boardName, board.Path)
+
+	case "delete":
+		if len(args) < 2 {
+			fmt.Println("Error: board name required")
+			fmt.Println("Usage: cainban board delete <name>")
+			os.Exit(1)
+		}
+
+		boardName := args[1]
+		if err := boardSystem.DeleteBoard(boardName); err != nil {
+			fmt.Printf("Error deleting board: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Deleted board: %s\n", boardName)
+
+	default:
+		fmt.Printf("Unknown board command: %s\n", command)
+		fmt.Println("Commands: list, current, switch, create, delete")
+		os.Exit(1)
+	}
 }
 
 func handleMCP() {
 	fmt.Println("Starting MCP server...")
 	
-	db, taskSystem, err := initDB()
+	db, taskSystem, _, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
@@ -296,5 +462,5 @@ func handleMCP() {
 }
 
 func handleVersion() {
-	fmt.Println("cainban v0.1.0")
+	fmt.Println("cainban v0.2.0 - Multi-board support")
 }
