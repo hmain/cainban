@@ -33,6 +33,8 @@ func main() {
 		handleGet(os.Args[2:])
 	case "update":
 		handleUpdate(os.Args[2:])
+	case "search":
+		handleSearch(os.Args[2:])
 	case "priority":
 		handlePriority(os.Args[2:])
 	case "board":
@@ -55,10 +57,11 @@ func printUsage() {
 	fmt.Println("  cainban init [board-name]            Initialize new board")
 	fmt.Println("  cainban add <title> [description]    Add new task")
 	fmt.Println("  cainban list [status]                List all tasks or by status")
-	fmt.Println("  cainban move <id> <status>           Move task between columns")
-	fmt.Println("  cainban get <id>                     Get task details")
-	fmt.Println("  cainban update <id> <title> [description] Update task")
-	fmt.Println("  cainban priority <id> <level>           Set task priority")
+	fmt.Println("  cainban move <id|title> <status>        Move task between columns")
+	fmt.Println("  cainban get <id|title>               Get task details")
+	fmt.Println("  cainban update <id|title> <title> [description] Update task")
+	fmt.Println("  cainban search <query>                  Search tasks by title")
+	fmt.Println("  cainban priority <id|title> <level>     Set task priority")
 	fmt.Println("  cainban board <command>              Board management")
 	fmt.Println("  cainban mcp                          Start MCP server")
 	fmt.Println("  cainban version                      Show version")
@@ -231,17 +234,15 @@ func handleList(args []string) {
 
 func handleMove(args []string) {
 	if len(args) < 2 {
-		fmt.Println("Error: task ID and status required")
-		fmt.Println("Usage: cainban move <id> <status>")
+		fmt.Println("Error: task ID/title and status required")
+		fmt.Println("Usage: cainban move <id|title> <status>")
+		fmt.Println("Examples:")
+		fmt.Println("  cainban move 5 doing")
+		fmt.Println("  cainban move \"bubble tea\" doing")
 		os.Exit(1)
 	}
 
-	id, err := strconv.Atoi(args[0])
-	if err != nil {
-		fmt.Printf("Error: invalid task ID '%s'\n", args[0])
-		os.Exit(1)
-	}
-
+	taskIdentifier := args[0]
 	status := args[1]
 	if !task.IsValidStatus(status) {
 		fmt.Printf("Error: invalid status '%s'. Valid statuses: todo, doing, done\n", status)
@@ -255,26 +256,32 @@ func handleMove(args []string) {
 	}
 	defer db.Close()
 
-	if err := taskSystem.UpdateStatus(id, task.Status(status)); err != nil {
+	// Find task by ID or fuzzy match
+	foundTask, err := taskSystem.FindTaskByFuzzyID(1, taskIdentifier)
+	if err != nil {
+		fmt.Printf("Error finding task: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := taskSystem.UpdateStatus(foundTask.ID, task.Status(status)); err != nil {
 		fmt.Printf("Error moving task: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Moved task #%d to %s in board '%s'\n", id, status, boardName)
+	fmt.Printf("Moved task #%d \"%s\" to %s in board '%s'\n", foundTask.ID, foundTask.Title, status, boardName)
 }
 
 func handleGet(args []string) {
 	if len(args) == 0 {
-		fmt.Println("Error: task ID required")
-		fmt.Println("Usage: cainban get <id>")
+		fmt.Println("Error: task ID or title required")
+		fmt.Println("Usage: cainban get <id|title>")
+		fmt.Println("Examples:")
+		fmt.Println("  cainban get 5")
+		fmt.Println("  cainban get \"bubble tea\"")
 		os.Exit(1)
 	}
 
-	id, err := strconv.Atoi(args[0])
-	if err != nil {
-		fmt.Printf("Error: invalid task ID '%s'\n", args[0])
-		os.Exit(1)
-	}
+	taskIdentifier := args[0]
 
 	db, taskSystem, boardName, err := getCurrentBoardDB()
 	if err != nil {
@@ -283,9 +290,10 @@ func handleGet(args []string) {
 	}
 	defer db.Close()
 
-	t, err := taskSystem.GetByID(id)
+	// Find task by ID or fuzzy match
+	t, err := taskSystem.FindTaskByFuzzyID(1, taskIdentifier)
 	if err != nil {
-		fmt.Printf("Error getting task: %v\n", err)
+		fmt.Printf("Error finding task: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -304,17 +312,15 @@ func handleGet(args []string) {
 
 func handleUpdate(args []string) {
 	if len(args) < 2 {
-		fmt.Println("Error: task ID and title required")
-		fmt.Println("Usage: cainban update <id> <title> [description]")
+		fmt.Println("Error: task ID/title and new title required")
+		fmt.Println("Usage: cainban update <id|title> <new_title> [description]")
+		fmt.Println("Examples:")
+		fmt.Println("  cainban update 5 \"New title\"")
+		fmt.Println("  cainban update \"bubble tea\" \"Updated TUI task\"")
 		os.Exit(1)
 	}
 
-	id, err := strconv.Atoi(args[0])
-	if err != nil {
-		fmt.Printf("Error: invalid task ID '%s'\n", args[0])
-		os.Exit(1)
-	}
-
+	taskIdentifier := args[0]
 	title := args[1]
 	description := ""
 	if len(args) > 2 {
@@ -328,28 +334,82 @@ func handleUpdate(args []string) {
 	}
 	defer db.Close()
 
-	if err := taskSystem.Update(id, title, description); err != nil {
+	// Find task by ID or fuzzy match
+	foundTask, err := taskSystem.FindTaskByFuzzyID(1, taskIdentifier)
+	if err != nil {
+		fmt.Printf("Error finding task: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := taskSystem.Update(foundTask.ID, title, description); err != nil {
 		fmt.Printf("Error updating task: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Updated task #%d in board '%s': %s\n", id, boardName, title)
+	fmt.Printf("Updated task #%d in board '%s': %s\n", foundTask.ID, boardName, title)
+}
+
+func handleSearch(args []string) {
+	if len(args) == 0 {
+		fmt.Println("Error: search query required")
+		fmt.Println("Usage: cainban search <query>")
+		fmt.Println("Examples:")
+		fmt.Println("  cainban search \"bubble tea\"")
+		fmt.Println("  cainban search \"prep public\"")
+		os.Exit(1)
+	}
+
+	query := strings.Join(args, " ")
+
+	db, taskSystem, boardName, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	matches, err := taskSystem.SearchTasks(1, query)
+	if err != nil {
+		fmt.Printf("Error searching tasks: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(matches) == 0 {
+		fmt.Printf("No tasks found matching '%s' in board '%s'\n", query, boardName)
+		return
+	}
+
+	fmt.Printf("Search results for '%s' in board '%s':\n\n", query, boardName)
+	for i, t := range matches {
+		if i >= 10 { // Limit to top 10 results
+			fmt.Printf("... and %d more matches\n", len(matches)-10)
+			break
+		}
+		
+		priorityStr := ""
+		if t.Priority > 0 {
+			priorityStr = fmt.Sprintf(" [%s]", task.GetPriorityName(t.Priority))
+		}
+		
+		fmt.Printf("  #%d%s [%s] %s\n", t.ID, priorityStr, t.Status, t.Title)
+		if t.Description != "" {
+			fmt.Printf("      %s\n", t.Description)
+		}
+	}
 }
 
 func handlePriority(args []string) {
 	if len(args) < 2 {
-		fmt.Println("Error: task ID and priority level required")
-		fmt.Println("Usage: cainban priority <id> <level>")
+		fmt.Println("Error: task ID/title and priority level required")
+		fmt.Println("Usage: cainban priority <id|title> <level>")
 		fmt.Println("Priority levels: none, low, medium, high, critical (or 0-4)")
+		fmt.Println("Examples:")
+		fmt.Println("  cainban priority 5 high")
+		fmt.Println("  cainban priority \"bubble tea\" critical")
 		os.Exit(1)
 	}
 
-	id, err := strconv.Atoi(args[0])
-	if err != nil {
-		fmt.Printf("Error: invalid task ID '%s'\n", args[0])
-		os.Exit(1)
-	}
-
+	taskIdentifier := args[0]
 	priority := args[1]
 	
 	// Try to parse as integer first, but keep as interface{}
@@ -371,14 +431,21 @@ func handlePriority(args []string) {
 	}
 	defer db.Close()
 
-	if err := taskSystem.UpdatePriority(id, priorityValue); err != nil {
+	// Find task by ID or fuzzy match
+	foundTask, err := taskSystem.FindTaskByFuzzyID(1, taskIdentifier)
+	if err != nil {
+		fmt.Printf("Error finding task: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := taskSystem.UpdatePriority(foundTask.ID, priorityValue); err != nil {
 		fmt.Printf("Error updating task priority: %v\n", err)
 		os.Exit(1)
 	}
 
 	priorityLevel, _ := task.ParsePriority(priorityValue)
 	priorityName := task.GetPriorityName(priorityLevel)
-	fmt.Printf("Updated task #%d priority to %s (%d) in board '%s'\n", id, priorityName, priorityLevel, boardName)
+	fmt.Printf("Updated task #%d \"%s\" priority to %s (%d) in board '%s'\n", foundTask.ID, foundTask.Title, priorityName, priorityLevel, boardName)
 }
 
 func handleBoard(args []string) {

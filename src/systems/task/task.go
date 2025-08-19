@@ -3,6 +3,7 @@ package task
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -346,6 +347,118 @@ func (s *System) UpdatePriority(id int, priority interface{}) error {
 	}
 
 	return nil
+}
+
+// SearchTasks performs fuzzy search on task titles
+func (s *System) SearchTasks(boardID int, query string) ([]*Task, error) {
+	if query == "" {
+		return nil, fmt.Errorf("search query cannot be empty")
+	}
+
+	tasks, err := s.List(boardID)
+	if err != nil {
+		return nil, err
+	}
+
+	query = strings.ToLower(strings.TrimSpace(query))
+	var matches []*Task
+
+	// Score each task based on fuzzy match quality
+	type taskMatch struct {
+		task  *Task
+		score int
+	}
+	var scored []taskMatch
+
+	for _, task := range tasks {
+		score := fuzzyMatchScore(strings.ToLower(task.Title), query)
+		if score > 0 {
+			scored = append(scored, taskMatch{task: task, score: score})
+		}
+	}
+
+	// Sort by score (highest first)
+	for i := 0; i < len(scored); i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].score > scored[i].score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+
+	// Extract tasks from scored results
+	for _, match := range scored {
+		matches = append(matches, match.task)
+	}
+
+	return matches, nil
+}
+
+// FindTaskByFuzzyID attempts to find a task by ID or fuzzy title match
+func (s *System) FindTaskByFuzzyID(boardID int, idOrQuery string) (*Task, error) {
+	// First try to parse as ID
+	if id, err := strconv.Atoi(idOrQuery); err == nil {
+		return s.GetByID(id)
+	}
+
+	// If not a number, try fuzzy search
+	matches, err := s.SearchTasks(boardID, idOrQuery)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("no tasks found matching '%s'", idOrQuery)
+	}
+
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+
+	// Multiple matches - return error with suggestions
+	var suggestions []string
+	for i, match := range matches {
+		if i >= 5 { // Limit to top 5 suggestions
+			break
+		}
+		suggestions = append(suggestions, fmt.Sprintf("#%d %s", match.ID, match.Title))
+	}
+
+	return nil, fmt.Errorf("multiple tasks match '%s':\n%s\nPlease be more specific or use the task ID", 
+		idOrQuery, strings.Join(suggestions, "\n"))
+}
+
+// fuzzyMatchScore calculates a fuzzy match score between title and query
+func fuzzyMatchScore(title, query string) int {
+	if title == query {
+		return 1000 // Exact match
+	}
+
+	if strings.Contains(title, query) {
+		return 500 + len(query)*10 // Substring match, longer queries score higher
+	}
+
+	// Word-based matching
+	titleWords := strings.Fields(title)
+	queryWords := strings.Fields(query)
+	
+	score := 0
+	for _, qWord := range queryWords {
+		for _, tWord := range titleWords {
+			if strings.HasPrefix(tWord, qWord) {
+				score += len(qWord) * 5 // Prefix match
+			} else if strings.Contains(tWord, qWord) {
+				score += len(qWord) * 2 // Contains match
+			}
+		}
+	}
+
+	// Bonus for matching multiple words
+	if len(queryWords) > 1 && score > 0 {
+		score += 50
+	}
+
+	return score
 }
 
 // ValidateTitle validates a task title
