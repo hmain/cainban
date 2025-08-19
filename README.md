@@ -25,7 +25,7 @@ cainban (c-AI-nban) is a kanban board system built specifically for AI workflows
 
 ```bash
 # Install cainban
-go install github.com/emhamin/cainban@latest
+go install github.com/hmain/cainban@latest
 
 # Initialize a new board
 cainban init
@@ -62,7 +62,7 @@ cainban is designed to work seamlessly with AI agents:
 
 ### Setup
 ```bash
-git clone https://github.com/emhamin/cainban.git
+git clone https://github.com/hmain/cainban.git
 cd cainban
 go mod tidy
 go run cmd/cainban/main.go
