@@ -46,15 +46,24 @@ go build -o cainban cmd/cainban/main.go
 ./cainban list doing
 ./cainban list done
 
-# Move tasks between columns
+# Move tasks between columns (by ID or fuzzy title match)
 ./cainban move 1 doing
-./cainban move 1 done
+./cainban move "user auth" doing
 
-# Get task details
+# Get task details (by ID or fuzzy title match)
 ./cainban get 1
+./cainban get "user auth"
 
-# Update task
+# Update task (by ID or fuzzy title match)
 ./cainban update 1 "Updated task title" "Updated description"
+./cainban update "user auth" "Enhanced authentication system"
+
+# Set task priority
+./cainban priority 1 high
+./cainban priority "user auth" critical
+
+# Search tasks by title
+./cainban search "auth"
 ```
 
 ### 3. AI Integration with Amazon Q
@@ -95,11 +104,64 @@ q chat "Move task 1 to doing status"
 
 Once configured, you can manage your kanban board through natural conversation:
 
-- **"List my tasks"** → Shows all tasks organized by status
+- **"List my tasks"** → Shows all tasks organized by status with priority indicators
 - **"Create a task to implement user auth"** → Creates new task
 - **"Move task 3 to doing"** → Updates task status
+- **"Set task 5 to high priority"** → Updates task priority
 - **"Show me details for task 5"** → Gets complete task information
 - **"Add a task for code review with description 'Review PR #123'"** → Creates task with description
+
+## Key Features
+
+### 🎯 **Task Priority Management**
+Set and manage task priorities with both CLI and AI integration:
+
+```bash
+# Set priority levels: none, low, medium, high, critical (or 0-4)
+./cainban priority 1 high
+./cainban priority "user auth" critical
+
+# Tasks automatically sort by priority in listings
+# Critical tasks appear first, followed by high, medium, low, none
+```
+
+**Priority Display:**
+```
+TODO:
+  #8 [critical] Implement task dependencies
+  #6 [high] Implement Bubble Tea TUI  
+  #10 [high] Prepare for public release
+  #9 [medium] Enhanced AI features
+  #2 Create terminal UI (legacy)        # No priority = none
+```
+
+### 🔍 **Fuzzy Task Search**
+Reference tasks by partial titles instead of remembering IDs:
+
+```bash
+# Instead of: ./cainban move 10 doing
+./cainban move "prep public" doing
+
+# Instead of: ./cainban get 6  
+./cainban get "bubble tea"
+
+# Instead of: ./cainban priority 9 high
+./cainban priority "enhanced ai" high
+
+# Explicit search for exploration
+./cainban search "terminal"
+```
+
+**Smart Matching:**
+- **Exact match**: Highest priority
+- **Substring match**: High priority  
+- **Word prefix**: Medium priority
+- **Multiple words**: Bonus scoring
+
+**Conflict Resolution:**
+- Numeric input prioritizes ID lookup first
+- Falls back to fuzzy search if ID doesn't exist
+- Multiple matches show helpful suggestions
 
 ## Architecture
 
@@ -168,6 +230,7 @@ Team members will automatically get cainban access when they clone your project.
 | `create_task` | Create new tasks | "Create a task to fix the login bug" |
 | `list_tasks` | List all tasks or by status | "Show me all my todo tasks" |
 | `update_task_status` | Move tasks between columns | "Move task 3 to doing" |
+| `update_task_priority` | Set task priority | "Set task 5 to high priority" |
 | `get_task` | Get detailed task information | "Show me details for task 5" |
 | `update_task` | Update task title/description | "Update task 2 with new requirements" |
 
@@ -260,10 +323,53 @@ ls -la ~/.cainban/cainban.db
 
 ## Status: Production Ready ✅
 
-**Current Version**: v0.1.0  
+**Current Version**: v0.2.2 - Priority Management & Fuzzy Search  
 **AI Integration**: Fully functional with Amazon Q CLI  
+**New Features**: Task priorities, fuzzy search, natural language task references  
 **Test Coverage**: Comprehensive (unit, integration, MCP protocol)  
 **Performance**: Sub-second response times for all operations  
+
+### Enhanced Workflow Examples
+
+**Priority-based Task Management:**
+```bash
+# Set priorities for better organization
+./cainban priority "implement auth" critical
+./cainban priority "write docs" medium
+./cainban priority "refactor code" low
+
+# Tasks automatically sort by priority
+./cainban list todo
+# Output:
+# TODO:
+#   #5 [critical] Implement user authentication
+#   #8 [high] Setup CI/CD pipeline
+#   #3 [medium] Write documentation
+#   #7 [low] Refactor legacy code
+#   #2 Update README                    # No priority
+```
+
+**Fuzzy Task Operations:**
+```bash
+# Natural task references (no IDs needed!)
+./cainban move "implement auth" doing
+./cainban get "ci cd"
+./cainban update "legacy code" "Modernize codebase"
+./cainban priority "write docs" high
+
+# Search and explore
+./cainban search "auth"
+./cainban search "setup"
+```
+
+**AI-Powered Management:**
+```bash
+# Natural language with Amazon Q
+q chat "Set the authentication task to critical priority"
+q chat "Move the CI/CD task to doing status"
+q chat "List my high priority tasks"
+q chat "Create a task for database migration"
+```
 
 ## Contributing
 
@@ -283,5 +389,7 @@ MIT License - see LICENSE file for details.
 
 1. Clone this repo
 2. Build the binary: `go build -o cainban cmd/cainban/main.go`
-3. Add MCP config to `~/.aws/amazonq/mcp.json`
-4. Start chatting: `q chat "List my cainban tasks"`
+3. Initialize: `./cainban init`
+4. Add MCP config to `~/.aws/amazonq/mcp.json`
+5. Start using: `./cainban priority "my task" high`
+6. Chat with AI: `q chat "List my cainban tasks"`
