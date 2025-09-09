@@ -39,6 +39,16 @@ func main() {
 		handlePriority(os.Args[2:])
 	case "board":
 		handleBoard(os.Args[2:])
+	case "link":
+		handleLink(os.Args[2:])
+	case "unlink":
+		handleUnlink(os.Args[2:])
+	case "links":
+		handleLinks(os.Args[2:])
+	case "delete":
+		handleDelete(os.Args[2:])
+	case "restore":
+		handleRestore(os.Args[2:])
 	case "mcp":
 		handleMCP()
 	case "version":
@@ -55,13 +65,18 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Usage:")
 	fmt.Println("  cainban init [board-name]            Initialize new board")
-	fmt.Println("  cainban add <title> [description]    Add new task")
+	fmt.Println("  cainban add <title> [description] [--priority <level>]  Add new task with optional priority")
 	fmt.Println("  cainban list [status]                List all tasks or by status")
 	fmt.Println("  cainban move <id|title> <status>        Move task between columns")
 	fmt.Println("  cainban get <id|title>               Get task details")
 	fmt.Println("  cainban update <id|title> <title> [description] Update task")
 	fmt.Println("  cainban search <query>                  Search tasks by title")
 	fmt.Println("  cainban priority <id|title> <level>     Set task priority")
+	fmt.Println("  cainban link <from_id> <to_id> [type]   Link two tasks")
+	fmt.Println("  cainban unlink <from_id> <to_id> [type] Unlink two tasks")
+	fmt.Println("  cainban links <task_id>              Show task links")
+	fmt.Println("  cainban delete <task_id> [--hard]    Delete task (soft delete by default)")
+	fmt.Println("  cainban restore <task_id>            Restore deleted task")
 	fmt.Println("  cainban board <command>              Board management")
 	fmt.Println("  cainban mcp                          Start MCP server")
 	fmt.Println("  cainban version                      Show version")
@@ -75,6 +90,7 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("Priority levels: none, low, medium, high, critical (or 0-4)")
 	fmt.Println("Statuses: todo, doing, done")
+	fmt.Println("Link types: blocks, blocked_by, related, depends_on")
 }
 
 func getCurrentBoardDB() (*storage.DB, *task.System, string, error) {
@@ -146,14 +162,47 @@ func handleInit(args []string) {
 func handleAdd(args []string) {
 	if len(args) == 0 {
 		fmt.Println("Error: task title required")
-		fmt.Println("Usage: cainban add <title> [description]")
+		fmt.Println("Usage: cainban add <title> [description] [--priority <level>]")
+		fmt.Println("Priority levels: none, low, medium, high, critical (or 0-4)")
 		os.Exit(1)
 	}
 
 	title := args[0]
 	description := ""
-	if len(args) > 1 {
-		description = strings.Join(args[1:], " ")
+	var priority interface{} = task.PriorityNone
+	
+	// Parse arguments for description and priority
+	i := 1
+	for i < len(args) {
+		if args[i] == "--priority" || args[i] == "-p" {
+			if i+1 >= len(args) {
+				fmt.Println("Error: --priority requires a value")
+				os.Exit(1)
+			}
+			priorityStr := args[i+1]
+			
+			// Try to convert numeric strings to integers
+			if priorityInt, err := strconv.Atoi(priorityStr); err == nil {
+				priority = priorityInt
+			} else {
+				priority = priorityStr
+			}
+			
+			if !task.IsValidPriority(priority) {
+				fmt.Println("Error: invalid priority level")
+				fmt.Println("Valid levels: none, low, medium, high, critical (or 0-4)")
+				os.Exit(1)
+			}
+			i += 2
+		} else {
+			// Treat as part of description
+			if description == "" {
+				description = args[i]
+			} else {
+				description += " " + args[i]
+			}
+			i++
+		}
 	}
 
 	db, taskSystem, boardName, err := getCurrentBoardDB()
@@ -163,13 +212,24 @@ func handleAdd(args []string) {
 	}
 	defer db.Close()
 
-	createdTask, err := taskSystem.Create(1, title, description) // Default board ID = 1
+	var createdTask *task.Task
+	if priority != task.PriorityNone {
+		createdTask, err = taskSystem.CreateWithPriority(1, title, description, priority)
+	} else {
+		createdTask, err = taskSystem.Create(1, title, description)
+	}
+	
 	if err != nil {
 		fmt.Printf("Error creating task: %v\n", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Created task #%d in board '%s': %s\n", createdTask.ID, boardName, createdTask.Title)
+	priorityStr := ""
+	if createdTask.Priority > 0 {
+		priorityStr = fmt.Sprintf(" [%s]", task.GetPriorityName(createdTask.Priority))
+	}
+
+	fmt.Printf("Created task #%d%s in board '%s': %s\n", createdTask.ID, priorityStr, boardName, createdTask.Title)
 	if createdTask.Description != "" {
 		fmt.Printf("Description: %s\n", createdTask.Description)
 	}
@@ -565,6 +625,192 @@ func handleBoard(args []string) {
 		fmt.Println("Commands: list, current, switch, create, delete")
 		os.Exit(1)
 	}
+}
+
+func handleLink(args []string) {
+	if len(args) < 2 {
+		fmt.Println("Error: from_task_id and to_task_id required")
+		fmt.Println("Usage: cainban link <from_task_id> <to_task_id> [link_type]")
+		fmt.Println("Link types: blocks (default), blocked_by, related, depends_on")
+		os.Exit(1)
+	}
+
+	fromTaskID, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Printf("Error: invalid from_task_id '%s'\n", args[0])
+		os.Exit(1)
+	}
+
+	toTaskID, err := strconv.Atoi(args[1])
+	if err != nil {
+		fmt.Printf("Error: invalid to_task_id '%s'\n", args[1])
+		os.Exit(1)
+	}
+
+	linkType := "blocks" // default
+	if len(args) > 2 {
+		linkType = args[2]
+	}
+
+	db, taskSystem, _, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if err := taskSystem.LinkTasks(fromTaskID, toTaskID, task.LinkType(linkType)); err != nil {
+		fmt.Printf("Error linking tasks: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Linked task %d %s task %d\n", fromTaskID, linkType, toTaskID)
+}
+
+func handleUnlink(args []string) {
+	if len(args) < 2 {
+		fmt.Println("Error: from_task_id and to_task_id required")
+		fmt.Println("Usage: cainban unlink <from_task_id> <to_task_id> [link_type]")
+		fmt.Println("Link types: blocks (default), blocked_by, related, depends_on")
+		os.Exit(1)
+	}
+
+	fromTaskID, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Printf("Error: invalid from_task_id '%s'\n", args[0])
+		os.Exit(1)
+	}
+
+	toTaskID, err := strconv.Atoi(args[1])
+	if err != nil {
+		fmt.Printf("Error: invalid to_task_id '%s'\n", args[1])
+		os.Exit(1)
+	}
+
+	linkType := "blocks" // default
+	if len(args) > 2 {
+		linkType = args[2]
+	}
+
+	db, taskSystem, _, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if err := taskSystem.UnlinkTasks(fromTaskID, toTaskID, task.LinkType(linkType)); err != nil {
+		fmt.Printf("Error unlinking tasks: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Unlinked task %d %s task %d\n", fromTaskID, linkType, toTaskID)
+}
+
+func handleLinks(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Error: task_id required")
+		fmt.Println("Usage: cainban links <task_id>")
+		os.Exit(1)
+	}
+
+	taskID, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Printf("Error: invalid task_id '%s'\n", args[0])
+		os.Exit(1)
+	}
+
+	db, taskSystem, _, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	links, err := taskSystem.GetTaskLinks(taskID)
+	if err != nil {
+		fmt.Printf("Error getting task links: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(links) == 0 {
+		fmt.Printf("Task %d has no links\n", taskID)
+		return
+	}
+
+	fmt.Printf("Task %d links:\n", taskID)
+	for _, link := range links {
+		if link.FromTaskID == taskID {
+			fmt.Printf("• %s task %d\n", link.LinkType, link.ToTaskID)
+		} else {
+			fmt.Printf("• %s by task %d\n", link.LinkType, link.FromTaskID)
+		}
+	}
+}
+
+func handleDelete(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Error: task_id required")
+		fmt.Println("Usage: cainban delete <task_id> [--hard]")
+		os.Exit(1)
+	}
+
+	taskID, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Printf("Error: invalid task_id '%s'\n", args[0])
+		os.Exit(1)
+	}
+
+	hardDelete := len(args) > 1 && args[1] == "--hard"
+
+	db, taskSystem, _, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if hardDelete {
+		if err := taskSystem.HardDelete(taskID); err != nil {
+			fmt.Printf("Error permanently deleting task: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Task %d permanently deleted\n", taskID)
+	} else {
+		if err := taskSystem.SoftDelete(taskID); err != nil {
+			fmt.Printf("Error deleting task: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Task %d deleted (can be restored)\n", taskID)
+	}
+}
+
+func handleRestore(args []string) {
+	if len(args) < 1 {
+		fmt.Println("Error: task_id required")
+		fmt.Println("Usage: cainban restore <task_id>")
+		os.Exit(1)
+	}
+
+	taskID, err := strconv.Atoi(args[0])
+	if err != nil {
+		fmt.Printf("Error: invalid task_id '%s'\n", args[0])
+		os.Exit(1)
+	}
+
+	db, taskSystem, _, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	if err := taskSystem.RestoreTask(taskID); err != nil {
+		fmt.Printf("Error restoring task: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Task %d restored\n", taskID)
 }
 
 func handleMCP() {

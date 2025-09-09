@@ -7,22 +7,25 @@ import (
 	"log"
 	"strings"
 
+	"github.com/hmain/cainban/src/systems/board"
 	"github.com/hmain/cainban/src/systems/task"
 )
 
 // Server implements the MCP (Model Context Protocol) server
 type Server struct {
-	taskSystem *task.System
-	input      io.Reader
-	output     io.Writer
+	taskSystem  *task.System
+	boardSystem *board.System
+	input       io.Reader
+	output      io.Writer
 }
 
 // New creates a new MCP server
 func New(taskSystem *task.System, input io.Reader, output io.Writer) *Server {
 	return &Server{
-		taskSystem: taskSystem,
-		input:      input,
-		output:     output,
+		taskSystem:  taskSystem,
+		boardSystem: board.New(),
+		input:       input,
+		output:      output,
 	}
 }
 
@@ -143,6 +146,13 @@ func (s *Server) handleToolsList(req *MCPRequest) *MCPResponse {
 						"description": "The board ID (defaults to 1)",
 						"default":     1,
 					},
+					"priority": map[string]interface{}{
+						"description": "Priority level (none, low, medium, high, critical or 0-4)",
+						"oneOf": []interface{}{
+							map[string]interface{}{"type": "integer", "minimum": 0, "maximum": 4},
+							map[string]interface{}{"type": "string", "enum": []string{"none", "low", "medium", "high", "critical"}},
+						},
+					},
 				},
 				"required": []string{"title"},
 			},
@@ -242,6 +252,123 @@ func (s *Server) handleToolsList(req *MCPRequest) *MCPResponse {
 				"required": []string{"id", "title"},
 			},
 		},
+		{
+			Name:        "list_boards",
+			Description: "List all available kanban boards",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "link_tasks",
+			Description: "Create a link between two tasks",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"from_task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the source task",
+					},
+					"to_task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the target task",
+					},
+					"link_type": map[string]interface{}{
+						"type":        "string",
+						"description": "Type of link (blocks, blocked_by, related, depends_on)",
+						"enum":        []string{"blocks", "blocked_by", "related", "depends_on"},
+						"default":     "blocks",
+					},
+				},
+				"required": []string{"from_task_id", "to_task_id"},
+			},
+		},
+		{
+			Name:        "unlink_tasks",
+			Description: "Remove a link between two tasks",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"from_task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the source task",
+					},
+					"to_task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The ID of the target task",
+					},
+					"link_type": map[string]interface{}{
+						"type":        "string",
+						"description": "Type of link to remove (blocks, blocked_by, related, depends_on)",
+						"enum":        []string{"blocks", "blocked_by", "related", "depends_on"},
+						"default":     "blocks",
+					},
+				},
+				"required": []string{"from_task_id", "to_task_id"},
+			},
+		},
+		{
+			Name:        "get_task_links",
+			Description: "Get all links for a specific task",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The task ID to get links for",
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "delete_task",
+			Description: "Delete a task (soft delete by default)",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The task ID to delete",
+					},
+					"hard_delete": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Whether to permanently delete the task",
+						"default":     false,
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "restore_task",
+			Description: "Restore a soft-deleted task",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"task_id": map[string]interface{}{
+						"type":        "integer",
+						"description": "The task ID to restore",
+					},
+				},
+				"required": []string{"task_id"},
+			},
+		},
+		{
+			Name:        "change_board",
+			Description: "Change the active kanban board",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"board_name": map[string]interface{}{
+						"type":        "string",
+						"description": "The name of the board to switch to",
+					},
+				},
+				"required": []string{"board_name"},
+			},
+		},
 	}
 
 	return &MCPResponse{
@@ -285,6 +412,20 @@ func (s *Server) handleToolsCall(req *MCPRequest) *MCPResponse {
 		return s.handleUpdateTaskPriority(req, params.Arguments)
 	case "update_task":
 		return s.handleUpdateTask(req, params.Arguments)
+	case "list_boards":
+		return s.handleListBoards(req, params.Arguments)
+	case "change_board":
+		return s.handleChangeBoard(req, params.Arguments)
+	case "link_tasks":
+		return s.handleLinkTasks(req, params.Arguments)
+	case "unlink_tasks":
+		return s.handleUnlinkTasks(req, params.Arguments)
+	case "get_task_links":
+		return s.handleGetTaskLinks(req, params.Arguments)
+	case "delete_task":
+		return s.handleDeleteTask(req, params.Arguments)
+	case "restore_task":
+		return s.handleRestoreTask(req, params.Arguments)
 	default:
 		return &MCPResponse{
 			JSONRPC: "2.0",
@@ -311,9 +452,26 @@ func (s *Server) handleCreateTask(req *MCPRequest, args map[string]interface{}) 
 		boardID = int(bid)
 	}
 
-	createdTask, err := s.taskSystem.Create(boardID, title, description)
+	var createdTask *task.Task
+	var err error
+
+	// Check if priority is provided
+	if priority, hasPriority := args["priority"]; hasPriority {
+		if !task.IsValidPriority(priority) {
+			return s.errorResponse(req.ID, -32602, "Invalid priority level")
+		}
+		createdTask, err = s.taskSystem.CreateWithPriority(boardID, title, description, priority)
+	} else {
+		createdTask, err = s.taskSystem.Create(boardID, title, description)
+	}
+
 	if err != nil {
 		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to create task: %v", err))
+	}
+
+	priorityStr := ""
+	if createdTask.Priority > 0 {
+		priorityStr = fmt.Sprintf(" [%s]", task.GetPriorityName(createdTask.Priority))
 	}
 
 	return &MCPResponse{
@@ -323,7 +481,7 @@ func (s *Server) handleCreateTask(req *MCPRequest, args map[string]interface{}) 
 			"content": []map[string]interface{}{
 				{
 					"type": "text",
-					"text": fmt.Sprintf("Created task #%d: %s", createdTask.ID, createdTask.Title),
+					"text": fmt.Sprintf("Created task #%d%s: %s", createdTask.ID, priorityStr, createdTask.Title),
 				},
 			},
 			"task": createdTask,
@@ -543,6 +701,267 @@ func (s *Server) errorResponse(id interface{}, code int, message string) *MCPRes
 		Error: &MCPError{
 			Code:    code,
 			Message: message,
+		},
+	}
+}
+
+// handleListBoards handles the list_boards tool call
+func (s *Server) handleListBoards(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	boards, err := s.boardSystem.ListBoards()
+	if err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to list boards: %v", err))
+	}
+
+	currentBoard, _ := s.boardSystem.GetCurrentBoard()
+
+	var content []map[string]interface{}
+	if len(boards) == 0 {
+		content = append(content, map[string]interface{}{
+			"type": "text",
+			"text": "No boards found",
+		})
+	} else {
+		content = append(content, map[string]interface{}{
+			"type": "text",
+			"text": "Available boards:",
+		})
+		for _, b := range boards {
+			marker := ""
+			if b.Name == currentBoard {
+				marker = " (current)"
+			}
+			content = append(content, map[string]interface{}{
+				"type": "text",
+				"text": fmt.Sprintf("• %s%s", b.Name, marker),
+			})
+		}
+	}
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": content,
+			"boards": boards,
+		},
+	}
+}
+
+// handleChangeBoard handles the change_board tool call
+func (s *Server) handleChangeBoard(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	boardName, ok := args["board_name"].(string)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "board_name is required and must be a string")
+	}
+
+	// Check if board exists
+	_, err := s.boardSystem.GetBoard(boardName)
+	if err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Board '%s' not found", boardName))
+	}
+
+	// Set as current board
+	if err := s.boardSystem.SetCurrentBoard(boardName); err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to change board: %v", err))
+	}
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("Changed to board: %s", boardName),
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) handleLinkTasks(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	fromTaskID, ok := args["from_task_id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "from_task_id is required and must be an integer")
+	}
+
+	toTaskID, ok := args["to_task_id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "to_task_id is required and must be an integer")
+	}
+
+	linkType := "blocks" // default
+	if lt, exists := args["link_type"].(string); exists {
+		linkType = lt
+	}
+
+	err := s.taskSystem.LinkTasks(int(fromTaskID), int(toTaskID), task.LinkType(linkType))
+	if err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to link tasks: %v", err))
+	}
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("Linked task %d %s task %d", int(fromTaskID), linkType, int(toTaskID)),
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) handleUnlinkTasks(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	fromTaskID, ok := args["from_task_id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "from_task_id is required and must be an integer")
+	}
+
+	toTaskID, ok := args["to_task_id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "to_task_id is required and must be an integer")
+	}
+
+	linkType := "blocks" // default
+	if lt, exists := args["link_type"].(string); exists {
+		linkType = lt
+	}
+
+	err := s.taskSystem.UnlinkTasks(int(fromTaskID), int(toTaskID), task.LinkType(linkType))
+	if err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to unlink tasks: %v", err))
+	}
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("Unlinked task %d %s task %d", int(fromTaskID), linkType, int(toTaskID)),
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) handleGetTaskLinks(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	taskID, ok := args["task_id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "task_id is required and must be an integer")
+	}
+
+	links, err := s.taskSystem.GetTaskLinks(int(taskID))
+	if err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to get task links: %v", err))
+	}
+
+	if len(links) == 0 {
+		return &MCPResponse{
+			JSONRPC: "2.0",
+			ID:      req.ID,
+			Result: map[string]interface{}{
+				"content": []map[string]interface{}{
+					{
+						"type": "text",
+						"text": fmt.Sprintf("Task %d has no links", int(taskID)),
+					},
+				},
+			},
+		}
+	}
+
+	var linkTexts []string
+	for _, link := range links {
+		if link.FromTaskID == int(taskID) {
+			linkTexts = append(linkTexts, fmt.Sprintf("• %s task %d", link.LinkType, link.ToTaskID))
+		} else {
+			linkTexts = append(linkTexts, fmt.Sprintf("• %s by task %d", link.LinkType, link.FromTaskID))
+		}
+	}
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("Task %d links:\n%s", int(taskID), strings.Join(linkTexts, "\n")),
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) handleDeleteTask(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	taskID, ok := args["task_id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "task_id is required and must be an integer")
+	}
+
+	hardDelete := false
+	if hd, exists := args["hard_delete"].(bool); exists {
+		hardDelete = hd
+	}
+
+	var err error
+	if hardDelete {
+		err = s.taskSystem.HardDelete(int(taskID))
+	} else {
+		err = s.taskSystem.SoftDelete(int(taskID))
+	}
+
+	if err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to delete task: %v", err))
+	}
+
+	deleteType := "deleted"
+	if hardDelete {
+		deleteType = "permanently deleted"
+	} else {
+		deleteType = "deleted (can be restored)"
+	}
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("Task %d %s", int(taskID), deleteType),
+				},
+			},
+		},
+	}
+}
+
+func (s *Server) handleRestoreTask(req *MCPRequest, args map[string]interface{}) *MCPResponse {
+	taskID, ok := args["task_id"].(float64)
+	if !ok {
+		return s.errorResponse(req.ID, -32602, "task_id is required and must be an integer")
+	}
+
+	err := s.taskSystem.RestoreTask(int(taskID))
+	if err != nil {
+		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to restore task: %v", err))
+	}
+
+	return &MCPResponse{
+		JSONRPC: "2.0",
+		ID:      req.ID,
+		Result: map[string]interface{}{
+			"content": []map[string]interface{}{
+				{
+					"type": "text",
+					"text": fmt.Sprintf("Task %d restored", int(taskID)),
+				},
+			},
 		},
 	}
 }

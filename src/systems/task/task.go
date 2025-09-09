@@ -49,6 +49,10 @@ func IsValidPriority(priority interface{}) bool {
 	switch p := priority.(type) {
 	case int:
 		return p >= PriorityNone && p <= PriorityCritical
+	case float64:
+		// Handle JSON unmarshaling which converts numbers to float64
+		intVal := int(p)
+		return float64(intVal) == p && intVal >= PriorityNone && intVal <= PriorityCritical
 	case string:
 		_, exists := PriorityLevels[strings.ToLower(p)]
 		return exists
@@ -65,6 +69,16 @@ func ParsePriority(priority interface{}) (int, error) {
 			return 0, fmt.Errorf("invalid priority level: %d (must be 0-4)", p)
 		}
 		return p, nil
+	case float64:
+		// Handle JSON unmarshaling which converts numbers to float64
+		intVal := int(p)
+		if float64(intVal) != p {
+			return 0, fmt.Errorf("priority must be a whole number")
+		}
+		if !IsValidPriority(intVal) {
+			return 0, fmt.Errorf("invalid priority level: %d (must be 0-4)", intVal)
+		}
+		return intVal, nil
 	case string:
 		level, exists := PriorityLevels[strings.ToLower(p)]
 		if !exists {
@@ -99,6 +113,25 @@ func IsValidStatus(status string) bool {
 	return false
 }
 
+// LinkType represents the relationship between tasks
+type LinkType string
+
+const (
+	LinkTypeBlocks     LinkType = "blocks"     // Task A blocks Task B
+	LinkTypeBlockedBy  LinkType = "blocked_by" // Task A is blocked by Task B
+	LinkTypeRelated    LinkType = "related"    // Task A is related to Task B
+	LinkTypeDependsOn  LinkType = "depends_on" // Task A depends on Task B
+)
+
+// TaskLink represents a relationship between two tasks
+type TaskLink struct {
+	ID         int      `json:"id"`
+	FromTaskID int      `json:"from_task_id"`
+	ToTaskID   int      `json:"to_task_id"`
+	LinkType   LinkType `json:"link_type"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // Task represents a kanban task
 type Task struct {
 	ID          int       `json:"id"`
@@ -107,6 +140,7 @@ type Task struct {
 	Description string    `json:"description"`
 	Status      Status    `json:"status"`
 	Priority    int       `json:"priority"`
+	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -123,9 +157,20 @@ func New(db *sql.DB) *System {
 
 // Create creates a new task
 func (s *System) Create(boardID int, title, description string) (*Task, error) {
+	return s.CreateWithPriority(boardID, title, description, PriorityNone)
+}
+
+// CreateWithPriority creates a new task with specified priority
+func (s *System) CreateWithPriority(boardID int, title, description string, priority interface{}) (*Task, error) {
 	if err := ValidateTitle(title); err != nil {
 		return nil, err
 	}
+
+	if !IsValidPriority(priority) {
+		return nil, fmt.Errorf("invalid priority level")
+	}
+
+	priorityLevel, _ := ParsePriority(priority)
 
 	query := `
 		INSERT INTO tasks (board_id, title, description, status, priority)
@@ -134,7 +179,7 @@ func (s *System) Create(boardID int, title, description string) (*Task, error) {
 	`
 
 	var task Task
-	err := s.db.QueryRow(query, boardID, title, description, StatusTodo, 0).Scan(
+	err := s.db.QueryRow(query, boardID, title, description, StatusTodo, priorityLevel).Scan(
 		&task.ID, &task.CreatedAt, &task.UpdatedAt,
 	)
 	if err != nil {
@@ -145,7 +190,7 @@ func (s *System) Create(boardID int, title, description string) (*Task, error) {
 	task.Title = title
 	task.Description = description
 	task.Status = StatusTodo
-	task.Priority = 0
+	task.Priority = priorityLevel
 
 	return &task, nil
 }
@@ -153,14 +198,14 @@ func (s *System) Create(boardID int, title, description string) (*Task, error) {
 // GetByID retrieves a task by ID
 func (s *System) GetByID(id int) (*Task, error) {
 	query := `
-		SELECT id, board_id, title, description, status, priority, created_at, updated_at
-		FROM tasks WHERE id = ?
+		SELECT id, board_id, title, description, status, priority, deleted_at, created_at, updated_at
+		FROM tasks WHERE id = ? AND deleted_at IS NULL
 	`
 
 	var task Task
 	err := s.db.QueryRow(query, id).Scan(
 		&task.ID, &task.BoardID, &task.Title, &task.Description,
-		&task.Status, &task.Priority, &task.CreatedAt, &task.UpdatedAt,
+		&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -175,8 +220,8 @@ func (s *System) GetByID(id int) (*Task, error) {
 // List retrieves all tasks for a board
 func (s *System) List(boardID int) ([]*Task, error) {
 	query := `
-		SELECT id, board_id, title, description, status, priority, created_at, updated_at
-		FROM tasks WHERE board_id = ?
+		SELECT id, board_id, title, description, status, priority, deleted_at, created_at, updated_at
+		FROM tasks WHERE board_id = ? AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 
@@ -191,7 +236,7 @@ func (s *System) List(boardID int) ([]*Task, error) {
 		var task Task
 		err := rows.Scan(
 			&task.ID, &task.BoardID, &task.Title, &task.Description,
-			&task.Status, &task.Priority, &task.CreatedAt, &task.UpdatedAt,
+			&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan task: %w", err)
@@ -209,8 +254,8 @@ func (s *System) List(boardID int) ([]*Task, error) {
 // ListByStatus retrieves tasks by status for a board
 func (s *System) ListByStatus(boardID int, status Status) ([]*Task, error) {
 	query := `
-		SELECT id, board_id, title, description, status, priority, created_at, updated_at
-		FROM tasks WHERE board_id = ? AND status = ?
+		SELECT id, board_id, title, description, status, priority, deleted_at, created_at, updated_at
+		FROM tasks WHERE board_id = ? AND status = ? AND deleted_at IS NULL
 		ORDER BY priority DESC, created_at ASC
 	`
 
@@ -225,7 +270,7 @@ func (s *System) ListByStatus(boardID int, status Status) ([]*Task, error) {
 		var task Task
 		err := rows.Scan(
 			&task.ID, &task.BoardID, &task.Title, &task.Description,
-			&task.Status, &task.Priority, &task.CreatedAt, &task.UpdatedAt,
+			&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan task: %w", err)
@@ -298,25 +343,9 @@ func (s *System) Update(id int, title, description string) error {
 	return nil
 }
 
-// Delete deletes a task
+// Delete performs a soft delete on a task (default behavior)
 func (s *System) Delete(id int) error {
-	query := `DELETE FROM tasks WHERE id = ?`
-
-	result, err := s.db.Exec(query, id)
-	if err != nil {
-		return fmt.Errorf("failed to delete task: %w", err)
-	}
-
-	rowsAffected, err := result.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("failed to get rows affected: %w", err)
-	}
-
-	if rowsAffected == 0 {
-		return fmt.Errorf("task with id %d not found", id)
-	}
-
-	return nil
+	return s.SoftDelete(id)
 }
 
 // UpdatePriority updates a task's priority
@@ -398,16 +427,26 @@ func (s *System) SearchTasks(boardID int, query string) ([]*Task, error) {
 func (s *System) FindTaskByFuzzyID(boardID int, idOrQuery string) (*Task, error) {
 	// First try to parse as ID
 	if id, err := strconv.Atoi(idOrQuery); err == nil {
-		return s.GetByID(id)
+		// Check if the ID exists
+		task, err := s.GetByID(id)
+		if err == nil {
+			return task, nil
+		}
+		// If ID doesn't exist, fall through to fuzzy search
+		// This allows searching for tasks with numbers in titles even if the number doesn't correspond to an existing ID
 	}
 
-	// If not a number, try fuzzy search
+	// Try fuzzy search
 	matches, err := s.SearchTasks(boardID, idOrQuery)
 	if err != nil {
 		return nil, err
 	}
 
 	if len(matches) == 0 {
+		// If it was a number that didn't match an ID and no fuzzy matches, give a clear error
+		if _, numErr := strconv.Atoi(idOrQuery); numErr == nil {
+			return nil, fmt.Errorf("no task found with ID %s and no tasks found matching '%s'", idOrQuery, idOrQuery)
+		}
 		return nil, fmt.Errorf("no tasks found matching '%s'", idOrQuery)
 	}
 
@@ -459,6 +498,151 @@ func fuzzyMatchScore(title, query string) int {
 	}
 
 	return score
+}
+
+// SoftDelete marks a task as deleted without removing it from database
+func (s *System) SoftDelete(taskID int) error {
+	query := `UPDATE tasks SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NULL`
+	result, err := s.db.Exec(query, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to soft delete task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check affected rows: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("task %d not found or already deleted", taskID)
+	}
+
+	return nil
+}
+
+// HardDelete permanently removes a task and all its links
+func (s *System) HardDelete(taskID int) error {
+	// Start transaction
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete task links first (foreign key constraints)
+	_, err = tx.Exec(`DELETE FROM task_links WHERE from_task_id = ? OR to_task_id = ?`, taskID, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to delete task links: %w", err)
+	}
+
+	// Delete the task
+	result, err := tx.Exec(`DELETE FROM tasks WHERE id = ?`, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to delete task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check affected rows: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("task %d not found", taskID)
+	}
+
+	return tx.Commit()
+}
+
+// RestoreTask restores a soft-deleted task
+func (s *System) RestoreTask(taskID int) error {
+	query := `UPDATE tasks SET deleted_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND deleted_at IS NOT NULL`
+	result, err := s.db.Exec(query, taskID)
+	if err != nil {
+		return fmt.Errorf("failed to restore task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check affected rows: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("task %d not found or not deleted", taskID)
+	}
+
+	return nil
+}
+
+// LinkTasks creates a link between two tasks
+func (s *System) LinkTasks(fromTaskID, toTaskID int, linkType LinkType) error {
+	// Validate tasks exist
+	if _, err := s.GetByID(fromTaskID); err != nil {
+		return fmt.Errorf("from task not found: %w", err)
+	}
+	if _, err := s.GetByID(toTaskID); err != nil {
+		return fmt.Errorf("to task not found: %w", err)
+	}
+
+	// Prevent self-linking
+	if fromTaskID == toTaskID {
+		return fmt.Errorf("cannot link task to itself")
+	}
+
+	query := `INSERT INTO task_links (from_task_id, to_task_id, link_type) VALUES (?, ?, ?)`
+	_, err := s.db.Exec(query, fromTaskID, toTaskID, linkType)
+	if err != nil {
+		return fmt.Errorf("failed to create task link: %w", err)
+	}
+
+	return nil
+}
+
+// UnlinkTasks removes a link between two tasks
+func (s *System) UnlinkTasks(fromTaskID, toTaskID int, linkType LinkType) error {
+	query := `DELETE FROM task_links WHERE from_task_id = ? AND to_task_id = ? AND link_type = ?`
+	result, err := s.db.Exec(query, fromTaskID, toTaskID, linkType)
+	if err != nil {
+		return fmt.Errorf("failed to remove task link: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check affected rows: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return fmt.Errorf("no link found between tasks %d and %d with type %s", fromTaskID, toTaskID, linkType)
+	}
+
+	return nil
+}
+
+// GetTaskLinks returns all links for a specific task
+func (s *System) GetTaskLinks(taskID int) ([]TaskLink, error) {
+	query := `
+		SELECT id, from_task_id, to_task_id, link_type, created_at 
+		FROM task_links 
+		WHERE from_task_id = ? OR to_task_id = ?
+		ORDER BY created_at DESC
+	`
+	
+	rows, err := s.db.Query(query, taskID, taskID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query task links: %w", err)
+	}
+	defer rows.Close()
+
+	var links []TaskLink
+	for rows.Next() {
+		var link TaskLink
+		err := rows.Scan(&link.ID, &link.FromTaskID, &link.ToTaskID, &link.LinkType, &link.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan task link: %w", err)
+		}
+		links = append(links, link)
+	}
+
+	return links, nil
 }
 
 // ValidateTitle validates a task title

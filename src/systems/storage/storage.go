@@ -79,13 +79,27 @@ func (db *DB) initialize() error {
 		description TEXT,
 		status TEXT NOT NULL DEFAULT 'todo',
 		priority INTEGER DEFAULT 0,
+		deleted_at DATETIME NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE
 	);
 
+	CREATE TABLE IF NOT EXISTS task_links (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		from_task_id INTEGER NOT NULL,
+		to_task_id INTEGER NOT NULL,
+		link_type TEXT NOT NULL DEFAULT 'blocks',
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		FOREIGN KEY (from_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+		FOREIGN KEY (to_task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+		UNIQUE(from_task_id, to_task_id, link_type)
+	);
+
 	CREATE INDEX IF NOT EXISTS idx_tasks_board_id ON tasks(board_id);
 	CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+	CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_task_id);
+	CREATE INDEX IF NOT EXISTS idx_task_links_to ON task_links(to_task_id);
 
 	-- Create default board if none exists
 	INSERT OR IGNORE INTO boards (id, name, description) 
@@ -93,7 +107,50 @@ func (db *DB) initialize() error {
 	`
 
 	_, err := db.conn.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Handle migration for existing databases
+	return db.migrate()
+}
+
+// migrate handles database migrations for existing databases
+func (db *DB) migrate() error {
+	// Check if deleted_at column exists
+	rows, err := db.conn.Query("PRAGMA table_info(tasks)")
+	if err != nil {
+		return fmt.Errorf("failed to get table info: %w", err)
+	}
+	defer rows.Close()
+
+	hasDeletedAt := false
+	for rows.Next() {
+		var cid int
+		var name, dataType string
+		var notNull, pk int
+		var defaultValue interface{}
+		
+		err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk)
+		if err != nil {
+			return fmt.Errorf("failed to scan column info: %w", err)
+		}
+		
+		if name == "deleted_at" {
+			hasDeletedAt = true
+			break
+		}
+	}
+
+	// Add deleted_at column if it doesn't exist
+	if !hasDeletedAt {
+		_, err = db.conn.Exec("ALTER TABLE tasks ADD COLUMN deleted_at DATETIME NULL")
+		if err != nil {
+			return fmt.Errorf("failed to add deleted_at column: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // Close closes the database connection

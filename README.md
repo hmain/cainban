@@ -62,6 +62,17 @@ go build -o cainban cmd/cainban/main.go
 ./cainban priority 1 high
 ./cainban priority "user auth" critical
 
+# Link tasks together
+./cainban link 1 2 blocks          # Task 1 blocks Task 2
+./cainban link 3 4 depends_on      # Task 3 depends on Task 4
+./cainban links 1                  # Show all links for Task 1
+./cainban unlink 1 2 blocks        # Remove link between tasks
+
+# Delete and restore tasks
+./cainban delete 5                 # Soft delete (can be restored)
+./cainban delete 6 --hard          # Permanent delete (cannot be restored)
+./cainban restore 5                # Restore soft-deleted task
+
 # Search tasks by title
 ./cainban search "auth"
 ```
@@ -110,6 +121,8 @@ Once configured, you can manage your kanban board through natural conversation:
 - **"Set task 5 to high priority"** → Updates task priority
 - **"Show me details for task 5"** → Gets complete task information
 - **"Add a task for code review with description 'Review PR #123'"** → Creates task with description
+- **"List all my boards"** → Shows available kanban boards
+- **"Switch to the project board"** → Changes active board
 
 ## Key Features
 
@@ -233,6 +246,13 @@ Team members will automatically get cainban access when they clone your project.
 | `update_task_priority` | Set task priority | "Set task 5 to high priority" |
 | `get_task` | Get detailed task information | "Show me details for task 5" |
 | `update_task` | Update task title/description | "Update task 2 with new requirements" |
+| `link_tasks` | Create links between tasks | "Link task 1 to block task 2" |
+| `unlink_tasks` | Remove links between tasks | "Unlink task 1 from task 2" |
+| `get_task_links` | Show all links for a task | "Show me all links for task 5" |
+| `delete_task` | Delete task (soft delete by default) | "Delete task 8" |
+| `restore_task` | Restore a soft-deleted task | "Restore task 8" |
+| `list_boards` | List all available boards | "Show me all my boards" |
+| `change_board` | Switch to a different board | "Switch to the project board" |
 
 ## Development
 
