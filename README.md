@@ -1,13 +1,12 @@
 # cainban
 
-An AI-centric kanban board designed for command-line first interaction with first-class support for AI agents like Amazon Q.
+cainban (c-AI-nban) is a command-line kanban board designed to expose all commands as command-line options. You can use it to manage a todo-list, your daily tasks, or your personal development backlog. 
+It also enables AI code generators through its MCP server to decompose tasks into smaller components, allowing the AI agent to concentrate on delivering the entire project step by step.
 
 ## Overview
 
-cainban (c-AI-nban) is a kanban board system built specifically for AI workflows. It provides:
-
 - **Command-line first**: All operations can be performed via CLI without launching a GUI application
-- **AI-native**: First-class support for Amazon Q and other AI agents
+- **AI-native**: Support for Claude code, Amazon Q Developer and other AI agents
 - **MCP Integration**: Built-in Model Context Protocol (MCP) server for seamless AI integration
 - **Terminal UI**: Rich terminal interface using Bubble Tea
 - **Markdown Support**: Native markdown rendering with Glow
@@ -77,19 +76,12 @@ go build -o cainban cmd/cainban/main.go
 ./cainban search "auth"
 ```
 
-### 3. AI Integration with Amazon Q
-
-**🚀 The real power of cainban comes from AI integration!**
-
-#### Setup MCP Server for Amazon Q CLI
+### 3. MCP Server for AI Codegen integration
 
 1. **Create MCP configuration**:
+   
 ```bash
-# Create Amazon Q MCP directory
-mkdir -p ~/.aws/amazonq
-
-# Add cainban MCP server configuration
-cat > ~/.aws/amazonq/mcp.json << 'EOF'
+cat > mcp.json << 'EOF'
 {
   "mcpServers": {
     "cainban": {
@@ -104,11 +96,12 @@ EOF
 2. **Update the path** in the configuration above to point to your cainban binary location.
 
 3. **Test the integration**:
+   
 ```bash
-# Start Amazon Q chat and try these commands:
-q chat "List all my tasks in cainban"
-q chat "Create a new task called 'Setup CI/CD pipeline'"
-q chat "Move task 1 to doing status"
+# Try these commands:
+"List all my tasks in cainban"
+"Create a new task called 'Setup CI/CD pipeline'"
+"Move task 1 to doing status"
 ```
 
 #### Natural Language Task Management
@@ -123,6 +116,13 @@ Once configured, you can manage your kanban board through natural conversation:
 - **"Add a task for code review with description 'Review PR #123'"** → Creates task with description
 - **"List all my boards"** → Shows available kanban boards
 - **"Switch to the project board"** → Changes active board
+
+### Advanced Usage
+
+For a bit more advanced usage:
+
+- Start working on the next tasks in the **Cainban** to-do list or backlog. If a task has subtasks, begin with those (get_task_links). Update the **next-steps.md** file with a clear plan for how to solve the problem. Follow good Git practices, like using branches and other Git tools. Use the "default" **Cainban** board for your tasks. If you find any issues, create new tasks for them. Break down tasks into smaller subtasks so you can focus on one small problem at a time.
+
 
 ## Key Features
 
@@ -180,25 +180,19 @@ Reference tasks by partial titles instead of remembering IDs:
 
 - **Language**: Go
 - **Database**: SQLite
-- **TUI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea)
-- **Markdown Rendering**: [Glow](https://github.com/charmbracelet/glow)
 - **Systems Architecture**: Modular systems in `src/systems/` for extensibility
+- TODO: **TUI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+- TODO: **Markdown Rendering**: [Glow](https://github.com/charmbracelet/glow)
 
 ## AI Integration
 
 cainban is designed to work seamlessly with AI agents:
 
-### Amazon Q Integration ✅ Production Ready
-- Native support for Q Chat CLI through MCP protocol
-- Task creation and management through natural language
-- Automatic project context awareness
-- All 5 MCP tools available: create_task, list_tasks, update_task_status, get_task, update_task
-
 ### MCP Server
-- Built-in MCP server for AI tool integration
-- Exposes kanban operations as MCP tools
+- Exposes cainban operations as MCP tools
 - Real-time board state synchronization
 - JSON-RPC 2.0 compliant
+- Tools available: create_task, list_tasks, update_task_status, get_task, update_task
 
 ## MCP Setup Options
 
@@ -215,14 +209,12 @@ Configure cainban globally to use from any project:
   }
 }
 ```
-**File location**: `~/.aws/amazonq/mcp.json`
 
 ### Project-Specific Access
 For team projects, add to your project root:
 
 ```bash
-mkdir -p .amazonq
-cat > .amazonq/mcp.json << 'EOF'
+cat > mcp.json << 'EOF'
 {
   "mcpServers": {
     "cainban": {
@@ -259,7 +251,6 @@ Team members will automatically get cainban access when they clone your project.
 ### Prerequisites
 - Go 1.21+
 - SQLite3
-- Amazon Q CLI (for AI integration)
 
 ### Setup
 ```bash
@@ -341,15 +332,12 @@ chmod +x ./cainban
 ls -la ~/.cainban/cainban.db
 ```
 
-## Status: Production Ready ✅
+## Status:
 
 **Current Version**: v0.2.2 - Priority Management & Fuzzy Search  
-**AI Integration**: Fully functional with Amazon Q CLI  
 **New Features**: Task priorities, fuzzy search, natural language task references  
-**Test Coverage**: Comprehensive (unit, integration, MCP protocol)  
-**Performance**: Sub-second response times for all operations  
 
-### Enhanced Workflow Examples
+### Workflow Examples
 
 **Priority-based Task Management:**
 ```bash
@@ -384,7 +372,7 @@ ls -la ~/.cainban/cainban.db
 
 **AI-Powered Management:**
 ```bash
-# Natural language with Amazon Q
+# Natural language 
 q chat "Set the authentication task to critical priority"
 q chat "Move the CI/CD task to doing status"
 q chat "List my high priority tasks"
@@ -403,13 +391,4 @@ q chat "Create a task for database migration"
 
 MIT License - see LICENSE file for details.
 
----
 
-**🚀 Ready to supercharge your task management with AI? Get started in 5 minutes!**
-
-1. Clone this repo
-2. Build the binary: `go build -o cainban cmd/cainban/main.go`
-3. Initialize: `./cainban init`
-4. Add MCP config to `~/.aws/amazonq/mcp.json`
-5. Start using: `./cainban priority "my task" high`
-6. Chat with AI: `q chat "List my cainban tasks"`
