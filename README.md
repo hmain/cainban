@@ -334,47 +334,6 @@ ls -la ~/.cainban/cainban.db
 **Current Version**: v0.2.2 - Priority Management & Fuzzy Search  
 **New Features**: Task priorities, fuzzy search, natural language task references  
 
-### Workflow Examples
-
-**Priority-based Task Management:**
-```bash
-# Set priorities for better organization
-./cainban priority "implement auth" critical
-./cainban priority "write docs" medium
-./cainban priority "refactor code" low
-
-# Tasks automatically sort by priority
-./cainban list todo
-# Output:
-# TODO:
-#   #5 [critical] Implement user authentication
-#   #8 [high] Setup CI/CD pipeline
-#   #3 [medium] Write documentation
-#   #7 [low] Refactor legacy code
-#   #2 Update README                    # No priority
-```
-
-**Fuzzy Task Operations:**
-```bash
-# Natural task references (no IDs needed!)
-./cainban move "implement auth" doing
-./cainban get "ci cd"
-./cainban update "legacy code" "Modernize codebase"
-./cainban priority "write docs" high
-
-# Search and explore
-./cainban search "auth"
-./cainban search "setup"
-```
-
-**AI-Powered Management:**
-```bash
-# Natural language 
-q chat "Set the authentication task to critical priority"
-q chat "Move the CI/CD task to doing status"
-q chat "List my high priority tasks"
-q chat "Create a task for database migration"
-```
 
 ## Contributing
 
