@@ -7,8 +7,6 @@ It also enables AI code generators through its MCP server to decompose tasks int
 
 - **Command-line first**: All operations can be performed via CLI without launching a GUI application
 - **MCP Integration**: Built-in Model Context Protocol (MCP) server for seamless AI integration
-- **Terminal UI**: Rich terminal interface using Bubble Tea
-- **Markdown Support**: Native markdown rendering with Glow
 - **SQLite Backend**: Lightweight, file-based database storage
 
 ## Quick Start
