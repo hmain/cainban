@@ -6,7 +6,6 @@ It also enables AI code generators through its MCP server to decompose tasks int
 ## Overview
 
 - **Command-line first**: All operations can be performed via CLI without launching a GUI application
-- **AI-native**: Support for Claude code, Amazon Q Developer and other AI agents
 - **MCP Integration**: Built-in Model Context Protocol (MCP) server for seamless AI integration
 - **Terminal UI**: Rich terminal interface using Bubble Tea
 - **Markdown Support**: Native markdown rendering with Glow
