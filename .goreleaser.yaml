@@ -1,0 +1,96 @@
+project_name: cainban
+
+builds:
+  - id: cainban
+    main: ./cmd/cainban
+    binary: cainban
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -X main.builtBy=goreleaser
+
+archives:
+  - id: default
+    format: tar.gz
+    format_overrides:
+      - goos: windows
+        format: zip
+    name_template: >-
+      {{- .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+      {{- if .Arm }}v{{ .Arm }}{{ end }}
+    files:
+      - README.md
+      - LICENSE*
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^ci:'
+      - '^build:'
+      - Merge pull request
+      - Merge branch
+      - go mod tidy
+  groups:
+    - title: Features
+      regexp: "^.*feat[(\\w)]*:+.*$"
+      order: 0
+    - title: 'Bug fixes'
+      regexp: "^.*fix[(\\w)]*:+.*$"
+      order: 1
+    - title: Others
+      order: 999
+
+release:
+  github:
+    owner: hmain
+    name: cainban
+  draft: false
+  prerelease: auto
+  name_template: "{{.ProjectName}} v{{.Version}}"
+
+nfpms:
+  - id: packages
+    package_name: cainban
+    file_name_template: "{{ .ConventionalFileName }}"
+    vendor: Hamin Mousavi
+    homepage: https://github.com/hmain/cainban
+    maintainer: Hamin Mousavi <git@hamin.se>
+    description: |-
+      A terminal-based kanban board with AI integration.
+      Cainban provides a clean, efficient way to manage tasks and projects 
+      from the command line with MCP (Model Context Protocol) integration.
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    dependencies:
+      - git
+    recommends:
+      - sqlite3
