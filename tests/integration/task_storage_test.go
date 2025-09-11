@@ -220,4 +220,42 @@ func TestTaskSystem_Integration(t *testing.T) {
 			t.Error("UpdateStatus() should return error for invalid status")
 		}
 	})
+
+	t.Run("DeleteTask", func(t *testing.T) {
+		// Create a task to delete
+		created, err := taskSystem.Create(1, "Task to delete", "Will be deleted")
+		if err != nil {
+			t.Fatalf("Create() error = %v", err)
+		}
+
+		// Verify task exists
+		_, err = taskSystem.GetByID(created.ID)
+		if err != nil {
+			t.Fatalf("GetByID() error = %v", err)
+		}
+
+		// Delete the task (soft delete by default)
+		err = taskSystem.Delete(created.ID)
+		if err != nil {
+			t.Fatalf("Delete() error = %v", err)
+		}
+
+		// Verify task no longer appears in regular listing
+		tasks, err := taskSystem.List(1)
+		if err != nil {
+			t.Fatalf("List() error = %v", err)
+		}
+
+		for _, task := range tasks {
+			if task.ID == created.ID {
+				t.Error("Deleted task should not appear in regular listing")
+			}
+		}
+
+		// Test deleting non-existent task
+		err = taskSystem.Delete(99999)
+		if err == nil {
+			t.Error("Delete() should return error for non-existent task")
+		}
+	})
 }

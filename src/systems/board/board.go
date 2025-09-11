@@ -186,7 +186,11 @@ func (s *System) DeleteBoard(name string) error {
 	// If this is the current board, switch to default
 	currentBoard, _ := s.GetCurrentBoard()
 	if currentBoard == name {
-		s.SetCurrentBoard("default")
+		if err := s.SetCurrentBoard("default"); err != nil {
+			// Log error but don't fail deletion - the board deletion can continue
+			// even if setting default fails as it's just a convenience operation
+			_ = err // Explicitly ignore error
+		}
 	}
 	
 	return os.Remove(boardPath)

@@ -920,7 +920,7 @@ func (s *Server) handleDeleteTask(req *MCPRequest, args map[string]interface{}) 
 		return s.errorResponse(req.ID, -32603, fmt.Sprintf("Failed to delete task: %v", err))
 	}
 
-	deleteType := "deleted"
+	var deleteType string
 	if hardDelete {
 		deleteType = "permanently deleted"
 	} else {

@@ -527,7 +527,13 @@ func (s *System) HardDelete(taskID int) error {
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rbErr := tx.Rollback(); rbErr != nil {
+			// Rollback error is expected if transaction was committed successfully
+			// This is normal behavior, so we explicitly ignore the error
+			_ = rbErr
+		}
+	}()
 
 	// Delete task links first (foreign key constraints)
 	_, err = tx.Exec(`DELETE FROM task_links WHERE from_task_id = ? OR to_task_id = ?`, taskID, taskID)

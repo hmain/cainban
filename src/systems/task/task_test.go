@@ -5,11 +5,11 @@ import (
 	"testing"
 )
 
-func setupTestSystem(t *testing.T) *System {
-	// This would normally use the storage system, but for now we'll mock it
-	// TODO: Update when storage system is integrated
-	return nil
-}
+// setupTestSystem is commented out until storage system integration is complete
+// TODO: Update when storage system is integrated
+// func setupTestSystem(t *testing.T) *System {
+//	return nil
+// }
 
 func TestValidateTitle(t *testing.T) {
 	tests := []struct {
@@ -72,13 +72,13 @@ func TestValidStatuses(t *testing.T) {
 	}
 }
 
-// TODO: Add integration tests when storage system is integrated
-// These tests will verify:
-// - Create task with valid data
-// - Get task by ID
-// - List tasks by board
-// - List tasks by status
-// - Update task status
-// - Update task details
-// - Delete task
-// - Error handling for non-existent tasks
+// Integration tests are now implemented in tests/integration/task_storage_test.go
+// These tests verify:
+// ✅ Create task with valid data
+// ✅ Get task by ID
+// ✅ List tasks by board
+// ✅ List tasks by status
+// ✅ Update task status
+// ✅ Update task details
+// ✅ Delete task
+// ✅ Error handling for non-existent tasks

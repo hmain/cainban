@@ -76,14 +76,25 @@ func TestServer_ToolsList(t *testing.T) {
 		t.Fatal("Tools should be a slice of Tool")
 	}
 	
-	expectedTools := []string{"create_task", "list_tasks", "update_task_status", "get_task", "update_task"}
+	expectedTools := []string{
+		"create_task", "list_tasks", "update_task_status", "get_task", 
+		"update_task_priority", "update_task", "list_boards", "change_board",
+		"link_tasks", "unlink_tasks", "get_task_links", "delete_task", "restore_task",
+	}
 	if len(tools) != len(expectedTools) {
 		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(tools))
+		return
 	}
 	
-	for i, tool := range tools {
-		if tool.Name != expectedTools[i] {
-			t.Errorf("Expected tool %s, got %s", expectedTools[i], tool.Name)
+	// Check that all expected tools are present (order may vary)
+	toolMap := make(map[string]bool)
+	for _, tool := range tools {
+		toolMap[tool.Name] = true
+	}
+	
+	for _, expectedTool := range expectedTools {
+		if !toolMap[expectedTool] {
+			t.Errorf("Expected tool %s not found", expectedTool)
 		}
 	}
 }
