@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout -b feature/ci-pipeline)",
+      "Bash(mkdir -p .github/workflows)",
+      "Bash(make lint)",
+      "Bash(make test)",
+      "Bash(make build)",
+      "Bash(./bin/cainban --help)",
+      "Bash(gofmt -w .)",
+      "Bash(git add .github/ .golangci.yml .goreleaser.yaml .pre-commit-config.yaml Dockerfile Makefile)",
+      "Bash(git commit -m \"Add CI/CD pipeline infrastructure\n\n- GitHub Actions workflows for testing, linting, and releases\n- golangci-lint configuration with appropriate linter settings\n- Pre-commit hooks for code quality enforcement\n- GoReleaser configuration for automated releases\n- Docker support with multi-stage builds\n- Makefile for local development workflows\n- Comprehensive build and test automation\n\nPhase 1.5 complete: Ready for automated testing and deployment\")",
+      "Bash(git checkout main)",
+      "Bash(git add .)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

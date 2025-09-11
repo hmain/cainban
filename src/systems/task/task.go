@@ -19,10 +19,10 @@ const (
 
 // Priority levels
 const (
-	PriorityNone   = 0
-	PriorityLow    = 1
-	PriorityMedium = 2
-	PriorityHigh   = 3
+	PriorityNone     = 0
+	PriorityLow      = 1
+	PriorityMedium   = 2
+	PriorityHigh     = 3
 	PriorityCritical = 4
 )
 
@@ -117,32 +117,32 @@ func IsValidStatus(status string) bool {
 type LinkType string
 
 const (
-	LinkTypeBlocks     LinkType = "blocks"     // Task A blocks Task B
-	LinkTypeBlockedBy  LinkType = "blocked_by" // Task A is blocked by Task B
-	LinkTypeRelated    LinkType = "related"    // Task A is related to Task B
-	LinkTypeDependsOn  LinkType = "depends_on" // Task A depends on Task B
+	LinkTypeBlocks    LinkType = "blocks"     // Task A blocks Task B
+	LinkTypeBlockedBy LinkType = "blocked_by" // Task A is blocked by Task B
+	LinkTypeRelated   LinkType = "related"    // Task A is related to Task B
+	LinkTypeDependsOn LinkType = "depends_on" // Task A depends on Task B
 )
 
 // TaskLink represents a relationship between two tasks
 type TaskLink struct {
-	ID         int      `json:"id"`
-	FromTaskID int      `json:"from_task_id"`
-	ToTaskID   int      `json:"to_task_id"`
-	LinkType   LinkType `json:"link_type"`
+	ID         int       `json:"id"`
+	FromTaskID int       `json:"from_task_id"`
+	ToTaskID   int       `json:"to_task_id"`
+	LinkType   LinkType  `json:"link_type"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
 // Task represents a kanban task
 type Task struct {
-	ID          int       `json:"id"`
-	BoardID     int       `json:"board_id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Status      Status    `json:"status"`
-	Priority    int       `json:"priority"`
+	ID          int        `json:"id"`
+	BoardID     int        `json:"board_id"`
+	Title       string     `json:"title"`
+	Description string     `json:"description"`
+	Status      Status     `json:"status"`
+	Priority    int        `json:"priority"`
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 // System handles task operations
@@ -463,7 +463,7 @@ func (s *System) FindTaskByFuzzyID(boardID int, idOrQuery string) (*Task, error)
 		suggestions = append(suggestions, fmt.Sprintf("#%d %s", match.ID, match.Title))
 	}
 
-	return nil, fmt.Errorf("multiple tasks match '%s':\n%s\nPlease be more specific or use the task ID", 
+	return nil, fmt.Errorf("multiple tasks match '%s':\n%s\nPlease be more specific or use the task ID",
 		idOrQuery, strings.Join(suggestions, "\n"))
 }
 
@@ -480,7 +480,7 @@ func fuzzyMatchScore(title, query string) int {
 	// Word-based matching
 	titleWords := strings.Fields(title)
 	queryWords := strings.Fields(query)
-	
+
 	score := 0
 	for _, qWord := range queryWords {
 		for _, tWord := range titleWords {
@@ -631,7 +631,7 @@ func (s *System) GetTaskLinks(taskID int) ([]TaskLink, error) {
 		WHERE from_task_id = ? OR to_task_id = ?
 		ORDER BY created_at DESC
 	`
-	
+
 	rows, err := s.db.Query(query, taskID, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query task links: %w", err)

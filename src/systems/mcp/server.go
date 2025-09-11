@@ -47,8 +47,8 @@ type MCPResponse struct {
 
 // MCPError represents an MCP error
 type MCPError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
 	Data    interface{} `json:"data,omitempty"`
 }
 
@@ -256,7 +256,7 @@ func (s *Server) handleToolsList(req *MCPRequest) *MCPResponse {
 			Name:        "list_boards",
 			Description: "List all available kanban boards",
 			InputSchema: map[string]interface{}{
-				"type": "object",
+				"type":       "object",
 				"properties": map[string]interface{}{},
 			},
 		},
@@ -446,7 +446,7 @@ func (s *Server) handleCreateTask(req *MCPRequest, args map[string]interface{}) 
 	}
 
 	description, _ := args["description"].(string)
-	
+
 	boardID := 1 // Default board
 	if bid, ok := args["board_id"].(float64); ok {
 		boardID = int(bid)
@@ -742,7 +742,7 @@ func (s *Server) handleListBoards(req *MCPRequest, args map[string]interface{}) 
 		ID:      req.ID,
 		Result: map[string]interface{}{
 			"content": content,
-			"boards": boards,
+			"boards":  boards,
 		},
 	}
 }

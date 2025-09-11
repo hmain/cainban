@@ -130,12 +130,12 @@ func (db *DB) migrate() error {
 		var name, dataType string
 		var notNull, pk int
 		var defaultValue interface{}
-		
+
 		err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &pk)
 		if err != nil {
 			return fmt.Errorf("failed to scan column info: %w", err)
 		}
-		
+
 		if name == "deleted_at" {
 			hasDeletedAt = true
 			break

@@ -95,16 +95,16 @@ func printUsage() {
 
 func getCurrentBoardDB() (*storage.DB, *task.System, string, error) {
 	boardSystem := board.New()
-	
+
 	// Get current board name
 	boardName, err := boardSystem.GetCurrentBoard()
 	if err != nil {
 		return nil, nil, "", fmt.Errorf("failed to get current board: %w", err)
 	}
-	
+
 	// Get database path for current board
 	dbPath := boardSystem.GetBoardPath(boardName)
-	
+
 	// Initialize database
 	db, err := storage.New(dbPath)
 	if err != nil {
@@ -117,7 +117,7 @@ func getCurrentBoardDB() (*storage.DB, *task.System, string, error) {
 
 func handleInit(args []string) {
 	boardSystem := board.New()
-	
+
 	var boardName string
 	if len(args) > 0 {
 		boardName = args[0]
@@ -128,9 +128,9 @@ func handleInit(args []string) {
 			fmt.Printf("Auto-detected board name: %s\n", boardName)
 		}
 	}
-	
+
 	fmt.Printf("Initializing cainban board: %s\n", boardName)
-	
+
 	// Create board if it doesn't exist
 	if boardName != "default" {
 		_, err := boardSystem.CreateBoard(boardName, fmt.Sprintf("Board for %s", boardName))
@@ -139,13 +139,13 @@ func handleInit(args []string) {
 			os.Exit(1)
 		}
 	}
-	
+
 	// Set as current board
 	if err := boardSystem.SetCurrentBoard(boardName); err != nil {
 		fmt.Printf("Error setting current board: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	// Initialize database
 	dbPath := boardSystem.GetBoardPath(boardName)
 	db, err := storage.New(dbPath)
@@ -170,7 +170,7 @@ func handleAdd(args []string) {
 	title := args[0]
 	description := ""
 	var priority interface{} = task.PriorityNone
-	
+
 	// Parse arguments for description and priority
 	i := 1
 	for i < len(args) {
@@ -180,14 +180,14 @@ func handleAdd(args []string) {
 				os.Exit(1)
 			}
 			priorityStr := args[i+1]
-			
+
 			// Try to convert numeric strings to integers
 			if priorityInt, err := strconv.Atoi(priorityStr); err == nil {
 				priority = priorityInt
 			} else {
 				priority = priorityStr
 			}
-			
+
 			if !task.IsValidPriority(priority) {
 				fmt.Println("Error: invalid priority level")
 				fmt.Println("Valid levels: none, low, medium, high, critical (or 0-4)")
@@ -218,7 +218,7 @@ func handleAdd(args []string) {
 	} else {
 		createdTask, err = taskSystem.Create(1, title, description)
 	}
-	
+
 	if err != nil {
 		fmt.Printf("Error creating task: %v\n", err)
 		os.Exit(1)
@@ -445,12 +445,12 @@ func handleSearch(args []string) {
 			fmt.Printf("... and %d more matches\n", len(matches)-10)
 			break
 		}
-		
+
 		priorityStr := ""
 		if t.Priority > 0 {
 			priorityStr = fmt.Sprintf(" [%s]", task.GetPriorityName(t.Priority))
 		}
-		
+
 		fmt.Printf("  #%d%s [%s] %s\n", t.ID, priorityStr, t.Status, t.Title)
 		if t.Description != "" {
 			fmt.Printf("      %s\n", t.Description)
@@ -471,7 +471,7 @@ func handlePriority(args []string) {
 
 	taskIdentifier := args[0]
 	priority := args[1]
-	
+
 	// Try to parse as integer first, but keep as interface{}
 	var priorityValue interface{} = priority
 	if priorityInt, err := strconv.Atoi(priority); err == nil {
@@ -561,7 +561,7 @@ func handleBoard(args []string) {
 		}
 
 		boardName := args[1]
-		
+
 		// Check if board exists
 		_, err := boardSystem.GetBoard(boardName)
 		if err != nil {
@@ -815,7 +815,7 @@ func handleRestore(args []string) {
 
 func handleMCP() {
 	fmt.Println("Starting MCP server...")
-	
+
 	db, taskSystem, _, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
