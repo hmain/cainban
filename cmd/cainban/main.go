@@ -5,11 +5,22 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hmain/cainban/src/systems/board"
 	"github.com/hmain/cainban/src/systems/mcp"
 	"github.com/hmain/cainban/src/systems/storage"
 	"github.com/hmain/cainban/src/systems/task"
+	"github.com/hmain/cainban/src/tui"
+)
+
+// Version information
+const (
+	VersionMajor = "0"
+	VersionMinor = "2" 
+	VersionPatch = "1"
+	VersionDev   = "10"   // Increment for each dev build
+	VersionSuffix = "Full Viewport Navigation" // Description of this dev build
 )
 
 func main() {
@@ -49,6 +60,8 @@ func main() {
 		handleDelete(os.Args[2:])
 	case "restore":
 		handleRestore(os.Args[2:])
+	case "tui":
+		handleTUI()
 	case "mcp":
 		handleMCP()
 	case "version":
@@ -78,6 +91,7 @@ func printUsage() {
 	fmt.Println("  cainban delete <task_id> [--hard]    Delete task (soft delete by default)")
 	fmt.Println("  cainban restore <task_id>            Restore deleted task")
 	fmt.Println("  cainban board <command>              Board management")
+	fmt.Println("  cainban tui                          Start interactive TUI mode")
 	fmt.Println("  cainban mcp                          Start MCP server")
 	fmt.Println("  cainban version                      Show version")
 	fmt.Println()
@@ -830,6 +844,36 @@ func handleMCP() {
 	}
 }
 
+func handleTUI() {
+	fmt.Println("Starting interactive TUI...")
+	
+	db, _, _, err := getCurrentBoardDB()
+	if err != nil {
+		fmt.Printf("Error: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+	
+	// Start the TUI
+	if err := tui.Run(db); err != nil {
+		fmt.Printf("Error starting TUI: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func handleVersion() {
-	fmt.Println("cainban v0.2.0 - Multi-board support")
+	version := fmt.Sprintf("v%s.%s.%s-dev.%s", VersionMajor, VersionMinor, VersionPatch, VersionDev)
+	buildTime := time.Now().Format("2006-01-02 15:04:05 MST")
+	fmt.Printf("cainban %s\n", version)
+	fmt.Printf("Build: %s\n", VersionSuffix)
+	fmt.Printf("Compiled: %s\n", buildTime)
+	fmt.Println("\nFeatures:")
+	fmt.Println("  ✅ Multi-board support") 
+	fmt.Println("  ✅ Enhanced TUI with responsive column layout")
+	fmt.Println("  ✅ Improved window resizing and positioning")
+	fmt.Println("  ✅ Dynamic column width calculations")
+	fmt.Println("  ✅ Bubble Tea viewport-based scrolling")
+	fmt.Println("  ✅ Full keyboard navigation (j/k, PgUp/PgDn, Home/End)")
+	fmt.Println("  ✅ Auto-scroll with selection indicators [X/Y]")
+	fmt.Println("  🔧 Conditional debug logging (CAINBAN_DEBUG=1)")
 }

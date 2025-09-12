@@ -6,6 +6,7 @@ It also enables AI code generators through its MCP server to decompose tasks int
 ## Overview
 
 - **Command-line first**: All operations can be performed via CLI without launching a GUI application
+- **Interactive TUI**: Full-featured Terminal User Interface with viewport-based scrolling for large task lists
 - **MCP Integration**: Built-in Model Context Protocol (MCP) server for seamless AI integration
 - **SQLite Backend**: Lightweight, file-based database storage
 
@@ -18,10 +19,11 @@ It also enables AI code generators through its MCP server to decompose tasks int
 git clone https://github.com/hmain/cainban.git
 cd cainban
 
-# Build dependencies
-go mod tidy
+# Quick setup with install script (recommended)
+./install.sh
 
-# Build the binary
+# Or manual build:
+go mod tidy
 go build -o cainban cmd/cainban/main.go
 
 # Initialize your kanban board
@@ -71,6 +73,9 @@ go build -o cainban cmd/cainban/main.go
 
 # Search tasks by title
 ./cainban search "auth"
+
+# Launch interactive TUI
+./cainban tui
 ```
 
 ### 3. MCP Server for AI Codegen integration
@@ -145,6 +150,38 @@ TODO:
   #2 Create terminal UI (legacy)        # No priority = none
 ```
 
+### 🖥️ **Interactive Terminal UI**
+Experience cainban through a powerful, responsive TUI built with Bubble Tea:
+
+```bash
+# Launch the interactive interface
+./cainban tui
+```
+
+**TUI Features:**
+- **Viewport-Based Scrolling**: Smooth navigation through large task lists (635+ tasks tested)
+- **Enhanced Navigation**: 
+  - `j`/`k` or `↑`/`↓` for line-by-line movement with auto-scroll
+  - `Page Up`/`Page Down` for page-based scrolling
+  - `Home`/`End` for instant jumping to top/bottom
+- **Visual Indicators**: Real-time scroll position display `[X/Y]` for large datasets
+- **Responsive Design**: Dynamic column widths that adapt to your terminal size
+- **Professional UX**: Starts at the top, handles terminal resizing, follows Bubble Tea best practices
+- **Intuitive Controls**: Press `q` to quit, `?` for help
+
+**Navigation Example:**
+```
+┌─ cainban v0.2.1-dev.10 ─ Full Viewport Navigation ─────────────┐
+│ TODO [1/3]:                                                    │
+│   #8 [critical] Implement task dependencies                    │
+│   #6 [high] Enhanced TUI with viewport scrolling              │
+│ DOING [2/3]:                                                   │
+│   #10 [high] Prepare for public release                       │
+│ DONE [3/3]:                                                    │
+│   #9 [medium] Enhanced AI features                            │
+└────────────────────────────── Press q to quit ───────────────┘
+```
+
 ### 🔍 **Fuzzy Task Search**
 Reference tasks by partial titles instead of remembering IDs:
 
@@ -178,7 +215,8 @@ Reference tasks by partial titles instead of remembering IDs:
 - **Language**: Go
 - **Database**: SQLite
 - **Systems Architecture**: Modular systems in `src/systems/` for extensibility
-- TODO: **TUI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea)
+- **TUI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea) with viewport-based scrolling
+- **Terminal UI**: Full-featured responsive interface with professional UX patterns
 - TODO: **Markdown Rendering**: [Glow](https://github.com/charmbracelet/glow)
 
 ## AI Integration
@@ -331,8 +369,9 @@ ls -la ~/.cainban/cainban.db
 
 ## Status:
 
-**Current Version**: v0.2.2 - Priority Management & Fuzzy Search  
-**New Features**: Task priorities, fuzzy search, natural language task references  
+**Current Version**: v0.2.1-dev.10 - Full Viewport Navigation  
+**Major Features**: Interactive TUI with viewport-based scrolling, enhanced navigation, responsive design  
+**Previous**: Task priorities, fuzzy search, natural language task references  
 
 
 ## Contributing
