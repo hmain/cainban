@@ -55,3 +55,6 @@ coverage.html
 
 # Memory profiles
 *.prof
+
+# Claude Code settings
+.claude/
