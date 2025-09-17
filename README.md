@@ -78,12 +78,28 @@ go build -o cainban cmd/cainban/main.go
 ./cainban tui
 ```
 
-### 3. MCP Server for AI Codegen integration
+### 3. MCP Server for AI Integration
 
-1. **Create MCP configuration**:
+cainban includes a built-in Model Context Protocol (MCP) server using the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk), ensuring full compatibility with AI tools like Amazon Q CLI, Claude Desktop, and other MCP clients.
+
+1. **For Amazon Q CLI** (recommended):
    
-```bash
-cat > mcp.json << 'EOF'
+Add to `~/.aws/amazonq/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "command": "cainban",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+2. **For Claude Desktop**:
+
+Add to your Claude Desktop configuration:
+```json
 {
   "mcpServers": {
     "cainban": {
@@ -92,7 +108,6 @@ cat > mcp.json << 'EOF'
     }
   }
 }
-EOF
 ```
 
 2. **Update the path** in the configuration above to point to your cainban binary location.
@@ -224,10 +239,12 @@ Reference tasks by partial titles instead of remembering IDs:
 cainban is designed to work seamlessly with AI agents:
 
 ### MCP Server
+- Built with official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk) for maximum compatibility
 - Exposes cainban operations as MCP tools
 - Real-time board state synchronization
 - JSON-RPC 2.0 compliant
-- Tools available: create_task, list_tasks, update_task_status, get_task, update_task
+- Compatible with Amazon Q CLI, Claude Desktop, and other MCP clients
+- Tools available: create_task, list_tasks, update_task_status, get_task, update_task_priority, update_task, list_boards, change_board
 
 ## MCP Setup Options
 
