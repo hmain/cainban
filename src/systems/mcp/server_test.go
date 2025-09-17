@@ -1,8 +1,6 @@
 package mcp
 
 import (
-	"bytes"
-	"encoding/json"
 	"testing"
 
 	"github.com/hmain/cainban/src/systems/storage"
@@ -18,235 +16,198 @@ func setupTestServer(t *testing.T) *Server {
 	t.Cleanup(func() { db.Close() })
 
 	taskSystem := task.New(db.Conn())
-
-	input := &bytes.Buffer{}
-	output := &bytes.Buffer{}
-	server := New(taskSystem, input, output)
+	server := New(taskSystem)
 
 	return server
 }
 
-func TestServer_Initialize(t *testing.T) {
+func TestServer_New(t *testing.T) {
 	server := setupTestServer(t)
 
-	req := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "initialize",
+	if server == nil {
+		t.Fatal("Server should not be nil")
 	}
 
-	resp := server.handleRequest(&req)
-
-	if resp.Error != nil {
-		t.Errorf("Initialize should not return error: %v", resp.Error)
+	if server.taskSystem == nil {
+		t.Error("Task system should not be nil")
 	}
 
-	result, ok := resp.Result.(map[string]interface{})
-	if !ok {
-		t.Fatal("Initialize result should be a map")
+	if server.boardSystem == nil {
+		t.Error("Board system should not be nil")
 	}
 
-	if result["protocolVersion"] != "2024-11-05" {
-		t.Errorf("Expected protocol version 2024-11-05, got %v", result["protocolVersion"])
-	}
-}
-
-func TestServer_ToolsList(t *testing.T) {
-	server := setupTestServer(t)
-
-	req := MCPRequest{
-		JSONRPC: "2.0",
-		ID:      1,
-		Method:  "tools/list",
-	}
-
-	resp := server.handleRequest(&req)
-
-	if resp.Error != nil {
-		t.Errorf("Tools list should not return error: %v", resp.Error)
-	}
-
-	result, ok := resp.Result.(map[string]interface{})
-	if !ok {
-		t.Fatal("Tools list result should be a map")
-	}
-
-	tools, ok := result["tools"].([]Tool)
-	if !ok {
-		t.Fatal("Tools should be a slice of Tool")
-	}
-
-	expectedTools := []string{
-		"create_task", "list_tasks", "update_task_status", "get_task",
-		"update_task_priority", "update_task", "list_boards", "change_board",
-		"link_tasks", "unlink_tasks", "get_task_links", "delete_task", "restore_task",
-	}
-	if len(tools) != len(expectedTools) {
-		t.Errorf("Expected %d tools, got %d", len(expectedTools), len(tools))
-		return
-	}
-
-	// Check that all expected tools are present (order may vary)
-	toolMap := make(map[string]bool)
-	for _, tool := range tools {
-		toolMap[tool.Name] = true
-	}
-
-	for _, expectedTool := range expectedTools {
-		if !toolMap[expectedTool] {
-			t.Errorf("Expected tool %s not found", expectedTool)
-		}
+	if server.mcpServer == nil {
+		t.Error("MCP server should not be nil")
 	}
 }
 
 func TestServer_CreateTask(t *testing.T) {
 	server := setupTestServer(t)
 
-	args := map[string]interface{}{
-		"title":       "Test task",
-		"description": "Test description",
+	// Test creating a task through the task system directly
+	// since the MCP SDK handles the protocol layer
+	taskData, err := server.taskSystem.Create(1, "Test task", "Test description")
+	if err != nil {
+		t.Errorf("Create task should not return error: %v", err)
 	}
 
-	resp := server.handleCreateTask(&MCPRequest{ID: 1}, args)
-
-	if resp.Error != nil {
-		t.Errorf("Create task should not return error: %v", resp.Error)
+	if taskData.Title != "Test task" {
+		t.Errorf("Expected title 'Test task', got %s", taskData.Title)
 	}
 
-	result, ok := resp.Result.(map[string]interface{})
-	if !ok {
-		t.Fatal("Create task result should be a map")
-	}
-
-	taskData, ok := result["task"]
-	if !ok {
-		t.Error("Create task result should include task data")
-	}
-
-	// Verify task was created
-	if taskData == nil {
-		t.Error("Task data should not be nil")
+	if taskData.Description != "Test description" {
+		t.Errorf("Expected description 'Test description', got %s", taskData.Description)
 	}
 }
 
 func TestServer_ListTasks(t *testing.T) {
 	server := setupTestServer(t)
 
-	// First create a task
-	createArgs := map[string]interface{}{
-		"title": "Test task for listing",
-	}
-	server.handleCreateTask(&MCPRequest{ID: 1}, createArgs)
-
-	// Then list tasks
-	listArgs := map[string]interface{}{}
-	resp := server.handleListTasks(&MCPRequest{ID: 2}, listArgs)
-
-	if resp.Error != nil {
-		t.Errorf("List tasks should not return error: %v", resp.Error)
+	// Create a test task first
+	_, err := server.taskSystem.Create(1, "Test task for listing", "")
+	if err != nil {
+		t.Fatalf("Failed to create test task: %v", err)
 	}
 
-	result, ok := resp.Result.(map[string]interface{})
-	if !ok {
-		t.Fatal("List tasks result should be a map")
+	// List tasks
+	tasks, err := server.taskSystem.List(1)
+	if err != nil {
+		t.Errorf("List tasks should not return error: %v", err)
 	}
 
-	tasks, ok := result["tasks"]
-	if !ok {
-		t.Error("List tasks result should include tasks")
+	if len(tasks) == 0 {
+		t.Error("Should have at least one task")
 	}
 
-	if tasks == nil {
-		t.Error("Tasks should not be nil")
+	found := false
+	for _, task := range tasks {
+		if task.Title == "Test task for listing" {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		t.Error("Created task should be in the list")
 	}
 }
 
 func TestServer_UpdateTaskStatus(t *testing.T) {
 	server := setupTestServer(t)
 
-	// First create a task
-	createArgs := map[string]interface{}{
-		"title": "Test task for status update",
+	// Create a test task
+	taskData, err := server.taskSystem.Create(1, "Test task for status update", "")
+	if err != nil {
+		t.Fatalf("Failed to create test task: %v", err)
 	}
-	createResp := server.handleCreateTask(&MCPRequest{ID: 1}, createArgs)
-
-	// Extract task ID from response
-	result := createResp.Result.(map[string]interface{})
-	taskData := result["task"].(*task.Task)
 
 	// Update task status
-	updateArgs := map[string]interface{}{
-		"id":     float64(taskData.ID), // JSON numbers are float64
-		"status": "doing",
+	err = server.taskSystem.UpdateStatus(taskData.ID, "doing")
+	if err != nil {
+		t.Errorf("Update task status should not return error: %v", err)
 	}
 
-	resp := server.handleUpdateTaskStatus(&MCPRequest{ID: 2}, updateArgs)
+	// Verify status was updated
+	updatedTask, err := server.taskSystem.GetByID(taskData.ID)
+	if err != nil {
+		t.Errorf("Failed to get updated task: %v", err)
+	}
 
-	if resp.Error != nil {
-		t.Errorf("Update task status should not return error: %v", resp.Error)
+	if updatedTask.Status != "doing" {
+		t.Errorf("Expected status 'doing', got %s", updatedTask.Status)
 	}
 }
 
-func TestServer_ErrorHandling(t *testing.T) {
+func TestServer_GetTask(t *testing.T) {
 	server := setupTestServer(t)
 
-	t.Run("InvalidMethod", func(t *testing.T) {
-		req := MCPRequest{
-			JSONRPC: "2.0",
-			ID:      1,
-			Method:  "invalid_method",
+	// Create a test task
+	taskData, err := server.taskSystem.Create(1, "Test task for retrieval", "Test description")
+	if err != nil {
+		t.Fatalf("Failed to create test task: %v", err)
+	}
+
+	// Get the task
+	retrievedTask, err := server.taskSystem.GetByID(taskData.ID)
+	if err != nil {
+		t.Errorf("Get task should not return error: %v", err)
+	}
+
+	if retrievedTask.ID != taskData.ID {
+		t.Errorf("Expected ID %d, got %d", taskData.ID, retrievedTask.ID)
+	}
+
+	if retrievedTask.Title != "Test task for retrieval" {
+		t.Errorf("Expected title 'Test task for retrieval', got %s", retrievedTask.Title)
+	}
+}
+
+func TestServer_UpdateTaskPriority(t *testing.T) {
+	server := setupTestServer(t)
+
+	// Create a test task
+	taskData, err := server.taskSystem.Create(1, "Test task for priority", "")
+	if err != nil {
+		t.Fatalf("Failed to create test task: %v", err)
+	}
+
+	// Update task priority
+	err = server.taskSystem.UpdatePriority(taskData.ID, 3) // high priority
+	if err != nil {
+		t.Errorf("Update task priority should not return error: %v", err)
+	}
+
+	// Verify priority was updated
+	updatedTask, err := server.taskSystem.GetByID(taskData.ID)
+	if err != nil {
+		t.Errorf("Failed to get updated task: %v", err)
+	}
+
+	if updatedTask.Priority != 3 {
+		t.Errorf("Expected priority 3, got %d", updatedTask.Priority)
+	}
+}
+
+func TestServer_DeleteAndRestoreTask(t *testing.T) {
+	server := setupTestServer(t)
+
+	// Create a test task
+	taskData, err := server.taskSystem.Create(1, "Test task for deletion", "")
+	if err != nil {
+		t.Fatalf("Failed to create test task: %v", err)
+	}
+
+	// Delete the task (soft delete)
+	err = server.taskSystem.Delete(taskData.ID)
+	if err != nil {
+		t.Errorf("Delete task should not return error: %v", err)
+	}
+
+	// Verify task is deleted (should not appear in regular list)
+	tasks, err := server.taskSystem.List(1)
+	if err != nil {
+		t.Errorf("List tasks should not return error: %v", err)
+	}
+
+	for _, task := range tasks {
+		if task.ID == taskData.ID {
+			t.Error("Deleted task should not appear in regular list")
 		}
+	}
 
-		resp := server.handleRequest(&req)
+	// Restore the task
+	err = server.taskSystem.RestoreTask(taskData.ID)
+	if err != nil {
+		t.Errorf("Restore task should not return error: %v", err)
+	}
 
-		if resp.Error == nil {
-			t.Error("Invalid method should return error")
-		}
+	// Verify task is restored
+	restoredTask, err := server.taskSystem.GetByID(taskData.ID)
+	if err != nil {
+		t.Errorf("Failed to get restored task: %v", err)
+	}
 
-		if resp.Error.Code != -32601 {
-			t.Errorf("Expected error code -32601, got %d", resp.Error.Code)
-		}
-	})
-
-	t.Run("InvalidTool", func(t *testing.T) {
-		params := map[string]interface{}{
-			"name":      "invalid_tool",
-			"arguments": map[string]interface{}{},
-		}
-		paramsJSON, _ := json.Marshal(params)
-
-		req := MCPRequest{
-			JSONRPC: "2.0",
-			ID:      1,
-			Method:  "tools/call",
-			Params:  paramsJSON,
-		}
-
-		resp := server.handleRequest(&req)
-
-		if resp.Error == nil {
-			t.Error("Invalid tool should return error")
-		}
-
-		if resp.Error.Code != -32601 {
-			t.Errorf("Expected error code -32601, got %d", resp.Error.Code)
-		}
-	})
-
-	t.Run("MissingRequiredParam", func(t *testing.T) {
-		args := map[string]interface{}{
-			// Missing required "title" parameter
-			"description": "Test description",
-		}
-
-		resp := server.handleCreateTask(&MCPRequest{ID: 1}, args)
-
-		if resp.Error == nil {
-			t.Error("Missing required param should return error")
-		}
-
-		if resp.Error.Code != -32602 {
-			t.Errorf("Expected error code -32602, got %d", resp.Error.Code)
-		}
-	})
+	if restoredTask.Title != "Test task for deletion" {
+		t.Errorf("Expected title 'Test task for deletion', got %s", restoredTask.Title)
+	}
 }

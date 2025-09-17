@@ -141,8 +141,6 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewports[m.focused] = vp
 		return m, cmd
 	}
-	
-	return m, nil
 }
 
 // handleHelpKeys processes keyboard input for the help view
