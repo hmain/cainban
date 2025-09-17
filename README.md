@@ -186,7 +186,7 @@ Experience cainban through a powerful, responsive TUI built with Bubble Tea:
 
 **Navigation Example:**
 ```
-┌─ cainban v0.2.1-dev.10 ─ Full Viewport Navigation ─────────────┐
+┌─ cainban v0.2.1-dev.11 ─ Go MCP SDK Integration ──────────────┐
 │ TODO [1/3]:                                                    │
 │   #8 [critical] Implement task dependencies                    │
 │   #6 [high] Enhanced TUI with viewport scrolling              │
@@ -386,8 +386,8 @@ ls -la ~/.cainban/cainban.db
 
 ## Status:
 
-**Current Version**: v0.2.1-dev.10 - Full Viewport Navigation  
-**Major Features**: Interactive TUI with viewport-based scrolling, enhanced navigation, responsive design  
+**Current Version**: v0.2.1-dev.11 - Go MCP SDK Integration  
+**Major Features**: Official Go MCP SDK, enhanced AI compatibility, interactive TUI with viewport scrolling  
 **Previous**: Task priorities, fuzzy search, natural language task references  
 
 
