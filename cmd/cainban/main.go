@@ -835,7 +835,7 @@ func handleMCP() {
 	}
 	defer db.Close()
 
-	server := mcp.New(taskSystem, os.Stdin, os.Stdout)
+	server := mcp.New(taskSystem)
 	if err := server.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting MCP server: %v\n", err)
 		os.Exit(1)
