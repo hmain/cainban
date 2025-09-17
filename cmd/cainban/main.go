@@ -828,18 +828,18 @@ func handleRestore(args []string) {
 }
 
 func handleMCP() {
-	fmt.Println("Starting MCP server...")
+	fmt.Fprintln(os.Stderr, "Starting MCP server...")
 
 	db, taskSystem, _, err := getCurrentBoardDB()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 	defer db.Close()
 
 	server := mcp.New(taskSystem, os.Stdin, os.Stdout)
 	if err := server.Start(); err != nil {
-		fmt.Printf("Error starting MCP server: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Error starting MCP server: %v\n", err)
 		os.Exit(1)
 	}
 }
