@@ -19,8 +19,8 @@ const (
 	VersionMajor = "0"
 	VersionMinor = "2" 
 	VersionPatch = "1"
-	VersionDev   = "10"   // Increment for each dev build
-	VersionSuffix = "Full Viewport Navigation" // Description of this dev build
+	VersionDev   = "11"   // Increment for each dev build
+	VersionSuffix = "JSON-only MCP Output" // Description of this dev build
 )
 
 func main() {
@@ -828,8 +828,6 @@ func handleRestore(args []string) {
 }
 
 func handleMCP() {
-	fmt.Fprintln(os.Stderr, "Starting MCP server...")
-
 	db, taskSystem, _, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
