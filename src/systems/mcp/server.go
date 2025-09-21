@@ -158,7 +158,7 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest,
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
-				Text: fmt.Sprintf("Created task #%d%s: %s", createdTask.ID, priorityStr, createdTask.Title),
+				Text: fmt.Sprintf("Created task #%d%s: %s", createdTask.BoardTaskID, priorityStr, createdTask.Title),
 			},
 		},
 	}, createdTask, nil
@@ -213,7 +213,7 @@ func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, 
 					priorityStr = fmt.Sprintf(" [%s]", task.GetPriorityName(t.Priority))
 				}
 				content = append(content, &mcp.TextContent{
-					Text: fmt.Sprintf("• #%d%s %s", t.ID, priorityStr, t.Title),
+					Text: fmt.Sprintf("• #%d%s %s", t.BoardTaskID, priorityStr, t.Title),
 				})
 			}
 		}
@@ -227,7 +227,17 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("invalid status: %s", args.Status)
 	}
 
-	err := s.taskSystem.UpdateStatus(args.ID, task.Status(args.Status))
+	// Use board ID 1 (each board database has its own boards table with ID 1)
+	boardID := 1
+
+	// Get task by board-scoped ID
+	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
+	}
+
+	// Update using internal ID
+	err = s.taskSystem.UpdateStatus(t.ID, task.Status(args.Status))
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to update task status: %w", err)
 	}
@@ -242,15 +252,19 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 }
 
 func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, any, error) {
-	t, err := s.taskSystem.GetByID(args.ID)
+	// Use board ID 1 (each board database has its own boards table with ID 1)
+	boardID := 1
+
+	// Get task by board-scoped ID
+	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get task: %w", err)
+		return nil, nil, fmt.Errorf("failed to get task #%d: %w", args.ID, err)
 	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
-				Text: fmt.Sprintf("#%d [%s] %s\n%s", t.ID, t.Status, t.Title, t.Description),
+				Text: fmt.Sprintf("#%d [%s] %s\n%s", t.BoardTaskID, t.Status, t.Title, t.Description),
 			},
 		},
 	}, t, nil
@@ -261,7 +275,17 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 		return nil, nil, fmt.Errorf("invalid priority level")
 	}
 
-	err := s.taskSystem.UpdatePriority(args.ID, args.Priority)
+	// Use board ID 1 (each board database has its own boards table with ID 1)
+	boardID := 1
+
+	// Get task by board-scoped ID
+	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
+	}
+
+	// Update using internal ID
+	err = s.taskSystem.UpdatePriority(t.ID, args.Priority)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to update task priority: %w", err)
 	}
@@ -279,7 +303,17 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 }
 
 func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskArgs) (*mcp.CallToolResult, any, error) {
-	err := s.taskSystem.Update(args.ID, args.Title, args.Description)
+	// Use board ID 1 (each board database has its own boards table with ID 1)
+	boardID := 1
+
+	// Get task by board-scoped ID
+	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
+	}
+
+	// Update using internal ID
+	err = s.taskSystem.Update(t.ID, args.Title, args.Description)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to update task: %w", err)
 	}
