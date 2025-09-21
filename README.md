@@ -12,7 +12,24 @@ It also enables AI code generators through its MCP server to decompose tasks int
 
 ## Quick Start
 
-### 1. Install and Setup
+## Installation
+
+### Option 1: Download Pre-built Binary (Recommended)
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/hmain/cainban/releases):
+
+- **Linux**: `cainban-linux-amd64` or `cainban-linux-arm64`
+- **macOS**: `cainban-darwin-amd64` or `cainban-darwin-arm64` 
+- **Windows**: `cainban-windows-amd64.exe`
+
+```bash
+# Example for Linux
+wget https://github.com/hmain/cainban/releases/latest/download/cainban-linux-amd64
+chmod +x cainban-linux-amd64
+sudo mv cainban-linux-amd64 /usr/local/bin/cainban
+```
+
+### Option 2: Build from Source
 
 ```bash
 # Clone the repository
@@ -36,7 +53,7 @@ go build -o cainban cmd/cainban/main.go
 # Add tasks
 ./cainban add "Implement user authentication" "Add login and registration functionality"
 
-# List all tasks
+# List all tasks (shows board-scoped IDs: #1, #2, #3, etc.)
 ./cainban list
 
 # List tasks by status
@@ -44,15 +61,15 @@ go build -o cainban cmd/cainban/main.go
 ./cainban list doing
 ./cainban list done
 
-# Move tasks between columns (by ID or fuzzy title match)
+# Move tasks between columns (by board-scoped ID or fuzzy title match)
 ./cainban move 1 doing
 ./cainban move "user auth" doing
 
-# Get task details (by ID or fuzzy title match)
+# Get task details (by board-scoped ID or fuzzy title match)
 ./cainban get 1
 ./cainban get "user auth"
 
-# Update task (by ID or fuzzy title match)
+# Update task (by board-scoped ID or fuzzy title match)
 ./cainban update 1 "Updated task title" "Updated description"
 ./cainban update "user auth" "Enhanced authentication system"
 
@@ -60,7 +77,7 @@ go build -o cainban cmd/cainban/main.go
 ./cainban priority 1 high
 ./cainban priority "user auth" critical
 
-# Link tasks together
+# Link tasks together (using board-scoped IDs)
 ./cainban link 1 2 blocks          # Task 1 blocks Task 2
 ./cainban link 3 4 depends_on      # Task 3 depends on Task 4
 ./cainban links 1                  # Show all links for Task 1
@@ -386,9 +403,24 @@ ls -la ~/.cainban/cainban.db
 
 ## Status:
 
-**Current Version**: v0.2.1-dev.11 - Go MCP SDK Integration  
-**Major Features**: Official Go MCP SDK, enhanced AI compatibility, interactive TUI with viewport scrolling  
-**Previous**: Task priorities, fuzzy search, natural language task references  
+**Current Version**: v0.2.1 - Board-Scoped Task IDs  
+**Major Features**: Board-scoped task IDs, automatic migration, enhanced MCP efficiency, GitHub Actions releases  
+**Previous**: Official Go MCP SDK, enhanced AI compatibility, interactive TUI with viewport scrolling  
+
+## Recent Updates:
+
+### v0.2.1 - Board-Scoped Task IDs
+- **Board-Scoped Task IDs**: Each board now has its own task ID sequence (1, 2, 3, etc.)
+- **Automatic Migration**: Existing boards seamlessly upgrade to board-scoped IDs
+- **MCP Efficiency**: Reduced context overflow in AI conversations with smaller task IDs
+- **GitHub Actions**: Automatic releases with multi-platform binaries
+- **Backward Compatibility**: Internal global IDs preserved for database relationships
+
+### Key Benefits:
+- **Reduced Token Usage**: Task IDs are now 1-3 digits instead of large numbers
+- **Better UX**: Users see intuitive task numbers (#1, #2, #3) per board  
+- **AI-Friendly**: MCP operations use manageable task references
+- **Seamless Upgrade**: No manual migration needed - works automatically
 
 
 ## Contributing
