@@ -75,6 +75,7 @@ func (db *DB) initialize() error {
 	CREATE TABLE IF NOT EXISTS tasks (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		board_id INTEGER NOT NULL,
+		board_task_id INTEGER NOT NULL,
 		title TEXT NOT NULL,
 		description TEXT,
 		status TEXT NOT NULL DEFAULT 'todo',
@@ -82,7 +83,8 @@ func (db *DB) initialize() error {
 		deleted_at DATETIME NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-		FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE
+		FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE,
+		UNIQUE(board_id, board_task_id)
 	);
 
 	CREATE TABLE IF NOT EXISTS task_links (
@@ -117,7 +119,7 @@ func (db *DB) initialize() error {
 
 // migrate handles database migrations for existing databases
 func (db *DB) migrate() error {
-	// Check if deleted_at column exists
+	// Check if deleted_at and board_task_id columns exist
 	rows, err := db.conn.Query("PRAGMA table_info(tasks)")
 	if err != nil {
 		return fmt.Errorf("failed to get table info: %w", err)
@@ -125,6 +127,7 @@ func (db *DB) migrate() error {
 	defer rows.Close()
 
 	hasDeletedAt := false
+	hasBoardTaskID := false
 	for rows.Next() {
 		var cid int
 		var name, dataType string
@@ -138,7 +141,9 @@ func (db *DB) migrate() error {
 
 		if name == "deleted_at" {
 			hasDeletedAt = true
-			break
+		}
+		if name == "board_task_id" {
+			hasBoardTaskID = true
 		}
 	}
 
@@ -148,6 +153,68 @@ func (db *DB) migrate() error {
 		if err != nil {
 			return fmt.Errorf("failed to add deleted_at column: %w", err)
 		}
+	}
+
+	// Add board_task_id column if it doesn't exist
+	if !hasBoardTaskID {
+		_, err = db.conn.Exec("ALTER TABLE tasks ADD COLUMN board_task_id INTEGER")
+		if err != nil {
+			return fmt.Errorf("failed to add board_task_id column: %w", err)
+		}
+
+		// Populate board_task_id for existing tasks
+		err = db.populateBoardTaskIDs()
+		if err != nil {
+			return fmt.Errorf("failed to populate board_task_id: %w", err)
+		}
+
+		// Add unique constraint
+		_, err = db.conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_board_task_id ON tasks(board_id, board_task_id)")
+		if err != nil {
+			return fmt.Errorf("failed to create board_task_id index: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// populateBoardTaskIDs assigns board-scoped task IDs to existing tasks
+func (db *DB) populateBoardTaskIDs() error {
+	// Get all boards
+	boards, err := db.conn.Query("SELECT id FROM boards ORDER BY id")
+	if err != nil {
+		return err
+	}
+	defer boards.Close()
+
+	for boards.Next() {
+		var boardID int
+		if err := boards.Scan(&boardID); err != nil {
+			return err
+		}
+
+		// Get tasks for this board ordered by creation
+		tasks, err := db.conn.Query("SELECT id FROM tasks WHERE board_id = ? ORDER BY created_at, id", boardID)
+		if err != nil {
+			return err
+		}
+
+		boardTaskID := 1
+		for tasks.Next() {
+			var taskID int
+			if err := tasks.Scan(&taskID); err != nil {
+				tasks.Close()
+				return err
+			}
+
+			_, err = db.conn.Exec("UPDATE tasks SET board_task_id = ? WHERE id = ?", boardTaskID, taskID)
+			if err != nil {
+				tasks.Close()
+				return err
+			}
+			boardTaskID++
+		}
+		tasks.Close()
 	}
 
 	return nil

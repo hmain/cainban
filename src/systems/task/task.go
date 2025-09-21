@@ -134,8 +134,9 @@ type TaskLink struct {
 
 // Task represents a kanban task
 type Task struct {
-	ID          int        `json:"id"`
-	BoardID     int        `json:"board_id"`
+	ID          int        `json:"id"`           // Internal global ID
+	BoardID     int        `json:"board_id"`     // Board this task belongs to
+	BoardTaskID int        `json:"board_task_id"` // Board-scoped task ID (1, 2, 3, etc.)
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
 	Status      Status     `json:"status"`
@@ -172,14 +173,21 @@ func (s *System) CreateWithPriority(boardID int, title, description string, prio
 
 	priorityLevel, _ := ParsePriority(priority)
 
+	// Get next board_task_id for this board
+	var nextBoardTaskID int
+	err := s.db.QueryRow("SELECT COALESCE(MAX(board_task_id), 0) + 1 FROM tasks WHERE board_id = ?", boardID).Scan(&nextBoardTaskID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get next board task ID: %w", err)
+	}
+
 	query := `
-		INSERT INTO tasks (board_id, title, description, status, priority)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO tasks (board_id, board_task_id, title, description, status, priority)
+		VALUES (?, ?, ?, ?, ?, ?)
 		RETURNING id, created_at, updated_at
 	`
 
 	var task Task
-	err := s.db.QueryRow(query, boardID, title, description, StatusTodo, priorityLevel).Scan(
+	err = s.db.QueryRow(query, boardID, nextBoardTaskID, title, description, StatusTodo, priorityLevel).Scan(
 		&task.ID, &task.CreatedAt, &task.UpdatedAt,
 	)
 	if err != nil {
@@ -187,6 +195,7 @@ func (s *System) CreateWithPriority(boardID int, title, description string, prio
 	}
 
 	task.BoardID = boardID
+	task.BoardTaskID = nextBoardTaskID
 	task.Title = title
 	task.Description = description
 	task.Status = StatusTodo
@@ -198,13 +207,13 @@ func (s *System) CreateWithPriority(boardID int, title, description string, prio
 // GetByID retrieves a task by ID
 func (s *System) GetByID(id int) (*Task, error) {
 	query := `
-		SELECT id, board_id, title, description, status, priority, deleted_at, created_at, updated_at
+		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
 		FROM tasks WHERE id = ? AND deleted_at IS NULL
 	`
 
 	var task Task
 	err := s.db.QueryRow(query, id).Scan(
-		&task.ID, &task.BoardID, &task.Title, &task.Description,
+		&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
 		&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 	)
 	if err != nil {
@@ -217,12 +226,34 @@ func (s *System) GetByID(id int) (*Task, error) {
 	return &task, nil
 }
 
+// GetByBoardTaskID retrieves a task by board-scoped task ID
+func (s *System) GetByBoardTaskID(boardID, boardTaskID int) (*Task, error) {
+	query := `
+		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
+		FROM tasks WHERE board_id = ? AND board_task_id = ? AND deleted_at IS NULL
+	`
+
+	var task Task
+	err := s.db.QueryRow(query, boardID, boardTaskID).Scan(
+		&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
+		&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("task #%d not found in board %d", boardTaskID, boardID)
+		}
+		return nil, fmt.Errorf("failed to get task: %w", err)
+	}
+
+	return &task, nil
+}
+
 // List retrieves all tasks for a board
 func (s *System) List(boardID int) ([]*Task, error) {
 	query := `
-		SELECT id, board_id, title, description, status, priority, deleted_at, created_at, updated_at
+		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
 		FROM tasks WHERE board_id = ? AND deleted_at IS NULL
-		ORDER BY priority DESC, created_at ASC
+		ORDER BY priority DESC, board_task_id ASC
 	`
 
 	rows, err := s.db.Query(query, boardID)
@@ -235,7 +266,7 @@ func (s *System) List(boardID int) ([]*Task, error) {
 	for rows.Next() {
 		var task Task
 		err := rows.Scan(
-			&task.ID, &task.BoardID, &task.Title, &task.Description,
+			&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
 			&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 		)
 		if err != nil {
@@ -254,9 +285,9 @@ func (s *System) List(boardID int) ([]*Task, error) {
 // ListByStatus retrieves tasks by status for a board
 func (s *System) ListByStatus(boardID int, status Status) ([]*Task, error) {
 	query := `
-		SELECT id, board_id, title, description, status, priority, deleted_at, created_at, updated_at
+		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
 		FROM tasks WHERE board_id = ? AND status = ? AND deleted_at IS NULL
-		ORDER BY priority DESC, created_at ASC
+		ORDER BY priority DESC, board_task_id ASC
 	`
 
 	rows, err := s.db.Query(query, boardID, status)
@@ -269,7 +300,7 @@ func (s *System) ListByStatus(boardID int, status Status) ([]*Task, error) {
 	for rows.Next() {
 		var task Task
 		err := rows.Scan(
-			&task.ID, &task.BoardID, &task.Title, &task.Description,
+			&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
 			&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 		)
 		if err != nil {
@@ -423,16 +454,16 @@ func (s *System) SearchTasks(boardID int, query string) ([]*Task, error) {
 	return matches, nil
 }
 
-// FindTaskByFuzzyID attempts to find a task by ID or fuzzy title match
+// FindTaskByFuzzyID attempts to find a task by board-scoped ID or fuzzy title match
 func (s *System) FindTaskByFuzzyID(boardID int, idOrQuery string) (*Task, error) {
-	// First try to parse as ID
-	if id, err := strconv.Atoi(idOrQuery); err == nil {
-		// Check if the ID exists
-		task, err := s.GetByID(id)
+	// First try to parse as board-scoped ID
+	if boardTaskID, err := strconv.Atoi(idOrQuery); err == nil {
+		// Check if the board-scoped ID exists
+		task, err := s.GetByBoardTaskID(boardID, boardTaskID)
 		if err == nil {
 			return task, nil
 		}
-		// If ID doesn't exist, fall through to fuzzy search
+		// If board-scoped ID doesn't exist, fall through to fuzzy search
 		// This allows searching for tasks with numbers in titles even if the number doesn't correspond to an existing ID
 	}
 
@@ -445,7 +476,7 @@ func (s *System) FindTaskByFuzzyID(boardID int, idOrQuery string) (*Task, error)
 	if len(matches) == 0 {
 		// If it was a number that didn't match an ID and no fuzzy matches, give a clear error
 		if _, numErr := strconv.Atoi(idOrQuery); numErr == nil {
-			return nil, fmt.Errorf("no task found with ID %s and no tasks found matching '%s'", idOrQuery, idOrQuery)
+			return nil, fmt.Errorf("no task found with ID #%s and no tasks found matching '%s'", idOrQuery, idOrQuery)
 		}
 		return nil, fmt.Errorf("no tasks found matching '%s'", idOrQuery)
 	}
@@ -460,7 +491,7 @@ func (s *System) FindTaskByFuzzyID(boardID int, idOrQuery string) (*Task, error)
 		if i >= 5 { // Limit to top 5 suggestions
 			break
 		}
-		suggestions = append(suggestions, fmt.Sprintf("#%d %s", match.ID, match.Title))
+		suggestions = append(suggestions, fmt.Sprintf("#%d %s", match.BoardTaskID, match.Title))
 	}
 
 	return nil, fmt.Errorf("multiple tasks match '%s':\n%s\nPlease be more specific or use the task ID",
