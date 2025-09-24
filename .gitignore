@@ -58,3 +58,4 @@ coverage.html
 
 # Claude Code settings
 .claude/
+.amazonq/
