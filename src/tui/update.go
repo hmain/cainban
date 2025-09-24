@@ -1,9 +1,10 @@
 package tui
 
 import (
+	"time"
+
 	"github.com/charmbracelet/bubbletea"
 	"github.com/hmain/cainban/src/systems/task"
-	"time"
 )
 
 // Update handles all TUI state updates based on messages

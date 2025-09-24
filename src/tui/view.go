@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/hmain/cainban/src/systems/task"
 )
 
 // View renders the current TUI state
@@ -110,114 +109,6 @@ func (m Model) renderViewportColumn(col Column, title string) string {
 }
 
 // renderColumns renders the three kanban columns side by side
-// renderColumn renders a single kanban column with virtual scrolling
-func (m Model) renderColumn(col Column, title string, status task.Status) string {
-	var content []string
-
-	// Column title with task count
-	tasks := m.tasks[status]
-	titleWithCount := fmt.Sprintf("%s (%d)", title, len(tasks))
-
-	columnTitle := m.styles.ColumnTitle.Render(titleWithCount)
-	content = append(content, columnTitle)
-
-	// Calculate visible task window
-	maxVisibleTasks := m.getMaxVisibleTasks()
-	selectedIndex := m.selectedTask[col]
-
-	debugLog("[VIRTUAL] Column %d: %d tasks, selected: %d, maxVisible: %d\n", col, len(tasks), selectedIndex, maxVisibleTasks)
-	debugLog("[VIRTUAL] selectedTask map contents: Todo=%d, Doing=%d, Done=%d\n",
-		m.selectedTask[ColumnTodo], m.selectedTask[ColumnDoing], m.selectedTask[ColumnDone])
-
-	// Tasks with virtual scrolling
-	if len(tasks) == 0 {
-		emptyMsg := m.styles.Task.Copy().
-			Foreground(lipgloss.Color("#6B7280")).
-			Italic(true).
-			Render("No tasks")
-		content = append(content, emptyMsg)
-	} else {
-		// Calculate the visible task window
-		startIndex, endIndex := m.calculateTaskWindow(len(tasks), selectedIndex, maxVisibleTasks)
-
-		debugLog("[VIRTUAL] Showing tasks %d-%d of %d total\n", startIndex, endIndex-1, len(tasks))
-
-		// Add scroll indicators if needed
-		if startIndex > 0 {
-			scrollIndicator := m.styles.Task.Copy().
-				Foreground(lipgloss.Color("#6B7280")).
-				Italic(true).
-				Render("▲ (" + fmt.Sprintf("%d more above", startIndex) + ")")
-			content = append(content, scrollIndicator)
-		}
-
-		// Render visible tasks
-		for i := startIndex; i < endIndex; i++ {
-			if i < len(tasks) {
-				taskView := m.renderTask(tasks[i], i == selectedIndex && col == m.focused)
-				content = append(content, taskView)
-			}
-		}
-
-		// Add bottom scroll indicator if needed
-		if endIndex < len(tasks) {
-			remaining := len(tasks) - endIndex
-			scrollIndicator := m.styles.Task.Copy().
-				Foreground(lipgloss.Color("#6B7280")).
-				Italic(true).
-				Render("▼ (" + fmt.Sprintf("%d more below", remaining) + ")")
-			content = append(content, scrollIndicator)
-		}
-	}
-
-	// Column styling
-	columnContent := strings.Join(content, "\n")
-
-	// Highlight focused column
-	columnStyle := m.styles.Column
-	if col == m.focused {
-		columnStyle = columnStyle.Copy().
-			BorderForeground(lipgloss.Color("#7C3AED")).
-			BorderStyle(lipgloss.ThickBorder())
-	}
-
-	return columnStyle.Render(columnContent)
-}
-
-// renderTask renders a single task
-func (m Model) renderTask(t *task.Task, selected bool) string {
-	// Priority indicator
-	priority := m.styles.PriorityIndicator(t.Priority)
-
-	// Dynamic task title truncation based on column width
-	columnWidth := m.calculateColumnWidth()
-	// Account for padding, border, priority indicator, and some breathing room
-	maxTitleLength := columnWidth - 10
-	if maxTitleLength < 15 {
-		maxTitleLength = 15 // Minimum readable length
-	}
-
-	title := t.Title
-	if len(title) > maxTitleLength {
-		title = title[:maxTitleLength-3] + "..."
-	}
-
-	// Task content
-	taskContent := fmt.Sprintf("%s %s", priority, title)
-
-	// Apply styling
-	style := m.styles.Task
-	if selected {
-		style = m.styles.TaskSelected
-	} else {
-		// Use priority-based styling
-		if priorityStyle, exists := m.styles.TaskPriority[t.Priority]; exists {
-			style = priorityStyle
-		}
-	}
-
-	return style.Render(taskContent)
-}
 
 // renderStatusBar renders the bottom status/help bar
 // renderHelpView renders the help screen

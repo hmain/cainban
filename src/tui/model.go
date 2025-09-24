@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -400,49 +401,4 @@ func (m Model) getMaxVisibleTasks() int {
 
 	debugLog("[VIRTUAL] Column height: %d, available for tasks: %d\n", columnHeight, availableLines)
 	return availableLines
-}
-
-// calculateTaskWindow determines which tasks should be visible based on selection
-func (m Model) calculateTaskWindow(totalTasks, selectedIndex, maxVisible int) (startIndex, endIndex int) {
-	if totalTasks <= maxVisible {
-		// All tasks fit in the window
-		debugLog("[VIRTUAL] All tasks fit: showing 0-%d\n", totalTasks-1)
-		return 0, totalTasks
-	}
-
-	// FIXED: For the first quarter of the window, always start from the top
-	// This ensures initial positioning starts at the top
-	quarterWindow := maxVisible / 4
-	if selectedIndex < quarterWindow {
-		startIndex = 0
-		debugLog("[VIRTUAL] Near start (selected=%d < quarter=%d): forcing start=0\n", selectedIndex, quarterWindow)
-	} else {
-		// Try to center the selected task in the visible window
-		halfWindow := maxVisible / 2
-		startIndex = selectedIndex - halfWindow
-		debugLog("[VIRTUAL] Centering: selected=%d, halfWindow=%d, calculated start=%d\n", selectedIndex, halfWindow, startIndex)
-	}
-
-	// Adjust if we're at the beginning
-	if startIndex < 0 {
-		startIndex = 0
-		debugLog("[VIRTUAL] Corrected negative start to 0\n")
-	}
-
-	endIndex = startIndex + maxVisible
-
-	// Adjust if we're at the end
-	if endIndex > totalTasks {
-		endIndex = totalTasks
-		startIndex = endIndex - maxVisible
-		if startIndex < 0 {
-			startIndex = 0
-		}
-		debugLog("[VIRTUAL] Adjusted for end: endIndex=%d, newStart=%d\n", endIndex, startIndex)
-	}
-
-	debugLog("[VIRTUAL] Final window: selected=%d, start=%d, end=%d (total=%d, maxVisible=%d)\n",
-		selectedIndex, startIndex, endIndex, totalTasks, maxVisible)
-
-	return startIndex, endIndex
 }

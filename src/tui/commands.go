@@ -75,5 +75,3 @@ func (m Model) deleteTask(taskID int) tea.Cmd {
 		return m.refreshTasks()()
 	}
 }
-
-

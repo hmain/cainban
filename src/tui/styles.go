@@ -61,7 +61,7 @@ func DefaultStylesWithDimensions(columnWidth, columnHeight int) Styles {
 		BorderForeground(border).
 		Background(surface)
 
-	taskSelected := taskBase.Copy().
+	taskSelected := taskBase.
 		BorderForeground(primary).
 		Background(lipgloss.Color("#312E81"))
 
@@ -78,11 +78,11 @@ func DefaultStylesWithDimensions(columnWidth, columnHeight int) Styles {
 
 	// Priority styles
 	priorityStyles := map[int]lipgloss.Style{
-		task.PriorityNone:     taskBase.Copy().BorderForeground(muted),
-		task.PriorityLow:      taskBase.Copy().BorderForeground(lipgloss.Color("#059669")),
-		task.PriorityMedium:   taskBase.Copy().BorderForeground(warning),
-		task.PriorityHigh:     taskBase.Copy().BorderForeground(lipgloss.Color("#DC2626")),
-		task.PriorityCritical: taskBase.Copy().BorderForeground(danger).Bold(true),
+		task.PriorityNone:     taskBase.BorderForeground(muted),
+		task.PriorityLow:      taskBase.BorderForeground(lipgloss.Color("#059669")),
+		task.PriorityMedium:   taskBase.BorderForeground(warning),
+		task.PriorityHigh:     taskBase.BorderForeground(lipgloss.Color("#DC2626")),
+		task.PriorityCritical: taskBase.BorderForeground(danger).Bold(true),
 	}
 
 	return Styles{
