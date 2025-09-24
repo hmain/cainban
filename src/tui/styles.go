@@ -14,20 +14,20 @@ func DefaultStyles() Styles {
 func DefaultStylesWithDimensions(columnWidth, columnHeight int) Styles {
 	// Color palette
 	var (
-		primary    = lipgloss.Color("#7C3AED")  // Purple
-		secondary  = lipgloss.Color("#3B82F6")  // Blue
-		warning    = lipgloss.Color("#F59E0B")  // Yellow
-		danger     = lipgloss.Color("#EF4444")  // Red
-		muted      = lipgloss.Color("#6B7280")  // Gray
-		background = lipgloss.Color("#1F2937")  // Dark gray
-		surface    = lipgloss.Color("#374151")  // Medium gray
-		border     = lipgloss.Color("#4B5563")  // Light gray
+		primary    = lipgloss.Color("#7C3AED") // Purple
+		secondary  = lipgloss.Color("#3B82F6") // Blue
+		warning    = lipgloss.Color("#F59E0B") // Yellow
+		danger     = lipgloss.Color("#EF4444") // Red
+		muted      = lipgloss.Color("#6B7280") // Gray
+		background = lipgloss.Color("#1F2937") // Dark gray
+		surface    = lipgloss.Color("#374151") // Medium gray
+		border     = lipgloss.Color("#4B5563") // Light gray
 	)
 
 	base := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#F9FAFB")).
 		Background(background).
-		Align(lipgloss.Left). // Horizontal alignment
+		Align(lipgloss.Left).       // Horizontal alignment
 		AlignVertical(lipgloss.Top) // Vertical alignment - start at top
 
 	header := lipgloss.NewStyle().
@@ -44,7 +44,7 @@ func DefaultStylesWithDimensions(columnWidth, columnHeight int) Styles {
 		Margin(0, 1).  // Small margin between columns
 		Width(columnWidth).
 		Height(columnHeight).
-		Align(lipgloss.Left). // Horizontal alignment
+		Align(lipgloss.Left).       // Horizontal alignment
 		AlignVertical(lipgloss.Top) // Vertical alignment - start content at top
 
 	columnTitle := lipgloss.NewStyle().
@@ -107,7 +107,7 @@ func (s Styles) PriorityIndicator(priority int) string {
 		task.PriorityHigh:     "●●●",
 		task.PriorityCritical: "🔥",
 	}
-	
+
 	colors := map[int]lipgloss.Color{
 		task.PriorityNone:     lipgloss.Color("#6B7280"),
 		task.PriorityLow:      lipgloss.Color("#059669"),
@@ -115,10 +115,10 @@ func (s Styles) PriorityIndicator(priority int) string {
 		task.PriorityHigh:     lipgloss.Color("#DC2626"),
 		task.PriorityCritical: lipgloss.Color("#EF4444"),
 	}
-	
+
 	indicator := indicators[priority]
 	color := colors[priority]
-	
+
 	return lipgloss.NewStyle().Foreground(color).Render(indicator)
 }
 
@@ -126,11 +126,11 @@ func (s Styles) PriorityIndicator(priority int) string {
 func StatusColor(status task.Status) lipgloss.Color {
 	switch status {
 	case task.StatusTodo:
-		return lipgloss.Color("#6B7280")  // Gray
+		return lipgloss.Color("#6B7280") // Gray
 	case task.StatusDoing:
-		return lipgloss.Color("#3B82F6")  // Blue
+		return lipgloss.Color("#3B82F6") // Blue
 	case task.StatusDone:
-		return lipgloss.Color("#10B981")  // Green
+		return lipgloss.Color("#10B981") // Green
 	default:
 		return lipgloss.Color("#6B7280")
 	}

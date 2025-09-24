@@ -1,9 +1,9 @@
 package tui
 
 import (
-	"time"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/hmain/cainban/src/systems/task"
+	"time"
 )
 
 // Update handles all TUI state updates based on messages
@@ -12,41 +12,41 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		// DEBUG: Log window resize events
 		debugLog("[DEBUG] WindowSizeMsg: %dx%d\n", msg.Width, msg.Height)
-		
+
 		oldWidth, oldHeight := m.width, m.height
 		oldColumnWidth := m.calculateColumnWidth()
-		
+
 		// Update dimensions
 		m.width = msg.Width
 		m.height = msg.Height
-		
+
 		// DEBUG: Log dimension changes
 		debugLog("[DEBUG] Dimensions changed: %dx%d -> %dx%d\n", oldWidth, oldHeight, m.width, m.height)
-		
+
 		// Recalculate styles when window is resized - CRITICAL FIX
 		m = m.updateStyles()
 		newColumnWidth := m.calculateColumnWidth()
-		
+
 		// DEBUG: Log column width calculation
 		debugLog("[DEBUG] Column width: %d -> %d\n", oldColumnWidth, newColumnWidth)
-		
+
 		// Force a re-render by returning a command that does nothing
 		// This ensures the UI is updated with new dimensions
 		return m, tea.Tick(1, func(_ time.Time) tea.Msg { return nil })
-		
+
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
-		
+
 	case TasksRefreshedMsg:
 		m.tasks = msg.Tasks
 		// Update viewport content when tasks change
 		m.updateViewportContent()
 		return m, nil
-		
+
 	case ErrorMsg:
 		// Handle errors (could show in status bar)
 		return m, nil
-		
+
 	case string:
 		if msg == "init_viewports" {
 			// Initialize viewport content
@@ -54,7 +54,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	
+
 	return m, nil
 }
 
@@ -68,7 +68,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ViewTaskDetail:
 		return m.handleTaskDetailKeys(msg)
 	}
-	
+
 	return m, nil
 }
 
@@ -76,31 +76,31 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
-	
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-		
+
 	case "?":
 		m.currentView = ViewHelp
 		return m, nil
-		
+
 	case "r":
 		return m, m.refreshTasks()
-		
+
 	// Navigation
 	case "h", "left":
 		if m.focused > ColumnTodo {
 			m.focused--
 		}
 		return m, nil
-		
+
 	case "l", "right":
 		if m.focused < ColumnDone {
 			m.focused++
 		}
 		return m, nil
-		
+
 	case "j", "down":
 		m.moveSelectionDown()
 		// Also update the focused viewport to handle scrolling
@@ -109,7 +109,7 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewports[m.focused] = vp
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
-		
+
 	case "k", "up":
 		m.moveSelectionUp()
 		// Also update the focused viewport to handle scrolling
@@ -118,22 +118,22 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewports[m.focused] = vp
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
-		
+
 	// Task actions
 	case "enter":
 		return m.handleTaskAction()
-		
+
 	case "n":
 		// TODO: Open new task dialog
 		return m, nil
-		
+
 	case "d":
 		return m.handleDeleteTask()
-		
+
 	case "e":
 		// TODO: Edit task
 		return m, nil
-		
+
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:
 		vp := m.viewports[m.focused]
@@ -150,7 +150,7 @@ func (m Model) handleHelpKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewKanban
 		return m, nil
 	}
-	
+
 	return m, nil
 }
 
@@ -161,7 +161,7 @@ func (m Model) handleTaskDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewKanban
 		return m, nil
 	}
-	
+
 	return m, nil
 }
 
@@ -169,7 +169,7 @@ func (m Model) handleTaskDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) moveSelectionDown() {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) > 0 {
 		current := m.selectedTask[m.focused]
 		if current < len(tasks)-1 {
@@ -194,19 +194,19 @@ func (m *Model) moveSelectionUp() {
 func (m Model) handleTaskAction() (tea.Model, tea.Cmd) {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) == 0 {
 		return m, nil
 	}
-	
+
 	selectedIndex := m.selectedTask[m.focused]
 	if selectedIndex >= len(tasks) {
 		return m, nil
 	}
-	
+
 	selectedTask := tasks[selectedIndex]
 	var newStatus task.Status
-	
+
 	switch currentStatus {
 	case task.StatusTodo:
 		newStatus = task.StatusDoing
@@ -216,7 +216,7 @@ func (m Model) handleTaskAction() (tea.Model, tea.Cmd) {
 		// Already done, maybe show task details instead
 		return m, nil
 	}
-	
+
 	return m, m.moveTask(selectedTask.ID, newStatus)
 }
 
@@ -224,18 +224,16 @@ func (m Model) handleTaskAction() (tea.Model, tea.Cmd) {
 func (m Model) handleDeleteTask() (tea.Model, tea.Cmd) {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) == 0 {
 		return m, nil
 	}
-	
+
 	selectedIndex := m.selectedTask[m.focused]
 	if selectedIndex >= len(tasks) {
 		return m, nil
 	}
-	
+
 	selectedTask := tasks[selectedIndex]
 	return m, m.deleteTask(selectedTask.ID)
 }
-
-

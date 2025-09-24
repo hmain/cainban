@@ -134,8 +134,8 @@ type TaskLink struct {
 
 // Task represents a kanban task
 type Task struct {
-	ID          int        `json:"id"`           // Internal global ID
-	BoardID     int        `json:"board_id"`     // Board this task belongs to
+	ID          int        `json:"id"`            // Internal global ID
+	BoardID     int        `json:"board_id"`      // Board this task belongs to
 	BoardTaskID int        `json:"board_task_id"` // Board-scoped task ID (1, 2, 3, etc.)
 	Title       string     `json:"title"`
 	Description string     `json:"description"`

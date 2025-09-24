@@ -6,10 +6,10 @@ import (
 
 func TestCalculateColumnWidth(t *testing.T) {
 	tests := []struct {
-		name           string
-		terminalWidth  int
-		expectedWidth  int
-		description    string
+		name          string
+		terminalWidth int
+		expectedWidth int
+		description   string
 	}{
 		{
 			name:          "Small terminal",
@@ -49,11 +49,11 @@ func TestCalculateColumnWidth(t *testing.T) {
 
 			// Allow some flexibility in the exact calculation
 			if result < 20 || result > 60 {
-				t.Errorf("calculateColumnWidth() = %d, expected reasonable range 20-60 for width %d", 
+				t.Errorf("calculateColumnWidth() = %d, expected reasonable range 20-60 for width %d",
 					result, tt.terminalWidth)
 			}
 
-			t.Logf("Terminal width %d -> Column width %d (%s)", 
+			t.Logf("Terminal width %d -> Column width %d (%s)",
 				tt.terminalWidth, result, tt.description)
 		})
 	}
@@ -79,7 +79,7 @@ func TestCalculateColumnHeight(t *testing.T) {
 			description:    "Standard terminal should have reasonable height",
 		},
 		{
-			name:           "Large terminal", 
+			name:           "Large terminal",
 			terminalHeight: 50,
 			expectedMin:    40, // 50-6 reserved = 44, should be around that
 			description:    "Large terminal should use available space",
@@ -96,11 +96,11 @@ func TestCalculateColumnHeight(t *testing.T) {
 			result := model.calculateColumnHeight()
 
 			if result < tt.expectedMin {
-				t.Errorf("calculateColumnHeight() = %d, expected >= %d for height %d", 
+				t.Errorf("calculateColumnHeight() = %d, expected >= %d for height %d",
 					result, tt.expectedMin, tt.terminalHeight)
 			}
 
-			t.Logf("Terminal height %d -> Column height %d (%s)", 
+			t.Logf("Terminal height %d -> Column height %d (%s)",
 				tt.terminalHeight, result, tt.description)
 		})
 	}

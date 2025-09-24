@@ -24,28 +24,28 @@ func (m Model) refreshTasks() tea.Cmd {
 	return func() tea.Msg {
 		// Get current board ID (assuming board ID 1 for now)
 		boardID := 1 // TODO: Get actual board ID from board system
-		
+
 		// Load tasks by status
 		tasks := make(map[task.Status][]*task.Task)
-		
+
 		// Load todo tasks
 		todoTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusTodo)
 		if err == nil {
 			tasks[task.StatusTodo] = todoTasks
 		}
-		
-		// Load doing tasks  
+
+		// Load doing tasks
 		doingTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusDoing)
 		if err == nil {
 			tasks[task.StatusDoing] = doingTasks
 		}
-		
+
 		// Load done tasks
-		doneTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusDone) 
+		doneTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusDone)
 		if err == nil {
 			tasks[task.StatusDone] = doneTasks
 		}
-		
+
 		return TasksRefreshedMsg{Tasks: tasks}
 	}
 }
@@ -57,7 +57,7 @@ func (m Model) moveTask(taskID int, newStatus task.Status) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Refresh tasks after move
 		return m.refreshTasks()()
 	}
@@ -70,24 +70,10 @@ func (m Model) deleteTask(taskID int) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Refresh tasks after deletion
 		return m.refreshTasks()()
 	}
 }
 
-// createTask creates a new task
-func (m Model) createTask(title, description string) tea.Cmd {
-	return func() tea.Msg {
-		// Get current board ID (assuming board ID 1 for now)
-		boardID := 1 // TODO: Get actual board ID from board system
-		
-		_, err := m.taskSystem.Create(boardID, title, description)
-		if err != nil {
-			return ErrorMsg{Err: err}
-		}
-		
-		// Refresh tasks after creation
-		return m.refreshTasks()()
-	}
-}
+
