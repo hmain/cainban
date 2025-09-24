@@ -3,14 +3,15 @@ package tui
 import (
 	"fmt"
 
+	"os"
+	"strings"
+
 	"github.com/charmbracelet/bubbles/viewport"
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hmain/cainban/src/systems/board"
 	"github.com/hmain/cainban/src/systems/storage"
 	"github.com/hmain/cainban/src/systems/task"
-	"os"
-	"strings"
 )
 
 // debugEnabled checks if debug logging is enabled via environment variable

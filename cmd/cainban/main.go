@@ -19,7 +19,7 @@ const (
 	VersionMajor  = "0"
 	VersionMinor  = "3"
 	VersionPatch  = "0"
-	VersionDev    = "0"                    // Reset for release
+	VersionDev    = "0"                           // Reset for release
 	VersionSuffix = "Lint fixes and improvements" // Description of this release
 )
 
