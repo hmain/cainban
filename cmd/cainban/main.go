@@ -17,10 +17,10 @@ import (
 // Version information
 const (
 	VersionMajor  = "0"
-	VersionMinor  = "2"
-	VersionPatch  = "1"
-	VersionDev    = "11"                   // Increment for each dev build
-	VersionSuffix = "JSON-only MCP Output" // Description of this dev build
+	VersionMinor  = "3"
+	VersionPatch  = "0"
+	VersionDev    = "0"                    // Reset for release
+	VersionSuffix = "Lint fixes and improvements" // Description of this release
 )
 
 func main() {

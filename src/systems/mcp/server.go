@@ -26,7 +26,7 @@ func New(taskSystem *task.System) *Server {
 	// Create MCP server with cainban implementation info
 	server.mcpServer = mcp.NewServer(&mcp.Implementation{
 		Name:    "cainban",
-		Version: "0.2.1",
+		Version: "0.3.0",
 	}, nil)
 
 	// Register all tools
