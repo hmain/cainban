@@ -2,6 +2,8 @@ package tui
 
 import (
 	"testing"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/hmain/cainban/src/systems/storage"
 )
 
 func TestCalculateColumnWidth(t *testing.T) {
@@ -103,5 +105,106 @@ func TestCalculateColumnHeight(t *testing.T) {
 			t.Logf("Terminal height %d -> Column height %d (%s)", 
 				tt.terminalHeight, result, tt.description)
 		})
+	}
+}
+
+// setupTestModel creates a test model with in-memory database
+func setupTestModel(t *testing.T) Model {
+	db, err := storage.NewMemory()
+	if err != nil {
+		t.Fatalf("Failed to create test database: %v", err)
+	}
+	
+	model := NewModel(db)
+	model.width = 120
+	model.height = 24
+	*model = model.updateStyles()
+	
+	return *model
+}
+
+func TestKeyNavigation(t *testing.T) {
+	tests := []struct {
+		name          string
+		key           string
+		initialColumn Column
+		expectedColumn Column
+	}{
+		{"Move right from TODO", "l", ColumnTodo, ColumnDoing},
+		{"Move right from DOING", "right", ColumnDoing, ColumnDone},
+		{"Move left from DONE", "h", ColumnDone, ColumnDoing},
+		{"Move left from DOING", "left", ColumnDoing, ColumnTodo},
+		{"Stay at TODO when moving left", "h", ColumnTodo, ColumnTodo},
+		{"Stay at DONE when moving right", "l", ColumnDone, ColumnDone},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := setupTestModel(t)
+			m.focused = tt.initialColumn
+
+			msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.key)}
+			if tt.key == "left" {
+				msg = tea.KeyMsg{Type: tea.KeyLeft}
+			} else if tt.key == "right" {
+				msg = tea.KeyMsg{Type: tea.KeyRight}
+			}
+
+			updatedModel, _ := m.Update(msg)
+			m, ok := updatedModel.(Model)
+			if !ok {
+				t.Fatal("Update did not return Model type")
+			}
+
+			if m.focused != tt.expectedColumn {
+				t.Errorf("Expected column %d, got %d", tt.expectedColumn, m.focused)
+			}
+		})
+	}
+}
+
+func TestQuitKeys(t *testing.T) {
+	tests := []struct {
+		name string
+		key  tea.KeyMsg
+	}{
+		{"Quit with q", tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}},
+		{"Quit with ctrl+c", tea.KeyMsg{Type: tea.KeyCtrlC}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := setupTestModel(t)
+			_, cmd := m.Update(tt.key)
+
+			if cmd == nil {
+				t.Error("Expected quit command, got nil")
+			}
+		})
+	}
+}
+
+func TestWindowResize(t *testing.T) {
+	m := setupTestModel(t)
+	
+	// Send window resize message
+	msg := tea.WindowSizeMsg{Width: 160, Height: 40}
+	updatedModel, _ := m.Update(msg)
+	m, ok := updatedModel.(Model)
+	if !ok {
+		t.Fatal("Update did not return Model type")
+	}
+
+	if m.width != 160 {
+		t.Errorf("Expected width 160, got %d", m.width)
+	}
+	if m.height != 40 {
+		t.Errorf("Expected height 40, got %d", m.height)
+	}
+
+	// Verify column width was recalculated
+	columnWidth := m.calculateColumnWidth()
+	if columnWidth < 20 || columnWidth > 90 {
+		t.Errorf("Column width %d out of reasonable range after resize", columnWidth)
 	}
 }

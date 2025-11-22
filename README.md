@@ -330,6 +330,9 @@ go run cmd/cainban/main.go init
 ```
 
 ### Testing
+
+cainban includes comprehensive tests for all systems including TUI interactions:
+
 ```bash
 # Run all tests
 go test ./...
@@ -341,8 +344,20 @@ go test -cover ./...
 go test -race ./...
 
 # Run specific system tests
-go test ./src/systems/board/...
+go test ./src/systems/task/...
+go test ./src/tui/...
+
+# Verbose output
+go test -v ./src/tui/
 ```
+
+**Test Coverage:**
+- **TUI Tests**: Key navigation, window resizing, quit commands
+- **Task System**: CRUD operations, status updates, priority management
+- **Storage**: Database operations, migrations
+- **MCP Server**: Tool registration and execution
+
+All tests use in-memory databases for fast, isolated testing.
 
 ### Code Quality
 
