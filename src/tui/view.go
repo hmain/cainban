@@ -34,8 +34,8 @@ func (m Model) renderKanbanView() string {
 	// Render columns using viewports
 	columns := m.renderViewportColumns()
 	
-	// Simple status bar  
-	statusBar := "h/l: columns • j/k: navigate • PgUp/PgDn: scroll • enter: move • q: quit"
+	// Simple status bar with all commands
+	statusBar := "n: new • h/l: columns • j/k: navigate • shift+←/→: move task • enter: next status • q: quit"
 	
 	// Simple layout - no complex styling for now
 	content := header + "\n\n" + columns + "\n\n" + statusBar
@@ -340,10 +340,13 @@ func (m Model) renderTaskDetailView() string {
 func (m Model) renderTaskCreateView() string {
 	var b strings.Builder
 	
+	priorityNames := []string{"none", "low", "medium", "high", "critical"}
+	
 	b.WriteString("\n  Create New Task\n\n")
 	b.WriteString("  " + m.titleInput.View() + "\n\n")
 	b.WriteString("  " + m.descriptionInput.View() + "\n\n")
-	b.WriteString("  Tab: Switch fields | Enter: Create | Esc: Cancel\n")
+	b.WriteString(fmt.Sprintf("  Priority: %s\n\n", priorityNames[m.selectedPriority]))
+	b.WriteString("  Tab: Switch fields | P: Change priority | Enter: Create | Esc: Cancel\n")
 	
 	return b.String()
 }

@@ -59,6 +59,7 @@ type Model struct {
 	titleInput       textinput.Model
 	descriptionInput textinput.Model
 	formFocusIndex   int
+	selectedPriority int // 0=none, 1=low, 2=medium, 3=high, 4=critical
 }
 
 // View represents different TUI views
@@ -143,6 +144,7 @@ func NewModel(db *storage.DB) *Model {
 		titleInput:       titleInput,
 		descriptionInput: descriptionInput,
 		formFocusIndex:   0,
+		selectedPriority: 0,
 	}
 	
 	return model

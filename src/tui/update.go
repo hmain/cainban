@@ -189,6 +189,12 @@ func (m Model) handleTaskCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewKanban
 		m.titleInput.SetValue("")
 		m.descriptionInput.SetValue("")
+		m.selectedPriority = 0
+		return m, nil
+		
+	case "p":
+		// Cycle through priority levels
+		m.selectedPriority = (m.selectedPriority + 1) % 5
 		return m, nil
 		
 	case "tab", "shift+tab":
@@ -217,8 +223,10 @@ func (m Model) handleTaskCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewKanban
 		m.titleInput.SetValue("")
 		m.descriptionInput.SetValue("")
+		priority := m.selectedPriority
+		m.selectedPriority = 0
 		
-		return m, m.createTask(title, description)
+		return m, m.createTaskWithPriority(title, description, priority)
 	}
 	
 	// Update the focused input

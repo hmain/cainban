@@ -78,13 +78,26 @@ func (m Model) deleteTask(taskID int) tea.Cmd {
 
 // createTask creates a new task
 func (m Model) createTask(title, description string) tea.Cmd {
+	return m.createTaskWithPriority(title, description, 0)
+}
+
+// createTaskWithPriority creates a new task with specified priority
+func (m Model) createTaskWithPriority(title, description string, priority int) tea.Cmd {
 	return func() tea.Msg {
 		// Get current board ID (assuming board ID 1 for now)
 		boardID := 1 // TODO: Get actual board ID from board system
 		
-		_, err := m.taskSystem.Create(boardID, title, description)
+		t, err := m.taskSystem.Create(boardID, title, description)
 		if err != nil {
 			return ErrorMsg{Err: err}
+		}
+		
+		// Set priority if specified
+		if priority > 0 {
+			err = m.taskSystem.UpdatePriority(t.ID, priority)
+			if err != nil {
+				return ErrorMsg{Err: err}
+			}
 		}
 		
 		// Refresh tasks after creation
