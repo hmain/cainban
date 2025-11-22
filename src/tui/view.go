@@ -42,10 +42,17 @@ func (m Model) renderKanbanView() string {
 	debugLog("[RENDER] Starting viewport-based renderKanbanView, terminal size: %dx%d\n", m.width, m.height)
 	
 	// Header with board name and search indicator
-	header := fmt.Sprintf("📋 Cainban - Board: %s", m.currentBoard)
+	headerText := fmt.Sprintf("📋 Cainban - Board: %s", m.currentBoard)
 	if m.searchQuery != "" {
-		header += fmt.Sprintf(" | 🔍 Search: '%s'", m.searchQuery)
+		headerText += fmt.Sprintf(" | 🔍 Search: '%s'", m.searchQuery)
 	}
+	
+	// Style the header to make it stand out
+	headerStyle := lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("#7C3AED")).
+		Padding(0, 1)
+	header := headerStyle.Render(headerText)
 	
 	// Render columns using viewports
 	columns := m.renderViewportColumns()
