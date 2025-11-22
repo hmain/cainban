@@ -37,14 +37,22 @@ func (m Model) renderKanbanView() string {
 	// Simple header
 	header := fmt.Sprintf("Cainban - %s", m.currentBoard)
 	
+	// Search bar
+	var searchBar string
+	if m.searchActive {
+		searchBar = "\n  " + m.searchInput.View() + "\n"
+	} else if m.searchQuery != "" {
+		searchBar = fmt.Sprintf("\n  Search: %s (press / to change, esc to clear)\n", m.searchQuery)
+	}
+	
 	// Render columns using viewports
 	columns := m.renderViewportColumns()
 	
 	// Simple status bar with all commands
-	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • b: boards • ?: help • q: quit"
+	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • /: search • b: boards • ?: help • q: quit"
 	
 	// Simple layout - no complex styling for now
-	content := header + "\n\n" + columns + "\n\n" + statusBar
+	content := header + searchBar + "\n" + columns + "\n\n" + statusBar
 	
 	debugLog("[RENDER] Viewport-based rendering complete\n")
 	
@@ -75,7 +83,22 @@ func (m Model) renderViewportColumns() string {
 func (m Model) renderViewportColumn(col Column, title string) string {
 	status := m.columnToStatus(col)
 	tasks := m.tasks[status]
-	titleWithCount := fmt.Sprintf("%s (%d)", title, len(tasks))
+	
+	// Filter tasks by search query
+	var filteredTasks []*task.Task
+	if m.searchQuery != "" {
+		query := strings.ToLower(m.searchQuery)
+		for _, t := range tasks {
+			if strings.Contains(strings.ToLower(t.Title), query) ||
+			   strings.Contains(strings.ToLower(t.Description), query) {
+				filteredTasks = append(filteredTasks, t)
+			}
+		}
+	} else {
+		filteredTasks = tasks
+	}
+	
+	titleWithCount := fmt.Sprintf("%s (%d)", title, len(filteredTasks))
 	
 	// Simple column style
 	columnStyle := lipgloss.NewStyle().
@@ -97,9 +120,9 @@ func (m Model) renderViewportColumn(col Column, title string) string {
 	
 	// Add scroll indicator if there are more tasks than fit in viewport
 	scrollInfo := ""
-	if len(tasks) > 0 {
+	if len(filteredTasks) > 0 {
 		selectedIndex := m.selectedTask[col] + 1 // 1-indexed for display
-		totalTasks := len(tasks)
+		totalTasks := len(filteredTasks)
 		
 		if totalTasks > vp.Height {
 			// Show scroll position when there's overflow
@@ -117,121 +140,7 @@ func (m Model) renderViewportColumn(col Column, title string) string {
 	return columnStyle.Render(content)
 }
 
-// renderColumns renders the three kanban columns side by side
-func (m Model) renderColumns() string {
-	debugLog("[COLUMNS] Starting renderColumns\n")
-	
-	todoColumn := m.renderColumn(ColumnTodo, "📝 Todo", task.StatusTodo)
-	todoLines := strings.Count(todoColumn, "\n") + 1
-	debugLog("[COLUMNS] Todo column: %d lines\n", todoLines)
-	
-	doingColumn := m.renderColumn(ColumnDoing, "🔄 Doing", task.StatusDoing)  
-	doingLines := strings.Count(doingColumn, "\n") + 1
-	debugLog("[COLUMNS] Doing column: %d lines\n", doingLines)
-	
-	doneColumn := m.renderColumn(ColumnDone, "✅ Done", task.StatusDone)
-	doneLines := strings.Count(doneColumn, "\n") + 1
-	debugLog("[COLUMNS] Done column: %d lines\n", doneLines)
-	
-	// FIX: Explicit top alignment for proper column positioning  
-	columnsLayout := lipgloss.JoinHorizontal(
-		lipgloss.Top, // CHANGED: Top alignment to start columns at top
-		todoColumn,
-		doingColumn, 
-		doneColumn,
-	)
-	
-	joinedLines := strings.Count(columnsLayout, "\n") + 1
-	debugLog("[COLUMNS] After JoinHorizontal: %d lines\n", joinedLines)
-	
-	// Force full width usage to prevent centering
-	if m.width > 0 {
-		debugLog("[COLUMNS] Applying full width style (%d)\n", m.width)
-		columnsLayout = lipgloss.NewStyle().
-			Width(m.width).
-			Align(lipgloss.Left).
-			Render(columnsLayout)
-		
-		finalLines := strings.Count(columnsLayout, "\n") + 1
-		debugLog("[COLUMNS] After width styling: %d lines\n", finalLines)
-	}
-	
-	return columnsLayout
-}
 
-// renderColumn renders a single kanban column with virtual scrolling
-func (m Model) renderColumn(col Column, title string, status task.Status) string {
-	var content []string
-	
-	// Column title with task count
-	tasks := m.tasks[status]
-	titleWithCount := fmt.Sprintf("%s (%d)", title, len(tasks))
-	
-	columnTitle := m.styles.ColumnTitle.Render(titleWithCount)
-	content = append(content, columnTitle)
-	
-	// Calculate visible task window
-	maxVisibleTasks := m.getMaxVisibleTasks()
-	selectedIndex := m.selectedTask[col]
-	
-	debugLog("[VIRTUAL] Column %d: %d tasks, selected: %d, maxVisible: %d\n", col, len(tasks), selectedIndex, maxVisibleTasks)
-	debugLog("[VIRTUAL] selectedTask map contents: Todo=%d, Doing=%d, Done=%d\n", 
-		m.selectedTask[ColumnTodo], m.selectedTask[ColumnDoing], m.selectedTask[ColumnDone])
-	
-	// Tasks with virtual scrolling
-	if len(tasks) == 0 {
-		emptyMsg := m.styles.Task.Copy().
-			Foreground(lipgloss.Color("#6B7280")).
-			Italic(true).
-			Render("No tasks")
-		content = append(content, emptyMsg)
-	} else {
-		// Calculate the visible task window
-		startIndex, endIndex := m.calculateTaskWindow(len(tasks), selectedIndex, maxVisibleTasks)
-		
-		debugLog("[VIRTUAL] Showing tasks %d-%d of %d total\n", startIndex, endIndex-1, len(tasks))
-		
-		// Add scroll indicators if needed
-		if startIndex > 0 {
-			scrollIndicator := m.styles.Task.Copy().
-				Foreground(lipgloss.Color("#6B7280")).
-				Italic(true).
-				Render("▲ (" + fmt.Sprintf("%d more above", startIndex) + ")")
-			content = append(content, scrollIndicator)
-		}
-		
-		// Render visible tasks
-		for i := startIndex; i < endIndex; i++ {
-			if i < len(tasks) {
-				taskView := m.renderTask(tasks[i], i == selectedIndex && col == m.focused)
-				content = append(content, taskView)
-			}
-		}
-		
-		// Add bottom scroll indicator if needed
-		if endIndex < len(tasks) {
-			remaining := len(tasks) - endIndex
-			scrollIndicator := m.styles.Task.Copy().
-				Foreground(lipgloss.Color("#6B7280")).
-				Italic(true).
-				Render("▼ (" + fmt.Sprintf("%d more below", remaining) + ")")
-			content = append(content, scrollIndicator)
-		}
-	}
-	
-	// Column styling
-	columnContent := strings.Join(content, "\n")
-	
-	// Highlight focused column
-	columnStyle := m.styles.Column
-	if col == m.focused {
-		columnStyle = columnStyle.Copy().
-			BorderForeground(lipgloss.Color("#7C3AED")).
-			BorderStyle(lipgloss.ThickBorder())
-	}
-	
-	return columnStyle.Render(columnContent)
-}
 
 // renderTask renders a single task
 func (m Model) renderTask(t *task.Task, selected bool) string {

@@ -75,6 +75,11 @@ type Model struct {
 	// Board selector
 	availableBoards []string
 	selectedBoardIndex int
+	
+	// Search
+	searchInput textinput.Model
+	searchActive bool
+	searchQuery string
 }
 
 // View represents different TUI views
@@ -146,6 +151,11 @@ func NewModel(db *storage.DB) *Model {
 	descriptionInput.CharLimit = 500
 	descriptionInput.Width = 50
 
+	searchInput := textinput.New()
+	searchInput.Placeholder = "Search tasks..."
+	searchInput.CharLimit = 100
+	searchInput.Width = 40
+
 	model := &Model{
 		taskSystem:   taskSystem,
 		boardSystem:  boardSystem,
@@ -163,6 +173,8 @@ func NewModel(db *storage.DB) *Model {
 		descriptionInput: descriptionInput,
 		formFocusIndex:   0,
 		selectedPriority: 0,
+		searchInput:      searchInput,
+		searchActive:     false,
 	}
 	
 	return model

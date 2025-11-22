@@ -104,6 +104,26 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
 	
+	// Handle search input if active
+	if m.searchActive {
+		switch msg.String() {
+		case "esc":
+			m.searchActive = false
+			m.searchInput.Blur()
+			m.searchInput.SetValue("")
+			m.searchQuery = ""
+			return m, nil
+		case "enter":
+			m.searchQuery = m.searchInput.Value()
+			m.searchActive = false
+			m.searchInput.Blur()
+			return m, nil
+		default:
+			m.searchInput, cmd = m.searchInput.Update(msg)
+			return m, cmd
+		}
+	}
+	
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
@@ -212,6 +232,12 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "b":
 		// Open board selector
 		return m, m.loadBoards()
+		
+	case "/":
+		// Activate search
+		m.searchActive = true
+		m.searchInput.Focus()
+		return m, nil
 		
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:
