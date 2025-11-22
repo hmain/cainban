@@ -54,9 +54,6 @@ func (m Model) renderKanbanView() string {
 		Padding(0, 1)
 	header := headerStyle.Render(headerText)
 	
-	// Add separator line
-	separator := strings.Repeat("─", 80)
-	
 	// Render columns using viewports
 	columns := m.renderViewportColumns()
 	
@@ -66,8 +63,8 @@ func (m Model) renderKanbanView() string {
 		statusBar = "esc: clear search • " + statusBar
 	}
 	
-	// Put header at bottom for testing
-	content := columns + "\n" + separator + "\n" + header + "\n" + statusBar
+	// Header at bottom for visibility
+	content := columns + "\n" + header + "\n" + statusBar
 	
 	debugLog("[RENDER] Viewport-based rendering complete\n")
 	
