@@ -104,6 +104,14 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 		
+	case "shift+left":
+		// Move task to previous column
+		return m.moveSelectedTaskToPreviousColumn()
+		
+	case "shift+right":
+		// Move task to next column
+		return m.moveSelectedTaskToNextColumn()
+		
 	case "j", "down":
 		m.moveSelectionDown()
 		// Also update the focused viewport to handle scrolling
@@ -294,6 +302,72 @@ func (m Model) handleDeleteTask() (tea.Model, tea.Cmd) {
 	
 	selectedTask := tasks[selectedIndex]
 	return m, m.deleteTask(selectedTask.ID)
+}
+
+// moveSelectedTaskToPreviousColumn moves the selected task to the previous column
+func (m Model) moveSelectedTaskToPreviousColumn() (tea.Model, tea.Cmd) {
+	if m.focused == ColumnTodo {
+		return m, nil // Already at first column
+	}
+	
+	currentStatus := m.columnToStatus(m.focused)
+	tasks := m.tasks[currentStatus]
+	
+	if len(tasks) == 0 {
+		return m, nil
+	}
+	
+	selectedIndex := m.selectedTask[m.focused]
+	if selectedIndex >= len(tasks) {
+		return m, nil
+	}
+	
+	selectedTask := tasks[selectedIndex]
+	var newStatus task.Status
+	
+	switch currentStatus {
+	case task.StatusDoing:
+		newStatus = task.StatusTodo
+	case task.StatusDone:
+		newStatus = task.StatusDoing
+	default:
+		return m, nil
+	}
+	
+	return m, m.moveTask(selectedTask.ID, newStatus)
+}
+
+// moveSelectedTaskToNextColumn moves the selected task to the next column
+func (m Model) moveSelectedTaskToNextColumn() (tea.Model, tea.Cmd) {
+	if m.focused == ColumnDone {
+		return m, nil // Already at last column
+	}
+	
+	currentStatus := m.columnToStatus(m.focused)
+	tasks := m.tasks[currentStatus]
+	
+	if len(tasks) == 0 {
+		return m, nil
+	}
+	
+	selectedIndex := m.selectedTask[m.focused]
+	if selectedIndex >= len(tasks) {
+		return m, nil
+	}
+	
+	selectedTask := tasks[selectedIndex]
+	var newStatus task.Status
+	
+	switch currentStatus {
+	case task.StatusTodo:
+		newStatus = task.StatusDoing
+	case task.StatusDoing:
+		newStatus = task.StatusDone
+	default:
+		return m, nil
+	}
+	
+	return m, m.moveTask(selectedTask.ID, newStatus)
 }
 
 
