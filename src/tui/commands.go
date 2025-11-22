@@ -76,6 +76,19 @@ func (m Model) deleteTask(taskID int) tea.Cmd {
 	}
 }
 
+// hardDeleteTask permanently deletes a task
+func (m Model) hardDeleteTask(taskID int) tea.Cmd {
+	return func() tea.Msg {
+		err := m.taskSystem.HardDelete(taskID)
+		if err != nil {
+			return ErrorMsg{Err: err}
+		}
+		
+		// Refresh tasks after deletion
+		return m.refreshTasks()()
+	}
+}
+
 // updateTaskPriority updates a task's priority
 func (m Model) updateTaskPriority(taskID int, priority int) tea.Cmd {
 	return func() tea.Msg {

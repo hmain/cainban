@@ -60,6 +60,11 @@ type Model struct {
 	descriptionInput textinput.Model
 	formFocusIndex   int
 	selectedPriority int // 0=none, 1=low, 2=medium, 3=high, 4=critical
+	
+	// Confirmation dialog
+	showConfirmDialog bool
+	confirmAction     string // "delete" or "hard_delete"
+	confirmTaskID     int
 }
 
 // View represents different TUI views
@@ -70,6 +75,7 @@ const (
 	ViewHelp
 	ViewTaskDetail
 	ViewTaskCreate
+	ViewConfirmDialog
 )
 
 // Column represents kanban board columns

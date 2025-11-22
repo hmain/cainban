@@ -70,6 +70,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleTaskDetailKeys(msg)
 	case ViewTaskCreate:
 		return m.handleTaskCreateKeys(msg)
+	case ViewConfirmDialog:
+		return m.handleConfirmDialogKeys(msg)
 	}
 	
 	return m, nil
@@ -142,7 +144,10 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 		
 	case "d":
-		return m.handleDeleteTask()
+		return m.handleDeleteTask(false)
+		
+	case "D":
+		return m.handleDeleteTask(true)
 		
 	case "p":
 		return m.handleCyclePriority()
@@ -242,6 +247,29 @@ func (m Model) handleTaskCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+// handleConfirmDialogKeys processes keyboard input for confirmation dialog
+func (m Model) handleConfirmDialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y":
+		// Confirm action
+		m.currentView = ViewKanban
+		m.showConfirmDialog = false
+		
+		if m.confirmAction == "hard_delete" {
+			return m, m.hardDeleteTask(m.confirmTaskID)
+		}
+		return m, m.deleteTask(m.confirmTaskID)
+		
+	case "n", "N", "esc":
+		// Cancel
+		m.currentView = ViewKanban
+		m.showConfirmDialog = false
+		return m, nil
+	}
+	
+	return m, nil
+}
+
 // moveSelectionDown moves the selection down in the current column
 func (m *Model) moveSelectionDown() {
 	currentStatus := m.columnToStatus(m.focused)
@@ -298,7 +326,7 @@ func (m Model) handleTaskAction() (tea.Model, tea.Cmd) {
 }
 
 // handleDeleteTask handles deleting the selected task
-func (m Model) handleDeleteTask() (tea.Model, tea.Cmd) {
+func (m Model) handleDeleteTask(hardDelete bool) (tea.Model, tea.Cmd) {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
 	
@@ -312,7 +340,18 @@ func (m Model) handleDeleteTask() (tea.Model, tea.Cmd) {
 	}
 	
 	selectedTask := tasks[selectedIndex]
-	return m, m.deleteTask(selectedTask.ID)
+	
+	// Show confirmation dialog
+	m.showConfirmDialog = true
+	m.confirmTaskID = selectedTask.ID
+	if hardDelete {
+		m.confirmAction = "hard_delete"
+	} else {
+		m.confirmAction = "delete"
+	}
+	m.currentView = ViewConfirmDialog
+	
+	return m, nil
 }
 
 // handleCyclePriority cycles the priority of the selected task

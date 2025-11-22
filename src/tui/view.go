@@ -19,6 +19,8 @@ func (m Model) View() string {
 		return m.renderTaskDetailView()
 	case ViewTaskCreate:
 		return m.renderTaskCreateView()
+	case ViewConfirmDialog:
+		return m.renderConfirmDialog()
 	default:
 		return m.renderKanbanView()
 	}
@@ -35,7 +37,7 @@ func (m Model) renderKanbanView() string {
 	columns := m.renderViewportColumns()
 	
 	// Simple status bar with all commands
-	statusBar := "n: new • p: priority • h/l: columns • j/k: navigate • shift+←/→: move task • q: quit"
+	statusBar := "n: new • p: priority • d: delete • shift+←/→: move • h/l: columns • j/k: navigate • q: quit"
 	
 	// Simple layout - no complex styling for now
 	content := header + "\n\n" + columns + "\n\n" + statusBar
@@ -347,6 +349,25 @@ func (m Model) renderTaskCreateView() string {
 	b.WriteString("  " + m.descriptionInput.View() + "\n\n")
 	b.WriteString(fmt.Sprintf("  Priority: %s\n\n", priorityNames[m.selectedPriority]))
 	b.WriteString("  Tab: Switch fields | P: Change priority | Enter: Create | Esc: Cancel\n")
+	
+	return b.String()
+}
+
+// renderConfirmDialog renders the confirmation dialog
+func (m Model) renderConfirmDialog() string {
+	var b strings.Builder
+	
+	b.WriteString("\n\n")
+	
+	if m.confirmAction == "hard_delete" {
+		b.WriteString("  ⚠️  Permanently delete this task?\n\n")
+		b.WriteString("  This cannot be undone!\n\n")
+	} else {
+		b.WriteString("  Delete this task?\n\n")
+		b.WriteString("  (Can be restored later)\n\n")
+	}
+	
+	b.WriteString("  Y: Yes | N: No\n")
 	
 	return b.String()
 }
