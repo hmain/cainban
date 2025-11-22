@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"time"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/hmain/cainban/src/systems/task"
@@ -67,6 +68,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHelpKeys(msg)
 	case ViewTaskDetail:
 		return m.handleTaskDetailKeys(msg)
+	case ViewTaskCreate:
+		return m.handleTaskCreateKeys(msg)
 	}
 	
 	return m, nil
@@ -124,7 +127,10 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleTaskAction()
 		
 	case "n":
-		// TODO: Open new task dialog
+		m.currentView = ViewTaskCreate
+		m.titleInput.Focus()
+		m.descriptionInput.Blur()
+		m.formFocusIndex = 0
 		return m, nil
 		
 	case "d":
@@ -163,6 +169,58 @@ func (m Model) handleTaskDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	
 	return m, nil
+}
+
+// handleTaskCreateKeys processes keyboard input for the task creation form
+func (m Model) handleTaskCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	
+	switch msg.String() {
+	case "esc":
+		// Cancel and return to kanban
+		m.currentView = ViewKanban
+		m.titleInput.SetValue("")
+		m.descriptionInput.SetValue("")
+		return m, nil
+		
+	case "tab", "shift+tab":
+		// Switch between title and description
+		if m.formFocusIndex == 0 {
+			m.formFocusIndex = 1
+			m.titleInput.Blur()
+			m.descriptionInput.Focus()
+		} else {
+			m.formFocusIndex = 0
+			m.descriptionInput.Blur()
+			m.titleInput.Focus()
+		}
+		return m, nil
+		
+	case "enter":
+		// Submit form
+		title := strings.TrimSpace(m.titleInput.Value())
+		if title == "" {
+			return m, nil
+		}
+		
+		description := strings.TrimSpace(m.descriptionInput.Value())
+		
+		// Create task and return to kanban
+		m.currentView = ViewKanban
+		m.titleInput.SetValue("")
+		m.descriptionInput.SetValue("")
+		
+		return m, m.createTask(title, description)
+	}
+	
+	// Update the focused input
+	if m.formFocusIndex == 0 {
+		m.titleInput, cmd = m.titleInput.Update(msg)
+	} else {
+		m.descriptionInput, cmd = m.descriptionInput.Update(msg)
+	}
+	
+	return m, cmd
 }
 
 // moveSelectionDown moves the selection down in the current column

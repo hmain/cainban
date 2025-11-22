@@ -17,6 +17,8 @@ func (m Model) View() string {
 		return m.renderHelpView()
 	case ViewTaskDetail:
 		return m.renderTaskDetailView()
+	case ViewTaskCreate:
+		return m.renderTaskCreateView()
 	default:
 		return m.renderKanbanView()
 	}
@@ -332,5 +334,17 @@ Press any key to return to the kanban board...
 func (m Model) renderTaskDetailView() string {
 	// TODO: Implement detailed task view
 	return m.styles.Base.Render("Task Detail View - Coming Soon!\n\nPress ESC to return...")
+}
+
+// renderTaskCreateView renders the task creation form
+func (m Model) renderTaskCreateView() string {
+	var b strings.Builder
+	
+	b.WriteString("\n  Create New Task\n\n")
+	b.WriteString("  " + m.titleInput.View() + "\n\n")
+	b.WriteString("  " + m.descriptionInput.View() + "\n\n")
+	b.WriteString("  Tab: Switch fields | Enter: Create | Esc: Cancel\n")
+	
+	return b.String()
 }
 

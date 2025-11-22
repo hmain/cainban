@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	"github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -53,6 +54,11 @@ type Model struct {
 	
 	// Styles
 	styles Styles
+	
+	// Task creation form
+	titleInput       textinput.Model
+	descriptionInput textinput.Model
+	formFocusIndex   int
 }
 
 // View represents different TUI views
@@ -62,6 +68,7 @@ const (
 	ViewKanban View = iota
 	ViewHelp
 	ViewTaskDetail
+	ViewTaskCreate
 )
 
 // Column represents kanban board columns
@@ -108,6 +115,18 @@ func NewModel(db *storage.DB) *Model {
 	viewportMap[ColumnDoing] = viewport.New(30, 20)
 	viewportMap[ColumnDone] = viewport.New(30, 20)
 
+	// Initialize form inputs
+	titleInput := textinput.New()
+	titleInput.Placeholder = "Task title"
+	titleInput.Focus()
+	titleInput.CharLimit = 200
+	titleInput.Width = 50
+
+	descriptionInput := textinput.New()
+	descriptionInput.Placeholder = "Description (optional)"
+	descriptionInput.CharLimit = 500
+	descriptionInput.Width = 50
+
 	model := &Model{
 		taskSystem:   taskSystem,
 		boardSystem:  boardSystem,
@@ -121,6 +140,9 @@ func NewModel(db *storage.DB) *Model {
 		styles:       DefaultStyles(), // Will be updated when window size is received
 		width:        0, // Will be set by first WindowSizeMsg
 		height:       0, // Will be set by first WindowSizeMsg
+		titleInput:       titleInput,
+		descriptionInput: descriptionInput,
+		formFocusIndex:   0,
 	}
 	
 	return model
