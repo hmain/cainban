@@ -120,6 +120,11 @@ type BoardsLoadedMsg struct {
 	Boards []string
 }
 
+// BoardSwitchedMsg is sent when board is switched
+type BoardSwitchedMsg struct {
+	BoardName string
+}
+
 // loadBoards loads all available boards
 func (m Model) loadBoards() tea.Cmd {
 	return func() tea.Msg {
@@ -146,8 +151,7 @@ func (m Model) switchBoard(boardName string) tea.Cmd {
 			return ErrorMsg{Err: err}
 		}
 		
-		// Refresh tasks after switching
-		return m.refreshTasks()()
+		return BoardSwitchedMsg{BoardName: boardName}
 	}
 }
 

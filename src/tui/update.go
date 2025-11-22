@@ -62,6 +62,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewBoardSelector
 		return m, nil
 		
+	case BoardSwitchedMsg:
+		// Board switched - need to restart TUI to load new database
+		m.currentBoard = msg.BoardName
+		return m, tea.Quit
+		
 	case ErrorMsg:
 		// Handle errors (could show in status bar)
 		return m, nil
