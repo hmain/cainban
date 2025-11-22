@@ -115,6 +115,42 @@ func (m Model) updateTask(taskID int, title, description string) tea.Cmd {
 	}
 }
 
+// BoardsLoadedMsg is sent when boards are loaded
+type BoardsLoadedMsg struct {
+	Boards []string
+}
+
+// loadBoards loads all available boards
+func (m Model) loadBoards() tea.Cmd {
+	return func() tea.Msg {
+		boards, err := m.boardSystem.ListBoards()
+		if err != nil {
+			return ErrorMsg{Err: err}
+		}
+		
+		// Extract board names
+		boardNames := make([]string, len(boards))
+		for i, board := range boards {
+			boardNames[i] = board.Name
+		}
+		
+		return BoardsLoadedMsg{Boards: boardNames}
+	}
+}
+
+// switchBoard switches to a different board
+func (m Model) switchBoard(boardName string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.boardSystem.SetCurrentBoard(boardName)
+		if err != nil {
+			return ErrorMsg{Err: err}
+		}
+		
+		// Refresh tasks after switching
+		return m.refreshTasks()()
+	}
+}
+
 // createTask creates a new task
 func (m Model) createTask(title, description string) tea.Cmd {
 	return m.createTaskWithPriority(title, description, 0)

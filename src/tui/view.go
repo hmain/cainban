@@ -23,6 +23,8 @@ func (m Model) View() string {
 		return m.renderConfirmDialog()
 	case ViewTaskEdit:
 		return m.renderTaskEditView()
+	case ViewBoardSelector:
+		return m.renderBoardSelectorView()
 	default:
 		return m.renderKanbanView()
 	}
@@ -39,7 +41,7 @@ func (m Model) renderKanbanView() string {
 	columns := m.renderViewportColumns()
 	
 	// Simple status bar with all commands
-	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • shift+←/→: move • ?: help • q: quit"
+	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • b: boards • ?: help • q: quit"
 	
 	// Simple layout - no complex styling for now
 	content := header + "\n\n" + columns + "\n\n" + statusBar
@@ -416,6 +418,32 @@ func (m Model) renderTaskEditView() string {
 	b.WriteString("  " + m.titleInput.View() + "\n\n")
 	b.WriteString("  " + m.descriptionInput.View() + "\n\n")
 	b.WriteString("  Tab: Switch fields | Enter: Save | Esc: Cancel\n")
+	
+	return b.String()
+}
+
+// renderBoardSelectorView renders the board selector
+func (m Model) renderBoardSelectorView() string {
+	var b strings.Builder
+	
+	b.WriteString("\n  Select Board\n")
+	b.WriteString("  " + strings.Repeat("─", 40) + "\n\n")
+	
+	for i, board := range m.availableBoards {
+		prefix := "  "
+		if i == m.selectedBoardIndex {
+			prefix = "> "
+		}
+		
+		marker := " "
+		if board == m.currentBoard {
+			marker = "●"
+		}
+		
+		b.WriteString(fmt.Sprintf("  %s%s %s\n", prefix, marker, board))
+	}
+	
+	b.WriteString("\n  ↑/↓: Navigate | Enter: Select | Esc: Cancel\n")
 	
 	return b.String()
 }

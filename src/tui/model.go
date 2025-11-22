@@ -71,6 +71,10 @@ type Model struct {
 	
 	// Task detail view
 	viewTaskID int
+	
+	// Board selector
+	availableBoards []string
+	selectedBoardIndex int
 }
 
 // View represents different TUI views
@@ -83,6 +87,7 @@ const (
 	ViewTaskCreate
 	ViewConfirmDialog
 	ViewTaskEdit
+	ViewBoardSelector
 )
 
 // Column represents kanban board columns

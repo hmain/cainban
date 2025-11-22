@@ -42,6 +42,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks = msg.Tasks
 		// Update viewport content when tasks change
 		m.updateViewportContent()
+		// Update current board name
+		currentBoard, _ := m.boardSystem.GetCurrentBoard()
+		if currentBoard != "" {
+			m.currentBoard = currentBoard
+		}
+		return m, nil
+		
+	case BoardsLoadedMsg:
+		m.availableBoards = msg.Boards
+		m.selectedBoardIndex = 0
+		// Find current board index
+		for i, board := range m.availableBoards {
+			if board == m.currentBoard {
+				m.selectedBoardIndex = i
+				break
+			}
+		}
+		m.currentView = ViewBoardSelector
 		return m, nil
 		
 	case ErrorMsg:
@@ -74,6 +92,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleConfirmDialogKeys(msg)
 	case ViewTaskEdit:
 		return m.handleTaskEditKeys(msg)
+	case ViewBoardSelector:
+		return m.handleBoardSelectorKeys(msg)
 	}
 	
 	return m, nil
@@ -188,6 +208,10 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
+		
+	case "b":
+		// Open board selector
+		return m, m.loadBoards()
 		
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:
@@ -526,3 +550,34 @@ func (m Model) moveSelectedTaskToNextColumn() (tea.Model, tea.Cmd) {
 }
 
 
+
+// handleBoardSelectorKeys processes keyboard input for board selector
+func (m Model) handleBoardSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.currentView = ViewKanban
+		return m, nil
+		
+	case "j", "down":
+		if m.selectedBoardIndex < len(m.availableBoards)-1 {
+			m.selectedBoardIndex++
+		}
+		return m, nil
+		
+	case "k", "up":
+		if m.selectedBoardIndex > 0 {
+			m.selectedBoardIndex--
+		}
+		return m, nil
+		
+	case "enter":
+		if m.selectedBoardIndex < len(m.availableBoards) {
+			selectedBoard := m.availableBoards[m.selectedBoardIndex]
+			m.currentView = ViewKanban
+			return m, m.switchBoard(selectedBoard)
+		}
+		return m, nil
+	}
+	
+	return m, nil
+}
