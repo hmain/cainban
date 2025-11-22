@@ -261,8 +261,10 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "/":
 		// Activate search
 		m.searchActive = true
+		m.searchInput.SetValue("")
 		m.searchInput.Focus()
-		return m, nil
+		m.searchInput.CursorEnd()
+		return m, m.searchInput.Cursor.BlinkCmd()
 		
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:

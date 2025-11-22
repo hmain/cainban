@@ -161,6 +161,7 @@ func NewModel(db *storage.DB) *Model {
 	searchInput.Width = 60
 	searchInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED"))
 	searchInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
+	searchInput.Cursor.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED"))
 
 	model := &Model{
 		taskSystem:   taskSystem,
