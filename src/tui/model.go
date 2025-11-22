@@ -31,6 +31,7 @@ type Model struct {
 	taskSystem  *task.System
 	boardSystem *board.System
 	storage     *storage.DB
+	dbPath      string // Store path for reconnection
 
 	// UI State
 	width  int
@@ -80,6 +81,9 @@ type Model struct {
 	searchInput textinput.Model
 	searchActive bool
 	searchQuery string
+	
+	// Board switching
+	boardSwitching bool
 }
 
 // View represents different TUI views

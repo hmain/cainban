@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 	"github.com/charmbracelet/bubbletea"
+	"github.com/hmain/cainban/src/systems/storage"
 	"github.com/hmain/cainban/src/systems/task"
 )
 
@@ -63,9 +64,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 		
 	case BoardSwitchedMsg:
-		// Board switched - need to restart TUI to load new database
+		// Board switched - reload database and tasks
 		m.currentBoard = msg.BoardName
-		return m, tea.Quit
+		
+		// Close old database
+		if m.storage != nil {
+			m.storage.Close()
+		}
+		
+		// Open new board's database
+		newPath := m.boardSystem.GetBoardPath(msg.BoardName)
+		newDB, err := storage.New(newPath)
+		if err != nil {
+			return m, func() tea.Msg { return ErrorMsg{Err: err} }
+		}
+		
+		m.storage = newDB
+		m.taskSystem = task.New(newDB.Conn())
+		
+		// Refresh tasks from new board
+		return m, m.refreshTasks()
 		
 	case ErrorMsg:
 		// Handle errors (could show in status bar)

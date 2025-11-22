@@ -10,6 +10,11 @@ import (
 
 // View renders the current TUI state
 func (m Model) View() string {
+	// Show board switch message if switching
+	if m.boardSwitching {
+		return fmt.Sprintf("\n  Switched to board: %s\n\n  Restart TUI to load the new board:\n  ./cainban tui\n", m.currentBoard)
+	}
+	
 	switch m.currentView {
 	case ViewKanban:
 		return m.renderKanbanView()
@@ -34,8 +39,8 @@ func (m Model) View() string {
 func (m Model) renderKanbanView() string {
 	debugLog("[RENDER] Starting viewport-based renderKanbanView, terminal size: %dx%d\n", m.width, m.height)
 	
-	// Simple header
-	header := fmt.Sprintf("Cainban - %s", m.currentBoard)
+	// Header with board name prominently displayed
+	header := fmt.Sprintf("📋 Cainban - Board: %s", m.currentBoard)
 	
 	// Search bar
 	var searchBar string
