@@ -342,13 +342,31 @@ func (m *Model) updateViewportContent() {
 		status := m.columnToStatus(col)
 		tasks := m.tasks[status]
 		
+		// Filter tasks by search query
+		var filteredTasks []*task.Task
+		if m.searchQuery != "" {
+			query := strings.ToLower(m.searchQuery)
+			for _, t := range tasks {
+				if strings.Contains(strings.ToLower(t.Title), query) ||
+				   strings.Contains(strings.ToLower(t.Description), query) {
+					filteredTasks = append(filteredTasks, t)
+				}
+			}
+		} else {
+			filteredTasks = tasks
+		}
+		
 		// Generate content for this column
 		var content []string
 		
-		if len(tasks) == 0 {
-			content = append(content, "No tasks")
+		if len(filteredTasks) == 0 {
+			if m.searchQuery != "" {
+				content = append(content, "No matches")
+			} else {
+				content = append(content, "No tasks")
+			}
 		} else {
-			for i, t := range tasks {
+			for i, t := range filteredTasks {
 				isSelected := i == m.selectedTask[col] && col == m.focused
 				taskLine := m.renderTaskLine(t, isSelected)
 				content = append(content, taskLine)
@@ -364,7 +382,7 @@ func (m *Model) updateViewportContent() {
 		
 		m.viewports[col] = vp
 		
-		debugLog("[VIEWPORT] Column %d: %d tasks, %d lines\n", col, len(tasks), len(content))
+		debugLog("[VIEWPORT] Column %d: %d tasks, %d lines\n", col, len(filteredTasks), len(content))
 	}
 }
 

@@ -112,11 +112,13 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.searchInput.Blur()
 			m.searchInput.SetValue("")
 			m.searchQuery = ""
+			m.updateViewportContent()
 			return m, nil
 		case "enter":
 			m.searchQuery = m.searchInput.Value()
 			m.searchActive = false
 			m.searchInput.Blur()
+			m.updateViewportContent()
 			return m, nil
 		default:
 			m.searchInput, cmd = m.searchInput.Update(msg)
