@@ -264,7 +264,13 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchInput.SetValue("")
 		m.searchInput.Focus()
 		m.searchInput.CursorEnd()
-		return m, m.searchInput.Cursor.BlinkCmd()
+		// Return both cursor blink and a tick to force re-render
+		return m, tea.Batch(
+			m.searchInput.Cursor.BlinkCmd(),
+			tea.Tick(time.Millisecond, func(t time.Time) tea.Msg {
+				return nil
+			}),
+		)
 		
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:
