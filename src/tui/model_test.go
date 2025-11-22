@@ -208,3 +208,50 @@ func TestWindowResize(t *testing.T) {
 		t.Errorf("Column width %d out of reasonable range after resize", columnWidth)
 	}
 }
+func TestSearchActivation(t *testing.T) {
+	m := setupTestModel(t)
+	
+	// Press '/' to activate search
+	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")}
+	updatedModel, cmd := m.Update(msg)
+	m, ok := updatedModel.(Model)
+	if !ok {
+		t.Fatal("Update did not return Model type")
+	}
+	
+	// Verify search is active
+	if !m.searchActive {
+		t.Error("Search should be active after pressing '/'")
+	}
+	
+	// Verify cursor blink command was returned
+	if cmd == nil {
+		t.Error("Expected cursor blink command, got nil")
+	}
+	
+	// Type 't' (simulating typing)
+	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")}
+	updatedModel, _ = m.Update(msg)
+	m, ok = updatedModel.(Model)
+	if !ok {
+		t.Fatal("Update did not return Model type")
+	}
+	
+	// Press Enter to apply search
+	msg = tea.KeyMsg{Type: tea.KeyEnter}
+	updatedModel, _ = m.Update(msg)
+	m, ok = updatedModel.(Model)
+	if !ok {
+		t.Fatal("Update did not return Model type")
+	}
+	
+	// Verify search is no longer active but query is set
+	if m.searchActive {
+		t.Error("Search should not be active after pressing Enter")
+	}
+	
+	// The query should contain what was typed
+	if m.searchQuery == "" {
+		t.Error("Expected non-empty search query after Enter")
+	}
+}

@@ -18,9 +18,9 @@ import (
 const (
 	VersionMajor = "0"
 	VersionMinor = "2" 
-	VersionPatch = "1"
-	VersionDev   = "11"   // Increment for each dev build
-	VersionSuffix = "JSON-only MCP Output" // Description of this dev build
+	VersionPatch = "2"
+	VersionDev   = ""   // Empty for release
+	VersionSuffix = "Full TUI Implementation" // Description of this release
 )
 
 func main() {
