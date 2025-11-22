@@ -35,7 +35,7 @@ func (m Model) renderKanbanView() string {
 	columns := m.renderViewportColumns()
 	
 	// Simple status bar with all commands
-	statusBar := "n: new • h/l: columns • j/k: navigate • shift+←/→: move task • enter: next status • q: quit"
+	statusBar := "n: new • p: priority • h/l: columns • j/k: navigate • shift+←/→: move task • q: quit"
 	
 	// Simple layout - no complex styling for now
 	content := header + "\n\n" + columns + "\n\n" + statusBar

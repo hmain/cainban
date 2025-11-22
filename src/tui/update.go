@@ -144,6 +144,9 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		return m.handleDeleteTask()
 		
+	case "p":
+		return m.handleCyclePriority()
+		
 	case "e":
 		// TODO: Edit task
 		return m, nil
@@ -310,6 +313,26 @@ func (m Model) handleDeleteTask() (tea.Model, tea.Cmd) {
 	
 	selectedTask := tasks[selectedIndex]
 	return m, m.deleteTask(selectedTask.ID)
+}
+
+// handleCyclePriority cycles the priority of the selected task
+func (m Model) handleCyclePriority() (tea.Model, tea.Cmd) {
+	currentStatus := m.columnToStatus(m.focused)
+	tasks := m.tasks[currentStatus]
+	
+	if len(tasks) == 0 {
+		return m, nil
+	}
+	
+	selectedIndex := m.selectedTask[m.focused]
+	if selectedIndex >= len(tasks) {
+		return m, nil
+	}
+	
+	selectedTask := tasks[selectedIndex]
+	newPriority := (selectedTask.Priority + 1) % 5
+	
+	return m, m.updateTaskPriority(selectedTask.ID, newPriority)
 }
 
 // moveSelectedTaskToPreviousColumn moves the selected task to the previous column
