@@ -42,12 +42,17 @@ func (m Model) renderKanbanView() string {
 	// Header with board name prominently displayed
 	header := fmt.Sprintf("📋 Cainban - Board: %s", m.currentBoard)
 	
-	// Search bar
+	// Search bar - make it prominent when active
 	var searchBar string
 	if m.searchActive {
-		searchBar = "\n  " + m.searchInput.View() + "\n"
+		searchStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#7C3AED")).
+			Padding(0, 1).
+			Margin(1, 0)
+		searchBar = "\n" + searchStyle.Render("🔍 Search: "+m.searchInput.View()) + "\n"
 	} else if m.searchQuery != "" {
-		searchBar = fmt.Sprintf("\n  Search: %s (press / to change, esc to clear)\n", m.searchQuery)
+		searchBar = fmt.Sprintf("\n  🔍 Filtering: '%s' (/ to edit, esc to clear)\n", m.searchQuery)
 	}
 	
 	// Render columns using viewports

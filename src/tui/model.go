@@ -156,9 +156,11 @@ func NewModel(db *storage.DB) *Model {
 	descriptionInput.Width = 50
 
 	searchInput := textinput.New()
-	searchInput.Placeholder = "Search tasks..."
+	searchInput.Placeholder = "Type to search tasks..."
 	searchInput.CharLimit = 100
-	searchInput.Width = 40
+	searchInput.Width = 60
+	searchInput.PromptStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#7C3AED"))
+	searchInput.TextStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFFFFF"))
 
 	model := &Model{
 		taskSystem:   taskSystem,
