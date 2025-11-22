@@ -97,6 +97,7 @@ const (
 	ViewConfirmDialog
 	ViewTaskEdit
 	ViewBoardSelector
+	ViewSearch
 )
 
 // Column represents kanban board columns

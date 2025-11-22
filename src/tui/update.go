@@ -117,6 +117,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleTaskEditKeys(msg)
 	case ViewBoardSelector:
 		return m.handleBoardSelectorKeys(msg)
+	case ViewSearch:
+		return m.handleSearchKeys(msg)
 	}
 	
 	return m, nil
@@ -126,28 +128,6 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
-	
-	// Handle search input if active
-	if m.searchActive {
-		switch msg.String() {
-		case "esc":
-			m.searchActive = false
-			m.searchInput.Blur()
-			m.searchInput.SetValue("")
-			m.searchQuery = ""
-			m.updateViewportContent()
-			return m, nil
-		case "enter":
-			m.searchQuery = m.searchInput.Value()
-			m.searchActive = false
-			m.searchInput.Blur()
-			m.updateViewportContent()
-			return m, nil
-		default:
-			m.searchInput, cmd = m.searchInput.Update(msg)
-			return m, cmd
-		}
-	}
 	
 	switch msg.String() {
 	case "q", "ctrl+c":
@@ -259,18 +239,11 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.loadBoards()
 		
 	case "/":
-		// Activate search
-		m.searchActive = true
+		// Open search view
+		m.currentView = ViewSearch
 		m.searchInput.SetValue("")
 		m.searchInput.Focus()
-		m.searchInput.CursorEnd()
-		// Return both cursor blink and a tick to force re-render
-		return m, tea.Batch(
-			m.searchInput.Cursor.BlinkCmd(),
-			tea.Tick(time.Millisecond, func(t time.Time) tea.Msg {
-				return nil
-			}),
-		)
+		return m, m.searchInput.Cursor.BlinkCmd()
 		
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:
@@ -639,4 +612,31 @@ func (m Model) handleBoardSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	
 	return m, nil
+}
+
+// handleSearchKeys processes keyboard input for search view
+func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	
+	switch msg.String() {
+	case "esc":
+		// Cancel search and return
+		m.currentView = ViewKanban
+		m.searchInput.SetValue("")
+		m.searchQuery = ""
+		m.updateViewportContent()
+		return m, nil
+		
+	case "enter":
+		// Apply search and return
+		m.searchQuery = m.searchInput.Value()
+		m.currentView = ViewKanban
+		m.updateViewportContent()
+		return m, nil
+		
+	default:
+		// Update search input
+		m.searchInput, cmd = m.searchInput.Update(msg)
+		return m, cmd
+	}
 }

@@ -219,9 +219,9 @@ func TestSearchActivation(t *testing.T) {
 		t.Fatal("Update did not return Model type")
 	}
 	
-	// Verify search is active
-	if !m.searchActive {
-		t.Error("Search should be active after pressing '/'")
+	// Verify search view is active
+	if m.currentView != ViewSearch {
+		t.Errorf("Expected ViewSearch, got %v", m.currentView)
 	}
 	
 	// Verify cursor blink command was returned
@@ -245,9 +245,9 @@ func TestSearchActivation(t *testing.T) {
 		t.Fatal("Update did not return Model type")
 	}
 	
-	// Verify search is no longer active but query is set
-	if m.searchActive {
-		t.Error("Search should not be active after pressing Enter")
+	// Verify back to kanban view
+	if m.currentView != ViewKanban {
+		t.Errorf("Expected ViewKanban after Enter, got %v", m.currentView)
 	}
 	
 	// The query should contain what was typed

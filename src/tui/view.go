@@ -30,6 +30,8 @@ func (m Model) View() string {
 		return m.renderTaskEditView()
 	case ViewBoardSelector:
 		return m.renderBoardSelectorView()
+	case ViewSearch:
+		return m.renderSearchView()
 	default:
 		return m.renderKanbanView()
 	}
@@ -42,17 +44,10 @@ func (m Model) renderKanbanView() string {
 	// Header with board name prominently displayed
 	header := fmt.Sprintf("📋 Cainban - Board: %s", m.currentBoard)
 	
-	// Search bar - make it prominent when active
-	var searchBar string
-	if m.searchActive {
-		searchStyle := lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("#7C3AED")).
-			Padding(0, 1).
-			Margin(1, 0)
-		searchBar = "\n" + searchStyle.Render("🔍 Search: "+m.searchInput.View()) + "\n"
-	} else if m.searchQuery != "" {
-		searchBar = fmt.Sprintf("\n  🔍 Filtering: '%s' (/ to edit, esc to clear)\n", m.searchQuery)
+	// Show active search query if any
+	var searchInfo string
+	if m.searchQuery != "" {
+		searchInfo = fmt.Sprintf("\n  🔍 Filtering: '%s' (/ to edit, esc to clear)\n", m.searchQuery)
 	}
 	
 	// Render columns using viewports
@@ -62,11 +57,29 @@ func (m Model) renderKanbanView() string {
 	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • /: search • b: boards • ?: help • q: quit"
 	
 	// Simple layout - no complex styling for now
-	content := header + searchBar + "\n" + columns + "\n\n" + statusBar
+	content := header + searchInfo + "\n" + columns + "\n\n" + statusBar
 	
 	debugLog("[RENDER] Viewport-based rendering complete\n")
 	
 	return content
+}
+
+// renderSearchView renders the search overlay
+func (m Model) renderSearchView() string {
+	var b strings.Builder
+	
+	b.WriteString("\n\n")
+	b.WriteString("  ╔════════════════════════════════════════════════════════════╗\n")
+	b.WriteString("  ║                      🔍 SEARCH TASKS                       ║\n")
+	b.WriteString("  ╠════════════════════════════════════════════════════════════╣\n")
+	b.WriteString("  ║                                                            ║\n")
+	b.WriteString("  ║  " + m.searchInput.View() + strings.Repeat(" ", 56-len(m.searchInput.View())) + "║\n")
+	b.WriteString("  ║                                                            ║\n")
+	b.WriteString("  ╠════════════════════════════════════════════════════════════╣\n")
+	b.WriteString("  ║  Enter: Search  •  Esc: Cancel                             ║\n")
+	b.WriteString("  ╚════════════════════════════════════════════════════════════╝\n")
+	
+	return b.String()
 }
 
 // renderViewportColumns renders the three columns using viewport components
