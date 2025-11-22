@@ -21,6 +21,8 @@ func (m Model) View() string {
 		return m.renderTaskCreateView()
 	case ViewConfirmDialog:
 		return m.renderConfirmDialog()
+	case ViewTaskEdit:
+		return m.renderTaskEditView()
 	default:
 		return m.renderKanbanView()
 	}
@@ -37,7 +39,7 @@ func (m Model) renderKanbanView() string {
 	columns := m.renderViewportColumns()
 	
 	// Simple status bar with all commands
-	statusBar := "n: new • p: priority • d: delete • shift+←/→: move • h/l: columns • j/k: navigate • q: quit"
+	statusBar := "n: new • e: edit • p: priority • d: delete • shift+←/→: move • j/k: navigate • q: quit"
 	
 	// Simple layout - no complex styling for now
 	content := header + "\n\n" + columns + "\n\n" + statusBar
@@ -368,6 +370,18 @@ func (m Model) renderConfirmDialog() string {
 	}
 	
 	b.WriteString("  Y: Yes | N: No\n")
+	
+	return b.String()
+}
+
+// renderTaskEditView renders the task edit form
+func (m Model) renderTaskEditView() string {
+	var b strings.Builder
+	
+	b.WriteString("\n  Edit Task\n\n")
+	b.WriteString("  " + m.titleInput.View() + "\n\n")
+	b.WriteString("  " + m.descriptionInput.View() + "\n\n")
+	b.WriteString("  Tab: Switch fields | Enter: Save | Esc: Cancel\n")
 	
 	return b.String()
 }

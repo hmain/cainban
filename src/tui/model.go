@@ -65,6 +65,9 @@ type Model struct {
 	showConfirmDialog bool
 	confirmAction     string // "delete" or "hard_delete"
 	confirmTaskID     int
+	
+	// Task editing
+	editTaskID int
 }
 
 // View represents different TUI views
@@ -76,6 +79,7 @@ const (
 	ViewTaskDetail
 	ViewTaskCreate
 	ViewConfirmDialog
+	ViewTaskEdit
 )
 
 // Column represents kanban board columns

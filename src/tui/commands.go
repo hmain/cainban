@@ -102,6 +102,19 @@ func (m Model) updateTaskPriority(taskID int, priority int) tea.Cmd {
 	}
 }
 
+// updateTask updates a task's title and description
+func (m Model) updateTask(taskID int, title, description string) tea.Cmd {
+	return func() tea.Msg {
+		err := m.taskSystem.Update(taskID, title, description)
+		if err != nil {
+			return ErrorMsg{Err: err}
+		}
+		
+		// Refresh tasks after update
+		return m.refreshTasks()()
+	}
+}
+
 // createTask creates a new task
 func (m Model) createTask(title, description string) tea.Cmd {
 	return m.createTaskWithPriority(title, description, 0)

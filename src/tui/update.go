@@ -72,6 +72,8 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleTaskCreateKeys(msg)
 	case ViewConfirmDialog:
 		return m.handleConfirmDialogKeys(msg)
+	case ViewTaskEdit:
+		return m.handleTaskEditKeys(msg)
 	}
 	
 	return m, nil
@@ -153,7 +155,23 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleCyclePriority()
 		
 	case "e":
-		// TODO: Edit task
+		// Edit task
+		currentStatus := m.columnToStatus(m.focused)
+		tasks := m.tasks[currentStatus]
+		
+		if len(tasks) > 0 {
+			selectedIndex := m.selectedTask[m.focused]
+			if selectedIndex < len(tasks) {
+				selectedTask := tasks[selectedIndex]
+				m.editTaskID = selectedTask.ID
+				m.titleInput.SetValue(selectedTask.Title)
+				m.descriptionInput.SetValue(selectedTask.Description)
+				m.titleInput.Focus()
+				m.descriptionInput.Blur()
+				m.formFocusIndex = 0
+				m.currentView = ViewTaskEdit
+			}
+		}
 		return m, nil
 		
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
@@ -268,6 +286,58 @@ func (m Model) handleConfirmDialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	
 	return m, nil
+}
+
+// handleTaskEditKeys processes keyboard input for the task edit form
+func (m Model) handleTaskEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	
+	switch msg.String() {
+	case "esc":
+		// Cancel and return to kanban
+		m.currentView = ViewKanban
+		m.titleInput.SetValue("")
+		m.descriptionInput.SetValue("")
+		return m, nil
+		
+	case "tab", "shift+tab":
+		// Switch between title and description
+		if m.formFocusIndex == 0 {
+			m.formFocusIndex = 1
+			m.titleInput.Blur()
+			m.descriptionInput.Focus()
+		} else {
+			m.formFocusIndex = 0
+			m.descriptionInput.Blur()
+			m.titleInput.Focus()
+		}
+		return m, nil
+		
+	case "enter":
+		// Submit form
+		title := strings.TrimSpace(m.titleInput.Value())
+		if title == "" {
+			return m, nil
+		}
+		
+		description := strings.TrimSpace(m.descriptionInput.Value())
+		
+		// Update task and return to kanban
+		m.currentView = ViewKanban
+		m.titleInput.SetValue("")
+		m.descriptionInput.SetValue("")
+		
+		return m, m.updateTask(m.editTaskID, title, description)
+	}
+	
+	// Update the focused input
+	if m.formFocusIndex == 0 {
+		m.titleInput, cmd = m.titleInput.Update(msg)
+	} else {
+		m.descriptionInput, cmd = m.descriptionInput.Update(msg)
+	}
+	
+	return m, cmd
 }
 
 // moveSelectionDown moves the selection down in the current column
