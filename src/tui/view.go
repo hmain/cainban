@@ -39,7 +39,7 @@ func (m Model) renderKanbanView() string {
 	columns := m.renderViewportColumns()
 	
 	// Simple status bar with all commands
-	statusBar := "n: new • e: edit • p: priority • d: delete • shift+←/→: move • ?: help • q: quit"
+	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • shift+←/→: move • ?: help • q: quit"
 	
 	// Simple layout - no complex styling for now
 	content := header + "\n\n" + columns + "\n\n" + statusBar
@@ -332,8 +332,46 @@ Press ? or Esc to return to the kanban board...
 
 // renderTaskDetailView renders detailed task information  
 func (m Model) renderTaskDetailView() string {
-	// TODO: Implement detailed task view
-	return m.styles.Base.Render("Task Detail View - Coming Soon!\n\nPress ESC to return...")
+	// Find the task
+	var foundTask *task.Task
+	for _, tasks := range m.tasks {
+		for _, t := range tasks {
+			if t.ID == m.viewTaskID {
+				foundTask = t
+				break
+			}
+		}
+		if foundTask != nil {
+			break
+		}
+	}
+	
+	if foundTask == nil {
+		return "Task not found\n\nPress Esc to return..."
+	}
+	
+	var b strings.Builder
+	
+	b.WriteString("\n  Task Details\n")
+	b.WriteString("  " + strings.Repeat("─", 60) + "\n\n")
+	
+	b.WriteString(fmt.Sprintf("  ID: #%d\n", foundTask.BoardTaskID))
+	b.WriteString(fmt.Sprintf("  Title: %s\n\n", foundTask.Title))
+	
+	if foundTask.Description != "" {
+		b.WriteString(fmt.Sprintf("  Description:\n  %s\n\n", foundTask.Description))
+	}
+	
+	priorityNames := []string{"none", "low", "medium", "high", "critical"}
+	b.WriteString(fmt.Sprintf("  Priority: %s\n", priorityNames[foundTask.Priority]))
+	b.WriteString(fmt.Sprintf("  Status: %s\n\n", foundTask.Status))
+	
+	b.WriteString(fmt.Sprintf("  Created: %s\n", foundTask.CreatedAt.Format("2006-01-02 15:04")))
+	b.WriteString(fmt.Sprintf("  Updated: %s\n\n", foundTask.UpdatedAt.Format("2006-01-02 15:04")))
+	
+	b.WriteString("  Press Esc to return\n")
+	
+	return b.String()
 }
 
 // renderTaskCreateView renders the task creation form

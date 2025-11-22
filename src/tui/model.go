@@ -68,6 +68,9 @@ type Model struct {
 	
 	// Task editing
 	editTaskID int
+	
+	// Task detail view
+	viewTaskID int
 }
 
 // View represents different TUI views

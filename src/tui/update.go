@@ -174,6 +174,21 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 		
+	case "v":
+		// View task details
+		currentStatus := m.columnToStatus(m.focused)
+		tasks := m.tasks[currentStatus]
+		
+		if len(tasks) > 0 {
+			selectedIndex := m.selectedTask[m.focused]
+			if selectedIndex < len(tasks) {
+				selectedTask := tasks[selectedIndex]
+				m.viewTaskID = selectedTask.ID
+				m.currentView = ViewTaskDetail
+			}
+		}
+		return m, nil
+		
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:
 		vp := m.viewports[m.focused]
