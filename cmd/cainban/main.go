@@ -20,7 +20,7 @@ const (
 	VersionMinor = "2" 
 	VersionPatch = "2"
 	VersionDev   = ""   // Empty for release
-	VersionSuffix = "Full TUI Implementation" // Description of this release
+	VersionSuffix = "Complete TUI Implementation" // Description of this release
 )
 
 func main() {
