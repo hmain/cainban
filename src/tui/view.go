@@ -41,13 +41,10 @@ func (m Model) View() string {
 func (m Model) renderKanbanView() string {
 	debugLog("[RENDER] Starting viewport-based renderKanbanView, terminal size: %dx%d\n", m.width, m.height)
 	
-	// Header with board name prominently displayed
+	// Header with board name and search indicator
 	header := fmt.Sprintf("📋 Cainban - Board: %s", m.currentBoard)
-	
-	// Show active search query if any
-	var searchInfo string
 	if m.searchQuery != "" {
-		searchInfo = fmt.Sprintf("\n  🔍 Filtering: '%s' (/ to edit, esc to clear)\n", m.searchQuery)
+		header += fmt.Sprintf(" | 🔍 Search: '%s'", m.searchQuery)
 	}
 	
 	// Render columns using viewports
@@ -55,9 +52,12 @@ func (m Model) renderKanbanView() string {
 	
 	// Simple status bar with all commands
 	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • /: search • b: boards • ?: help • q: quit"
+	if m.searchQuery != "" {
+		statusBar = "esc: clear search • " + statusBar
+	}
 	
 	// Simple layout - no complex styling for now
-	content := header + searchInfo + "\n" + columns + "\n\n" + statusBar
+	content := header + "\n\n" + columns + "\n\n" + statusBar
 	
 	debugLog("[RENDER] Viewport-based rendering complete\n")
 	

@@ -133,6 +133,15 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 		
+	case "esc":
+		// Clear search if active
+		if m.searchQuery != "" {
+			m.searchQuery = ""
+			m.updateViewportContent()
+			return m, nil
+		}
+		return m, nil
+		
 	case "?":
 		m.currentView = ViewHelp
 		return m, nil
