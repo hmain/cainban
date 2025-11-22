@@ -66,8 +66,8 @@ func (m Model) renderKanbanView() string {
 		statusBar = "esc: clear search • " + statusBar
 	}
 	
-	// Simple layout - no complex styling for now
-	content := header + "\n" + separator + "\n" + columns + "\n\n" + statusBar
+	// Put header at bottom for testing
+	content := columns + "\n" + separator + "\n" + header + "\n" + statusBar
 	
 	debugLog("[RENDER] Viewport-based rendering complete\n")
 	
