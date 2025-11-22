@@ -39,7 +39,7 @@ func (m Model) renderKanbanView() string {
 	columns := m.renderViewportColumns()
 	
 	// Simple status bar with all commands
-	statusBar := "n: new • e: edit • p: priority • d: delete • shift+←/→: move • j/k: navigate • q: quit"
+	statusBar := "n: new • e: edit • p: priority • d: delete • shift+←/→: move • ?: help • q: quit"
 	
 	// Simple layout - no complex styling for now
 	content := header + "\n\n" + columns + "\n\n" + statusBar
@@ -294,39 +294,35 @@ func (m Model) renderHelpView() string {
 Cainban - Terminal Kanban Board
 
 NAVIGATION:
-  h, ←     Move to left column
-  l, →     Move to right column  
-  j, ↓     Navigate down in current column (auto-scroll)
-  k, ↑     Navigate up in current column (auto-scroll)
-  PgUp     Scroll viewport up
-  PgDn     Scroll viewport down
-  Home     Go to top of column
-  End      Go to bottom of column
+  h, ←         Move to left column
+  l, →         Move to right column  
+  j, ↓         Navigate down in current column
+  k, ↑         Navigate up in current column
+  PgUp/PgDn    Scroll viewport
+  Home/End     Jump to top/bottom
 
 TASK ACTIONS:
-  enter    Move task to next status (todo → doing → done)
-  n        Create new task
-  e        Edit selected task
-  d        Delete selected task
+  n            Create new task (with priority)
+  e            Edit selected task (title & description)
+  p            Cycle task priority (none → low → medium → high → critical)
+  d            Delete task (soft delete, can restore)
+  D            Hard delete task (permanent)
+  Shift+←      Move task to previous column
+  Shift+→      Move task to next column
   
 OTHER:
-  r        Refresh tasks from database
-  ?        Show/hide this help
-  q, ^C    Quit application
+  r            Refresh tasks from database
+  ?            Show/hide this help
+  q, Ctrl+C    Quit application
 
-COLUMNS:
-  📝 Todo    Tasks that need to be done
-  🔄 Doing   Tasks currently in progress  
-  ✅ Done    Completed tasks
+PRIORITY LEVELS:
+  none         No priority
+  low          ● Low priority
+  medium       ●● Medium priority 
+  high         ●●● High priority
+  critical     🔥 Critical priority
 
-PRIORITY INDICATORS:
-   (none)   No priority set
-  ● (green) Low priority
-  ●● (yellow) Medium priority 
-  ●●● (red) High priority
-  🔥 (red) Critical priority
-
-Press any key to return to the kanban board...
+Press ? or Esc to return to the kanban board...
 `
 
 	return m.styles.Base.Render(
