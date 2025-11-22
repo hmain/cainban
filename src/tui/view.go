@@ -73,7 +73,15 @@ func (m Model) renderSearchView() string {
 	b.WriteString("  ║                      🔍 SEARCH TASKS                       ║\n")
 	b.WriteString("  ╠════════════════════════════════════════════════════════════╣\n")
 	b.WriteString("  ║                                                            ║\n")
-	b.WriteString("  ║  " + m.searchInput.View() + strings.Repeat(" ", 56-len(m.searchInput.View())) + "║\n")
+	
+	// Render input with proper padding
+	inputView := m.searchInput.View()
+	padding := 56 - len(inputView)
+	if padding < 0 {
+		padding = 0
+	}
+	b.WriteString("  ║  " + inputView + strings.Repeat(" ", padding) + "║\n")
+	
 	b.WriteString("  ║                                                            ║\n")
 	b.WriteString("  ╠════════════════════════════════════════════════════════════╣\n")
 	b.WriteString("  ║  Enter: Search  •  Esc: Cancel                             ║\n")
