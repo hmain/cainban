@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 
+	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/board"
 	"github.com/hmain/cainban/src/systems/store"
 	"github.com/hmain/cainban/src/systems/task"
@@ -90,10 +91,23 @@ func (s *Server) getServer(_ *http.Request) *mcp.Server {
 // entrypoint (cmd/cainban-lambda) mount this same handler, so the transport
 // behavior is identical in-process and on Lambda. A fresh *mcp.Server is built
 // per request via getServer, keeping the handler safe for concurrent requests.
+//
+// This handler is UNAUTHENTICATED (single-tenant, empty partition prefix) — it
+// is what the local `cainban mcp --http` loopback server uses for dev. The
+// authenticated, repo-scoped multi-tenant path is HandlerWithAuth.
 func (s *Server) Handler() http.Handler {
 	return mcp.NewStreamableHTTPHandler(s.getServer, &mcp.StreamableHTTPOptions{
 		Stateless: true,
 	})
+}
+
+// HandlerWithAuth wraps Handler with signature-first JWT auth + repo-scoped
+// tenant resolution (see AuthMiddleware). This is the Phase 3 entrypoint for the
+// public Lambda: every request must present a valid bearer token authorizing
+// the target repo, and the resolved tenant's partition prefix isolates its data
+// in DynamoDB. There is no unauthenticated path through this handler.
+func (s *Server) HandlerWithAuth(resolver *auth.Resolver) http.Handler {
+	return AuthMiddleware(resolver, s.Handler())
 }
 
 // ServeHTTP serves the stateless Streamable HTTP transport on addr, bound to
@@ -142,6 +156,20 @@ func loopbackOnly(addr string) (string, error) {
 // handlers below depend only on the store.TaskStore interface, so swapping the
 // backend requires no handler change.
 //
+// # Per-request tenant (Phase 3)
+//
+// When the request context carries an AUTHORIZED tenant (set by AuthMiddleware
+// after signature-first JWT validation), the DynamoDB store is built with that
+// tenant's partition prefix ("REPO#<owner>/<repo>#") via
+// store.OpenTaskForTenant. Every key the store touches is then under that
+// prefix, so a request authorized for repo A can never read or write repo B's
+// items — isolation is structural, not a filter. The DynamoDB client itself is
+// cached and reused across requests; only the prefix varies per tenant.
+//
+// The stdio/local CLI path sets no tenant, so the prefix is empty and behavior
+// is the single-tenant Phase 2 default (and SQLite ignores the prefix
+// entirely).
+//
 // Board selection is fully explicit per request (no reliance on the
 // ~/.cainban/current-board file):
 //   - boardName selects which board DATABASE FILE to open under the SQLite
@@ -149,12 +177,18 @@ func loopbackOnly(addr string) (string, error) {
 //     ignored (a single table holds every board partition).
 //   - Each board DB has its own boards table whose primary board is id 1, so
 //     the numeric board ROW defaults to 1 in the handlers.
-func (s *Server) resolveTaskSystem(boardName string) (store.TaskStore, func(), error) {
+func (s *Server) resolveTaskSystem(ctx context.Context, boardName string) (store.TaskStore, func(), error) {
 	if boardName == "" {
 		boardName = "default"
 	}
 	dbPath := s.boardSystem.GetBoardPath(boardName)
-	ts, closer, err := store.OpenTask(context.Background(), dbPath)
+
+	partitionPrefix := ""
+	if t, ok := tenantFromContext(ctx); ok && t != nil {
+		partitionPrefix = t.PartitionPrefix
+	}
+
+	ts, closer, err := store.OpenTaskForTenant(context.Background(), dbPath, partitionPrefix)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open board %q: %w", boardName, err)
 	}
@@ -248,7 +282,7 @@ type ChangeBoardArgs struct {
 // Tool handlers. Each resolves its board database per request.
 
 func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest, args CreateTaskArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -284,7 +318,7 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest,
 }
 
 func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, args ListTasksArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -349,7 +383,7 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("invalid status: %s", args.Status)
 	}
 
-	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -377,7 +411,7 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 }
 
 func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -404,7 +438,7 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 		return nil, nil, fmt.Errorf("invalid priority level")
 	}
 
-	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -434,7 +468,7 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 }
 
 func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
 	}

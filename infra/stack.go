@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awscognito"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
@@ -46,6 +47,51 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	})
 
+	// --- Cognito user pool (identity provider) ---------------------------
+	//
+	// A self-contained Cognito user pool issues the JWTs the Lambda validates
+	// (signature-first) on every request. Chosen over wiring an existing IdP
+	// because it is self-contained and frugal for this dev account (no cost at
+	// rest, generous free tier) and needs no external federation to stand up.
+	// It is SWAPPABLE: the Lambda only needs an OIDC issuer + audience + JWKS
+	// URL (CAINBAN_AUTH_* env vars), so pointing at an existing IdP later is a
+	// config change, not a code change.
+	//
+	// Repo AUTHORIZATION is carried in a custom `repos` claim (a space/JSON
+	// list of owner/repo the user may touch) plus an optional `default_repo`.
+	// These are populated by the pool (e.g. a pre-token-generation trigger or
+	// group mapping) — the Lambda never trusts a repo the token does not grant.
+	userPool := awscognito.NewUserPool(stack, jsii.String("UserPool"), &awscognito.UserPoolProps{
+		UserPoolName:      jsii.String("cainban-users"),
+		SelfSignUpEnabled: jsii.Bool(false),
+		SignInAliases: &awscognito.SignInAliases{
+			Email: jsii.Bool(true),
+		},
+		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
+		StandardAttributes: &awscognito.StandardAttributes{
+			Email: &awscognito.StandardAttribute{Required: jsii.Bool(true), Mutable: jsii.Bool(true)},
+		},
+		CustomAttributes: &map[string]awscognito.ICustomAttribute{
+			// Repos the user is authorized for; surfaced into the access/ID
+			// token as a validated claim consumed by the Lambda's authorizer.
+			"repos":        awscognito.NewStringAttribute(&awscognito.StringAttributeProps{Mutable: jsii.Bool(true)}),
+			"default_repo": awscognito.NewStringAttribute(&awscognito.StringAttributeProps{Mutable: jsii.Bool(true)}),
+		},
+	})
+
+	userPoolClient := userPool.AddClient(jsii.String("McpClient"), &awscognito.UserPoolClientOptions{
+		UserPoolClientName: jsii.String("cainban-mcp-client"),
+		AuthFlows: &awscognito.AuthFlow{
+			UserPassword: jsii.Bool(true),
+			UserSrp:      jsii.Bool(true),
+		},
+		GenerateSecret: jsii.Bool(false),
+	})
+
+	// Issuer for a Cognito user pool: the standard cognito-idp URL.
+	issuer := awscdk.Fn_Sub(jsii.String("https://cognito-idp.${AWS::Region}.amazonaws.com/${PoolId}"),
+		&map[string]*string{"PoolId": userPool.UserPoolId()})
+
 	// --- Lambda function --------------------------------------------------
 	//
 	// provided.al2023 + arm64 running the Go bootstrap built from
@@ -63,6 +109,11 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			"CAINBAN_BACKEND":    jsii.String("dynamodb"),
 			"CAINBAN_DDB_TABLE":  table.TableName(),
 			"CAINBAN_DDB_REGION": stack.Region(),
+			// Phase 3 auth config: signature-first JWT validation against this
+			// Cognito user pool. The JWKS URL is derived from the issuer in the
+			// handler when unset; audience is the app client id.
+			"CAINBAN_AUTH_ISSUER":   issuer,
+			"CAINBAN_AUTH_AUDIENCE": userPoolClient.UserPoolClientId(),
 		},
 		// Build the Go binary into the asset directory. The command runs in a
 		// local shell (no Docker) via TryBundle returning false is not used;
@@ -88,18 +139,37 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Resources: &[]*string{table.TableArn()},
 	}))
 
-	// --- Function URL (UNAUTHENTICATED — TEMPORARY) -----------------------
+	// --- Function URL (AUTHENTICATED — Phase 3) --------------------------
 	//
-	// Phase 2 exposes the MCP endpoint with NO auth so a developer can smoke
-	// test it. This is NOT for production and NOT multi-tenant: Phase 3 adds
-	// auth-gated, repo-scoped access. CORS is owned by the URL config (not the
-	// handler) to avoid duplicate Access-Control-Allow-Origin headers.
+	// Phase 3 REPLACES the Phase 2 AuthType NONE. Two layers now gate the
+	// endpoint:
+	//   1. EDGE: AuthType AWS_IAM — the Function URL rejects any request that is
+	//      not SigV4-signed by an allowed principal, so there is no anonymous
+	//      reachability (the "no open endpoint remains" requirement).
+	//   2. APPLICATION: the Lambda validates a Cognito JWT signature-first and
+	//      resolves the repo-scoped tenant before any store access (identity +
+	//      authorization). Bearer JWT is carried in the Authorization header.
+	//
+	// Alternative considered: an API Gateway HTTP API with a Cognito JWT
+	// authorizer offloads signature validation to the managed authorizer. It was
+	// NOT chosen because (a) the signature-first ordering is the security core
+	// of this phase and must be unit-testable locally with a mock JWKS — an
+	// in-Lambda validator is; a managed authorizer is not — and (b) it adds an
+	// API Gateway surface + stage for no functional gain over the Function URL
+	// the Phase 2 transport already targets. The in-Lambda validator keeps the
+	// IdP swappable via env vars alone.
 	fnURL := fn.AddFunctionUrl(&awslambda.FunctionUrlOptions{
-		AuthType: awslambda.FunctionUrlAuthType_NONE,
+		AuthType: awslambda.FunctionUrlAuthType_AWS_IAM,
 		Cors: &awslambda.FunctionUrlCorsOptions{
 			AllowedOrigins: jsii.Strings("*"),
 			AllowedMethods: &[]awslambda.HttpMethod{awslambda.HttpMethod_ALL},
-			AllowedHeaders: jsii.Strings("content-type", "mcp-session-id", "mcp-protocol-version"),
+			// Authorization carries the bearer JWT; the SigV4 headers are needed
+			// for the AWS_IAM edge; X-Cainban-Repo names the target repo.
+			AllowedHeaders: jsii.Strings(
+				"content-type", "mcp-session-id", "mcp-protocol-version",
+				"authorization", "x-cainban-repo",
+				"x-amz-date", "x-amz-security-token", "x-amz-content-sha256",
+			),
 		},
 	})
 
@@ -117,11 +187,19 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// --- Outputs ----------------------------------------------------------
 	awscdk.NewCfnOutput(stack, jsii.String("FunctionUrl"), &awscdk.CfnOutputProps{
 		Value:       fnURL.Url(),
-		Description: jsii.String("Public (UNAUTHENTICATED) MCP Streamable-HTTP endpoint — dev only, Phase 3 adds auth"),
+		Description: jsii.String("MCP Streamable-HTTP endpoint — AWS_IAM edge auth + in-Lambda Cognito JWT (Phase 3, authenticated)"),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("TableName"), &awscdk.CfnOutputProps{
 		Value:       table.TableName(),
 		Description: jsii.String("DynamoDB table backing cainban"),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("UserPoolId"), &awscdk.CfnOutputProps{
+		Value:       userPool.UserPoolId(),
+		Description: jsii.String("Cognito user pool issuing MCP JWTs"),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("UserPoolClientId"), &awscdk.CfnOutputProps{
+		Value:       userPoolClient.UserPoolClientId(),
+		Description: jsii.String("Cognito app client id (JWT audience)"),
 	})
 
 	return stack

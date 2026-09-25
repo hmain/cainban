@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -69,21 +70,68 @@ func openSQLite(path string) (TaskStore, func() error, error) {
 }
 
 func openDynamo(ctx context.Context) (TaskStore, func() error, error) {
+	return openDynamoWithPrefix(ctx, "")
+}
+
+// openDynamoWithPrefix builds a DynamoDB-backed store scoped to partitionPrefix
+// (Phase 3: "REPO#<owner>/<repo>#"). Empty prefix is the single-tenant Phase 2
+// behavior. The AWS config + DynamoDB client are cached process-wide (see
+// dynamoClient) and reused across requests; only the prefix varies per tenant,
+// which is the cheap per-request tenant switch the Lambda path relies on.
+func openDynamoWithPrefix(ctx context.Context, partitionPrefix string) (TaskStore, func() error, error) {
+	client, err := dynamoClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	table := strings.TrimSpace(os.Getenv(EnvDDBTable))
+	if table == "" {
+		table = dynamo.DefaultTableName
+	}
+	// No handle to close for the DynamoDB client (it is shared/cached).
+	return dynamo.NewWithPrefix(client, table, partitionPrefix), func() error { return nil }, nil
+}
+
+// dynamoClientCache memoizes the AWS config + DynamoDB client so per-request,
+// per-tenant store construction does not reload credentials or rebuild the HTTP
+// client on every call. Safe for concurrent use.
+var (
+	dynamoClientMu    sync.Mutex
+	dynamoClientCache *dynamodb.Client
+)
+
+func dynamoClient(ctx context.Context) (*dynamodb.Client, error) {
+	dynamoClientMu.Lock()
+	defer dynamoClientMu.Unlock()
+	if dynamoClientCache != nil {
+		return dynamoClientCache, nil
+	}
 	var opts []func(*awsconfig.LoadOptions) error
 	if region := strings.TrimSpace(os.Getenv(EnvDDBRegion)); region != "" {
 		opts = append(opts, awsconfig.WithRegion(region))
 	}
 	cfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load AWS config: %w", err)
+		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
-	client := dynamodb.NewFromConfig(cfg)
-	table := strings.TrimSpace(os.Getenv(EnvDDBTable))
-	if table == "" {
-		table = dynamo.DefaultTableName
+	dynamoClientCache = dynamodb.NewFromConfig(cfg)
+	return dynamoClientCache, nil
+}
+
+// OpenTaskForTenant returns a TaskStore scoped to a tenant's DynamoDB partition
+// prefix (Phase 3). It is only meaningful for the DynamoDB backend; for SQLite
+// (local single-tenant dev) the prefix is ignored and it behaves like OpenTask.
+// The caller MUST call the returned close func.
+func OpenTaskForTenant(ctx context.Context, sqlitePath, partitionPrefix string) (TaskStore, func() error, error) {
+	switch Selected() {
+	case BackendDynamoDB:
+		return openDynamoWithPrefix(ctx, partitionPrefix)
+	case BackendSQLite:
+		// Local dev is single-tenant; the prefix has no meaning for SQLite.
+		return openSQLite(sqlitePath)
+	default:
+		return nil, nil, fmt.Errorf("unknown %s=%q (want %q or %q)",
+			EnvBackend, Selected(), BackendSQLite, BackendDynamoDB)
 	}
-	// No handle to close for the DynamoDB client.
-	return dynamo.New(client, table), func() error { return nil }, nil
 }
 
 // Compile-time assertions that both backends satisfy TaskStore.
