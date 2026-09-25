@@ -30,6 +30,15 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
   `custom:repos` / `custom:default_repo` attributes when the table has nothing,
   and **failing closed** (no claim) on a table error (see
   [Granting a user access to a repo](#granting-a-user-access-to-a-repo))
+- **Connect API Lambda** `cainban-connect` (**Phase 4, P4.3**) — a SEPARATE
+  pure-Go arm64 Lambda built from [`cmd/cainban-connect`](../cmd/cainban-connect)
+  serving the human GitHub-connect routes (`GET /connect/github/start`,
+  `GET /connect/github/callback`, `POST`/`DELETE /connect/repo`,
+  `GET /connect/repos`) behind the SAME signature-first Cognito JWT check. It
+  identifies the connecting user via the App's user-OAuth leg, verifies repo
+  access server-side (`github.VerifyRepoAccess`), and writes/revokes grants in
+  the `cainban-grants` table. Own Function URL (`AWS_IAM` edge). See
+  [Connect API (Phase 4, P4.3)](#connect-api-phase-4-p43).
 - **Lambda Function URL** — **`AuthType: AWS_IAM`** (edge auth; no anonymous
   reachability)
 - **IAM** least-privilege: the MCP Lambda gets only `GetItem`, `PutItem`,
@@ -37,8 +46,14 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
   `secretsmanager:GetSecretValue` (+ `DescribeSecret`) on the
   `cainban/github-app` secret ARN alone (Phase 4, for the P4.3 connect flow);
   the pre-token trigger gets only `GetItem` + `Query` on the `cainban-grants`
-  table ARN (read only, no access to the data table, and no secret access)
-- **CloudWatch** log group `/aws/lambda/cainban-mcp` (30-day retention)
+  table ARN (read only, no access to the data table, and no secret access); the
+  **connect** Lambda gets `GetItem` + `Query` + `PutItem` + `DeleteItem` on the
+  `cainban-grants` table ARN (read **and write** — it persists verified grants
+  and the linked identity) plus `secretsmanager:GetSecretValue`
+  (+ `DescribeSecret`) on the `cainban/github-app` secret ARN, and — like the
+  pre-token trigger — **no access to the `cainban` data table**
+- **CloudWatch** log groups `/aws/lambda/cainban-mcp`,
+  `/aws/lambda/cainban-pretoken`, `/aws/lambda/cainban-connect` (30-day retention)
 
 > **The endpoint is authenticated (Phase 3).** Two layers gate it: the Function
 > URL `AWS_IAM` edge (SigV4) and, in the Lambda, a **signature-first** Cognito
@@ -67,17 +82,18 @@ Lambda handler and the infrastructure are both Go.
 
 ## Build the Lambda bundles FIRST
 
-The CDK stack packages `../.build/lambda` (the MCP handler) and
-`../.build/pretoken` (the Cognito pre-token trigger) via `Code.fromAsset`. Build
-both before any synth/deploy:
+The CDK stack packages `../.build/lambda` (the MCP handler), `../.build/pretoken`
+(the Cognito pre-token trigger) and `../.build/connect` (the Phase 4 connect API)
+via `Code.fromAsset`. Build all three before any synth/deploy:
 
 ```sh
 # from the repo root
-make bundles          # builds .build/lambda + .build/pretoken
+make bundles          # builds .build/lambda + .build/pretoken + .build/connect
 # or individually:
 make lambda           # => .build/lambda/bootstrap
 make pretoken         # => .build/pretoken/bootstrap
-# both: CGO_ENABLED=0 GOOS=linux GOARCH=arm64, lambda.norpc
+make connect          # => .build/connect/bootstrap
+# all: CGO_ENABLED=0 GOOS=linux GOARCH=arm64, lambda.norpc
 ```
 
 ## Synthesize (safe — no cloud calls)
@@ -105,10 +121,13 @@ cdk diff
 cdk deploy CainbanPhase2Stack
 ```
 
-After deploy, the stack outputs `FunctionUrl` (the MCP endpoint), `TableName`,
-`GrantsTableName`, `GitHubAppSecretName` (the placeholder GitHub App secret to
-fill — see [`docs/github-app-setup.md`](../docs/github-app-setup.md)),
-`UserPoolId` and `UserPoolClientId`. Smoke test with a `tools/list` call and one
+After deploy, the stack outputs `FunctionUrl` (the MCP endpoint),
+`ConnectFunctionUrl` (the Phase 4 connect API endpoint — its
+`connect/github/callback` path is what the operator sets as the GitHub App
+Callback URL, see [`docs/github-app-setup.md`](../docs/github-app-setup.md)),
+`TableName`, `GrantsTableName`, `GitHubAppSecretName` (the placeholder GitHub App
+secret to fill), `UserPoolId` and `UserPoolClientId`. Smoke test with a
+`tools/list` call and one
 tool call (SigV4-sign the request for the `AWS_IAM` edge, and send a Cognito
 `Authorization: Bearer <JWT>` for the app layer), then verify the Lambda
 `LastModified` advanced.
@@ -252,9 +271,10 @@ Lambda sets all three via the CDK `Environment` block.
 
 ## GitHub App credentials (Phase 4, P4.2)
 
-The connect/verify flow (P4.3, hosted on the MCP Lambda) loads the GitHub App
-credentials from **AWS Secrets Manager at runtime** — never from code or the
-CDK. The CDK creates a **placeholder** secret and grants least-privilege read;
+The connect/verify flow (P4.3, hosted on the **separate `cainban-connect`
+Lambda**) loads the GitHub App credentials from **AWS Secrets Manager at
+runtime** — never from code or the CDK. The CDK creates a **placeholder** secret
+and grants least-privilege read to both the MCP Lambda and the connect Lambda;
 an operator fills it after deploy.
 
 | Resource / env var | Meaning |
@@ -270,6 +290,55 @@ principal's access to `owner/repo` **server-side** before a grant is written. No
 secret value is in the repo, code, or CDK template. **Full operator procedure to
 register the App and load the secret:**
 [`docs/github-app-setup.md`](../docs/github-app-setup.md).
+
+## Connect API (Phase 4, P4.3)
+
+The `cainban-connect` Lambda ([`cmd/cainban-connect`](../cmd/cainban-connect),
+handler in [`src/systems/connect`](../src/systems/connect)) is the human
+GitHub-connect API — a SEPARATE function from `cainban-mcp` so its IAM and blast
+radius stay minimal (grants read/write + secret read; **no data-table access**).
+
+**Routes** (all validate the Cognito JWT **signature-first**; unauth → `401`):
+
+| Route | Purpose |
+| --- | --- |
+| `GET /connect/github/start` | issue a sub-bound anti-CSRF state, `302` to the GitHub OAuth authorize URL |
+| `GET /connect/github/callback?code&state` | validate state, exchange `code` for the user's GitHub login, persist it for the validated sub |
+| `POST /connect/repo {owner,repo}` | require a linked identity (`409` otherwise), `VerifyRepoAccess` against the OAuth login, write grant on `true`, `403` on `false`, fail closed on error |
+| `DELETE /connect/repo {owner,repo}` | revoke the grant for the validated sub |
+| `GET /connect/repos` | list only the caller's grants + linked login |
+
+**Compute choice — Function URL (not API Gateway).** Same rationale as the MCP
+endpoint: the security core is the **in-Lambda** signature-first Cognito JWT
+validation (unit-testable with a mock JWKS), and a Function URL adds no managed
+surface. Edge is `AuthType: AWS_IAM`, so the browser OAuth hop is SigV4-signed by
+an authenticated client — no anonymous reachability.
+
+**Anti-CSRF state.** `state` is an HMAC-SHA256 token over
+`"<sub>|<expiryUnix>|<nonce>"`, keyed by a value **derived from the App's OAuth
+client secret** (so the key lives only in Secrets Manager and rotates with it).
+It is stateless, **sub-bound** (the callback rejects a state whose sub ≠ the
+caller's validated sub), expiring (10 min) and unforgeable.
+
+**Identity vs authorization.** IDENTITY (the GitHub login) comes ONLY from the
+OAuth leg; AUTHORIZATION (may this sub touch owner/repo) comes ONLY from
+`VerifyRepoAccess` against that login. A client claim is never sufficient; a
+verify error fails **closed** (no grant).
+
+**Env vars** (set by the CDK): `CAINBAN_AUTH_ISSUER`, `CAINBAN_AUTH_AUDIENCE`
+(same Cognito pool as MCP), `CAINBAN_GITHUB_APP_SECRET`, `CAINBAN_GRANTS_TABLE`,
+`CAINBAN_GRANTS_REGION`. Optional: `CAINBAN_CONNECT_REDIRECT_URI` (echoed to
+GitHub's OAuth), `CAINBAN_CONNECT_SUCCESS_URL` (browser redirect after a
+successful link).
+
+**IAM (least privilege):** `dynamodb:GetItem/Query/PutItem/DeleteItem` on the
+`cainban-grants` table ARN alone + `secretsmanager:GetSecretValue`
+(+ `DescribeSecret`) on the `cainban/github-app` secret ARN. No access to the
+`cainban` data table.
+
+**Operator callback URL:** after deploy, set the GitHub App's Callback URL to the
+`ConnectFunctionUrl` output **plus** `connect/github/callback` (see
+[`docs/github-app-setup.md`](../docs/github-app-setup.md) § 5a).
 
 ## DynamoDB table / key design
 

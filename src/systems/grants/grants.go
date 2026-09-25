@@ -58,6 +58,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
@@ -77,6 +78,9 @@ const (
 	metaSK          = "META"
 	identitySKGH    = "IDENTITY#github"
 	defaultRepoAttr = "default_repo"
+	// githubLoginAttr holds the GitHub login the subject authorized via the
+	// P4.3 OAuth leg on the IDENTITY#github item.
+	githubLoginAttr = "github_login"
 )
 
 // API is the subset of the DynamoDB client this package uses. Declaring it as
@@ -207,6 +211,39 @@ func (s *Store) GetDefaultRepo(ctx context.Context, subject string) (string, err
 	return av.Value, nil
 }
 
+// GetIdentity returns the GitHub login the subject linked via the P4.3 OAuth
+// leg (the IDENTITY#github item), or "" when none is linked. A DynamoDB error
+// is returned unmasked so the caller can fail closed. An empty subject returns
+// ("", nil).
+//
+// This login is the identity GitHub vouched for after the subject authorized
+// the App — it is what VerifyRepoAccess is run against and what a grant is tied
+// to. It is NEVER a client-supplied value: only the callback, having exchanged
+// a real OAuth code, writes it via PutIdentity.
+func (s *Store) GetIdentity(ctx context.Context, subject string) (string, error) {
+	if subject == "" {
+		return "", nil
+	}
+	out, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(s.table),
+		Key: map[string]ddbtypes.AttributeValue{
+			"PK": &ddbtypes.AttributeValueMemberS{Value: subjectPK(subject)},
+			"SK": &ddbtypes.AttributeValueMemberS{Value: identitySKGH},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("grants: get identity: %w", err)
+	}
+	if len(out.Item) == 0 {
+		return "", nil
+	}
+	av, ok := out.Item[githubLoginAttr].(*ddbtypes.AttributeValueMemberS)
+	if !ok {
+		return "", nil
+	}
+	return av.Value, nil
+}
+
 // --- writes ----------------------------------------------------------------
 //
 // PutGrant / DeleteGrant / SetDefaultRepo are not used by the P4.1 pre-token
@@ -296,6 +333,32 @@ func (s *Store) SetDefaultRepo(ctx context.Context, subject, repo string) error 
 	})
 	if err != nil {
 		return fmt.Errorf("grants: set default repo: %w", err)
+	}
+	return nil
+}
+
+// PutIdentity records the GitHub login a subject authorized via the P4.3 OAuth
+// leg, on the IDENTITY#github item. It is written ONLY by the connect callback
+// after a real code<->login exchange — never from a client-supplied value.
+// Idempotent (a repeated put overwrites the same item, e.g. re-linking).
+func (s *Store) PutIdentity(ctx context.Context, subject, githubLogin string) error {
+	if subject == "" {
+		return errors.New("grants: put identity: empty subject")
+	}
+	login := strings.TrimSpace(githubLogin)
+	if login == "" {
+		return errors.New("grants: put identity: empty github login")
+	}
+	_, err := s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(s.table),
+		Item: map[string]ddbtypes.AttributeValue{
+			"PK":            &ddbtypes.AttributeValueMemberS{Value: subjectPK(subject)},
+			"SK":            &ddbtypes.AttributeValueMemberS{Value: identitySKGH},
+			githubLoginAttr: &ddbtypes.AttributeValueMemberS{Value: login},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("grants: put identity: %w", err)
 	}
 	return nil
 }

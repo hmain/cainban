@@ -253,3 +253,59 @@ func TestNewDefaultsTableName(t *testing.T) {
 		t.Fatalf("table = %q, want %q", s.table, DefaultTableName)
 	}
 }
+
+// TestIdentity covers the linked-GitHub-identity item the P4.3 connect callback
+// writes and the connect API reads.
+func TestIdentity(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeDDB()
+	s := New(f, "cainban-grants")
+
+	// Unset -> "".
+	if login, err := s.GetIdentity(ctx, testSubject); err != nil || login != "" {
+		t.Fatalf("unset identity: got (%q,%v), want (\"\",nil)", login, err)
+	}
+	// Empty subject -> ("",nil), no call.
+	if login, err := s.GetIdentity(ctx, ""); err != nil || login != "" {
+		t.Fatalf("empty subject identity: got (%q,%v), want (\"\",nil)", login, err)
+	}
+
+	// Put, read back.
+	if err := s.PutIdentity(ctx, testSubject, "octocat"); err != nil {
+		t.Fatalf("put identity: %v", err)
+	}
+	if login, err := s.GetIdentity(ctx, testSubject); err != nil || login != "octocat" {
+		t.Fatalf("get identity: got (%q,%v), want (octocat,nil)", login, err)
+	}
+
+	// Re-link overwrites.
+	if err := s.PutIdentity(ctx, testSubject, "  hubber  "); err != nil {
+		t.Fatalf("re-link: %v", err)
+	}
+	if login, _ := s.GetIdentity(ctx, testSubject); login != "hubber" {
+		t.Fatalf("re-linked identity = %q, want hubber (trimmed)", login)
+	}
+
+	// Empty subject / empty login are rejected before any write.
+	if err := s.PutIdentity(ctx, "", "x"); err == nil {
+		t.Fatal("PutIdentity with empty subject should error")
+	}
+	if err := s.PutIdentity(ctx, testSubject, "   "); err == nil {
+		t.Fatal("PutIdentity with empty login should error")
+	}
+}
+
+// TestIdentityErrorsUnmasked proves the fail-closed contract for identity I/O.
+func TestIdentityErrorsUnmasked(t *testing.T) {
+	ctx := context.Background()
+	boom := errors.New("dynamodb unavailable")
+	f := &fakeDDB{items: map[string]map[string]ddbtypes.AttributeValue{}, failErr: boom}
+	s := New(f, "cainban-grants")
+
+	if _, err := s.GetIdentity(ctx, testSubject); err == nil {
+		t.Fatal("GetIdentity swallowed a DynamoDB error")
+	}
+	if err := s.PutIdentity(ctx, testSubject, "octocat"); err == nil {
+		t.Fatal("PutIdentity swallowed a DynamoDB error")
+	}
+}
