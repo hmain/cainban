@@ -88,6 +88,52 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		GenerateSecret: jsii.Bool(false),
 	})
 
+	// --- Pre-token-generation trigger -----------------------------------
+	//
+	// Cognito stores a user's repo grants in the custom:repos / custom:default_repo
+	// attributes, but it does NOT surface custom attributes as the TOP-LEVEL
+	// `repos` / `default_repo` claims the auth validator (src/systems/auth)
+	// authorizes against — its tokens carry them as `custom:repos` (a string).
+	// This Lambda runs during token generation, reads those custom attributes,
+	// and returns claimsToAddOrOverride mapping them onto the top-level `repos`
+	// (a JSON-array-encoded string) + `default_repo` claims the validator reads.
+	// Without it, no user's grants ever reach the validated claim and every
+	// request 403s. It is a pure reflector of the user's stored attributes and
+	// never invents a grant; it needs no permissions beyond basic CloudWatch
+	// Logs (it reads only the attributes Cognito hands it in the event).
+	//
+	// Build the bootstrap into ../.build/pretoken (see `make pretoken`), mirroring
+	// the MCP Lambda's ../.build/lambda asset. Same runtime/arch: provided.al2023
+	// + arm64 + pure-Go bootstrap.
+	preTokenFn := awslambda.NewFunction(stack, jsii.String("PreTokenFunction"), &awslambda.FunctionProps{
+		FunctionName: jsii.String("cainban-pretoken"),
+		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Handler:      jsii.String("bootstrap"),
+		MemorySize:   jsii.Number(128),
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(5)),
+		Code:         awslambda.Code_FromAsset(jsii.String("../.build/pretoken"), nil),
+	})
+
+	// Attach as the pool's PreTokenGeneration trigger. LambdaVersion V1_0 emits
+	// the overrides as top-level ID-token claims via ClaimsToAddOrOverride
+	// (map[string]string) — the string-valued shape the validator's reposClaim
+	// decoder consumes. AddTrigger also grants Cognito permission to invoke the
+	// function (a resource-based policy), so no manual permission is needed.
+	userPool.AddTrigger(
+		awscognito.UserPoolOperation_PRE_TOKEN_GENERATION(),
+		preTokenFn,
+		awscognito.LambdaVersion_V1_0,
+	)
+
+	// Explicit CloudWatch log group for the trigger (controlled retention, and a
+	// stack-owned resource rather than the implicit /aws/lambda/<name> group).
+	awslogs.NewLogGroup(stack, jsii.String("PreTokenLogGroup"), &awslogs.LogGroupProps{
+		LogGroupName:  jsii.String("/aws/lambda/cainban-pretoken"),
+		Retention:     awslogs.RetentionDays_ONE_MONTH,
+		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
+	})
+
 	// Issuer for a Cognito user pool: the standard cognito-idp URL.
 	issuer := awscdk.Fn_Sub(jsii.String("https://cognito-idp.${AWS::Region}.amazonaws.com/${PoolId}"),
 		&map[string]*string{"PoolId": userPool.UserPoolId()})

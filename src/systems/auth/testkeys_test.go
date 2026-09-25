@@ -49,12 +49,20 @@ type tokenClaims struct {
 // sign builds a signed JWT with the given alg (default RS256) and claims.
 func (ts *testSigner) sign(t *testing.T, alg string, c tokenClaims) string {
 	t.Helper()
+	pb, _ := json.Marshal(c)
+	return ts.signPayload(t, alg, pb)
+}
+
+// signPayload builds a signed JWT from an already-marshaled payload, so a test
+// can sign an ALTERNATE claim shape (e.g. one whose `repos` is a string, as the
+// Cognito pre-token trigger emits) with the same valid signature machinery.
+func (ts *testSigner) signPayload(t *testing.T, alg string, pb []byte) string {
+	t.Helper()
 	if alg == "" {
 		alg = "RS256"
 	}
 	header := map[string]string{"alg": alg, "kid": ts.kid, "typ": "JWT"}
 	hb, _ := json.Marshal(header)
-	pb, _ := json.Marshal(c)
 	signingInput := b64.EncodeToString(hb) + "." + b64.EncodeToString(pb)
 
 	var digest []byte

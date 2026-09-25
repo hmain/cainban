@@ -9,6 +9,11 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
   repo-scoped tenancy**)
 - **Cognito user pool** `cainban-users` + app client — issues the JWTs the
   Lambda validates; carries the `repos` / `default_repo` authorization claims
+- **Pre-token-generation trigger** `cainban-pretoken` — a pure-Go arm64 Lambda
+  attached to the user pool that maps each user's `custom:repos` /
+  `custom:default_repo` attributes into the **top-level** `repos` /
+  `default_repo` claims the validator authorizes against (see
+  [Granting a user access to a repo](#granting-a-user-access-to-a-repo))
 - **Lambda Function URL** — **`AuthType: AWS_IAM`** (edge auth; no anonymous
   reachability)
 - **IAM** least-privilege: only `GetItem`, `PutItem`, `UpdateItem`,
@@ -40,15 +45,19 @@ Lambda handler and the infrastructure are both Go.
 - AWS CDK CLI v2 (`npm i -g aws-cdk`, or a local prefix)
 - AWS credentials for profile `aws-test-hamin`
 
-## Build the Lambda bundle FIRST
+## Build the Lambda bundles FIRST
 
-The CDK stack packages `../.build/lambda` via `Code.fromAsset`. Build it before
-any synth/deploy:
+The CDK stack packages `../.build/lambda` (the MCP handler) and
+`../.build/pretoken` (the Cognito pre-token trigger) via `Code.fromAsset`. Build
+both before any synth/deploy:
 
 ```sh
 # from the repo root
-make lambda
-# => .build/lambda/bootstrap  (CGO_ENABLED=0 GOOS=linux GOARCH=arm64, lambda.norpc)
+make bundles          # builds .build/lambda + .build/pretoken
+# or individually:
+make lambda           # => .build/lambda/bootstrap
+make pretoken         # => .build/pretoken/bootstrap
+# both: CGO_ENABLED=0 GOOS=linux GOARCH=arm64, lambda.norpc
 ```
 
 ## Synthesize (safe — no cloud calls)
@@ -105,6 +114,60 @@ can only narrow within the granted set, never escalate.
 **Swapping the IdP:** the Lambda only needs an issuer + audience + JWKS URL, so
 replacing Cognito with an existing IdP is a change to those three env vars (and
 the CDK user-pool block), not a code change.
+
+### How grants reach the token: the pre-token-generation trigger
+
+The validator authorizes against a **top-level** `repos` claim (and optional
+`default_repo`). Cognito, though, stores a user's grants in the **custom
+attributes** `custom:repos` / `custom:default_repo`, and it does **not** surface
+custom attributes as top-level claims — a raw Cognito token carries them as
+`custom:repos` (a string), never as top-level `repos`. Without a bridge, no
+user's grants would ever reach the validated claim and **every request would
+403**.
+
+The `cainban-pretoken` Lambda (`cmd/cainban-pretoken`) closes that gap. It is
+attached to the user pool as the **PreTokenGeneration** trigger (CDK
+`userPool.AddTrigger(UserPoolOperation_PRE_TOKEN_GENERATION(), fn, LambdaVersion_V1_0)`)
+and, during token generation, reads the user's `custom:repos` /
+`custom:default_repo` attributes and returns `claimsToAddOrOverride`:
+
+| Top-level claim it emits | Value shape                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
+| `repos`                  | a **JSON-array-encoded string** of `owner/repo`, e.g. `["acme/a","acme/b"]` (Cognito claim-override values are always strings) |
+| `default_repo`           | the user's default repo (string), when `custom:default_repo` is set |
+
+The validator's `repos`-claim decoder accepts **both** a native JSON array (used
+by the self-signed test tokens) and this string shape (JSON-array-encoded, or
+space/comma-delimited), so the trigger's output flows straight through
+authorization. The trigger is a **pure reflector** of the user's stored
+attributes: if `custom:repos` is empty/absent it emits **no** `repos` claim and
+the user has no grants (→ 403) — it never invents a grant. It needs no
+permissions beyond basic CloudWatch Logs (it reads only what Cognito hands it in
+the event), and needs no extra store or table.
+
+### Granting a user access to a repo
+
+Grants live entirely in the user's Cognito `custom:repos` attribute (a
+space-, comma-, or JSON-array-delimited list of `owner/repo`), with an optional
+`custom:default_repo`. An operator sets them with the Cognito admin API — no
+deploy, no code change:
+
+```sh
+export AWS_PROFILE=aws-test-hamin AWS_REGION=eu-north-1
+# grant a user two repos + a default (space-delimited is fine; JSON array also accepted)
+aws cognito-idp admin-update-user-attributes \
+  --user-pool-id <UserPoolId> \
+  --username <user-email-or-sub> \
+  --user-attributes \
+      Name=custom:repos,Value="acme/repo-a acme/repo-b" \
+      Name=custom:default_repo,Value="acme/repo-a"
+```
+
+The change takes effect on the user's **next token** (the trigger runs at token
+generation), so the user re-authenticates / refreshes to pick up a new grant.
+To **revoke** access, remove the repo from `custom:repos`. A future option (not
+built — frugal for now) is a separate grants table the trigger reads instead of
+the attribute; the custom attribute needs zero extra infrastructure.
 
 ## Storage backend selector
 

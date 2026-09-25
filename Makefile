@@ -51,6 +51,21 @@ lambda:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
 		-o .build/lambda/bootstrap ./cmd/cainban-lambda
 
+# Build the Cognito pre-token-generation trigger bootstrap (pure Go, arm64,
+# provided.al2023). Output goes to .build/pretoken/bootstrap, packaged by the
+# CDK stack via Code.fromAsset("../.build/pretoken"). This trigger maps a user's
+# custom:repos / custom:default_repo attributes into the top-level repos /
+# default_repo claims the auth validator authorizes against.
+.PHONY: pretoken
+pretoken:
+	mkdir -p .build/pretoken
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
+		-o .build/pretoken/bootstrap ./cmd/cainban-pretoken
+
+# Build every Lambda bundle the CDK stack packages. Run before `cdk synth`/`cdk deploy`.
+.PHONY: bundles
+bundles: lambda pretoken
+
 # Development setup
 dev: setup-hooks
 	$(GOMOD) download

@@ -1,6 +1,6 @@
 # cainban: stateless MCP → AWS serverless → multi-user (team kanban) plan
 
-Status: draft · Owner: default (Kiro) · Last updated: 2026-09-25 (Phase 3 built)
+Status: draft · Owner: default (Kiro) · Last updated: 2026-09-25 (Phase 3 built; repos-claim mapping closed via pre-token trigger)
 
 This is a staged plan. Each phase is an independent PR that leaves `main`
 deployable. Ordering is deliberate: statelessness is the precondition for
@@ -175,6 +175,22 @@ What shipped:
      for authorization; it can only *narrow* to a repo the token already grants,
      never escalate.
 
+   **Repos claim delivery (deferred item — now CLOSED).** The `repos` /
+   `default_repo` claims are populated by a Cognito **pre-token-generation
+   Lambda trigger** (`cmd/cainban-pretoken`, wired in `infra/stack.go` via
+   `userPool.AddTrigger(UserPoolOperation_PRE_TOKEN_GENERATION(), fn, V1_0)`).
+   Cognito does not surface custom attributes as top-level claims, so without
+   this bridge every request 403s. The trigger reads the user's `custom:repos` /
+   `custom:default_repo` attributes and emits the **top-level** `repos` claim as
+   a **JSON-array-encoded string** (Cognito claim-override values are always
+   strings) plus `default_repo`. The validator's `repos` decoder was made
+   tolerant to accept **both** a native JSON array (self-signed test tokens) and
+   that string shape (JSON-array-encoded or space/comma-delimited). The trigger
+   is a pure reflector of the user's stored attributes and never invents a
+   grant (empty attribute → no claim → 403). Grants are administered by setting
+   `custom:repos` (`aws cognito-idp admin-update-user-attributes`) — no extra
+   store or IAM; see `infra/README.md` → "Granting a user access to a repo".
+
 5. **Isolation is structural.** Every DynamoDB key for a request is built under
    its tenant prefix, so a request authorized for repo A can only ever address
    PK values under `REPO#A#…` — it cannot read or write repo B's items. This is
@@ -198,6 +214,8 @@ What shipped:
 | c | invalid/expired/unsigned token → 401, no store access | `auth.TestValidate_Rejects*`, `auth.TestResolve_InvalidTokenNoTenant`, `mcp.TestAuthMiddleware_{Missing,Invalid}Token401` | PASS |
 | d | isolation: caller scoped to A cannot touch B | `dynamo.TestTenantIsolation_AcannotSeeB`, `auth.TestResolve_TenantPrefixIsolation` | PASS |
 | e | two users, same repo → same board | `dynamo.TestTenantIsolation_SameRepoSharedBoard` | PASS |
+| f | pre-token trigger maps `custom:repos` → JSON-array-string `repos` claim; empty attrs → no claim (no invented grant) | `pretoken.TestBuildClaims`, `pretoken.TestBuildClaims_ReposIsJSONArrayEncodedString`, `pretoken.TestHandler_{SetsOverrides,NoGrantsNoOverrides}` | PASS |
+| g | a token whose `repos` claim is the trigger's JSON-array-**string** shape authorizes the granted repos through the real resolver and 403s others | `auth.TestResolve_TriggerStringReposClaim`, `auth.TestResolve_TriggerSpaceDelimitedReposClaim`, `auth.TestResolve_EmptyReposClaimDenies`, `auth.TestReposClaim_Shapes` | PASS |
 
 Also covered: `alg=none` downgrade rejected, payload-tamper rejected, wrong
 signing key rejected, wrong issuer/audience rejected, client-supplied target can

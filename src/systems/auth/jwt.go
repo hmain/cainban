@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -11,6 +12,7 @@ import (
 	"math/big"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // KeySource resolves a signing key by its JWKS `kid`. The production
@@ -76,7 +78,9 @@ type jwtHeader struct {
 }
 
 // claims is the decoded payload. `aud` may be a string or an array in the JWT
-// spec, so it is decoded permissively via audienceClaim.
+// spec, so it is decoded permissively via audienceClaim; `repos` may be a
+// native JSON array OR a string (Cognito claim-override values are strings), so
+// it is decoded permissively via reposClaim.
 type claims struct {
 	Issuer      string        `json:"iss"`
 	Subject     string        `json:"sub"`
@@ -84,8 +88,90 @@ type claims struct {
 	Expiry      int64         `json:"exp"`
 	NotBefore   int64         `json:"nbf"`
 	IssuedAt    int64         `json:"iat"`
-	Repos       []string      `json:"repos"`
+	Repos       reposClaim    `json:"repos"`
 	DefaultRepo string        `json:"default_repo"`
+}
+
+// reposClaim decodes the `repos` claim from EITHER of two on-the-wire shapes,
+// so the same validator accepts both a self-signed test token (native JSON
+// array) and a real Cognito token (string, because Cognito claim-override
+// values — the ones the pre-token-generation trigger emits — are always
+// strings):
+//
+//	native array:          "repos": ["owner/a", "owner/b"]
+//	JSON-array string:      "repos": "[\"owner/a\",\"owner/b\"]"
+//	space-delimited string: "repos": "owner/a owner/b"
+//	comma-delimited string: "repos": "owner/a,owner/b"
+//	empty / absent:         no entries (caller has no grants → 403 later)
+//
+// Parsing is best-effort and never fails the token: an unparseable value yields
+// an empty set (no grants), which is the safe, fail-closed outcome — a
+// malformed repos claim must not authorize anything, and it must not turn a
+// signature-valid token into a 401 (authorization is decided later, in the
+// resolver, purely by set membership). Each entry is left as-is here;
+// canonicalization/validation happens in Validate via NormalizeRepo.
+type reposClaim []string
+
+func (rc *reposClaim) UnmarshalJSON(b []byte) error {
+	b = bytes.TrimSpace(b)
+	if len(b) == 0 || string(b) == "null" {
+		*rc = nil
+		return nil
+	}
+	// Shape 1: native JSON array of strings.
+	if b[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal(b, &arr); err != nil {
+			// A structurally-broken array is treated as "no grants" rather than
+			// a hard error, keeping the fail-closed contract above.
+			*rc = nil
+			return nil
+		}
+		*rc = splitRepoStrings(arr...)
+		return nil
+	}
+	// Shape 2: a JSON string. Its CONTENTS may themselves be a JSON array, or a
+	// space/comma-delimited list.
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		*rc = nil
+		return nil
+	}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		*rc = nil
+		return nil
+	}
+	// The string may be a JSON-array-encoded value (what the trigger emits).
+	if s[0] == '[' {
+		var arr []string
+		if err := json.Unmarshal([]byte(s), &arr); err == nil {
+			*rc = splitRepoStrings(arr...)
+			return nil
+		}
+		// Fall through: not valid JSON, treat as a delimited string.
+	}
+	*rc = splitRepoStrings(s)
+	return nil
+}
+
+// splitRepoStrings normalizes a mix of already-split entries and delimited
+// strings into a flat list of trimmed, non-empty tokens, splitting each input
+// on whitespace and commas. It does not validate owner/repo form — Validate
+// does that via NormalizeRepo — it only tokenizes.
+func splitRepoStrings(inputs ...string) []string {
+	out := make([]string, 0, len(inputs))
+	for _, in := range inputs {
+		for _, tok := range strings.FieldsFunc(in, func(r rune) bool {
+			return r == ',' || unicode.IsSpace(r)
+		}) {
+			tok = strings.TrimSpace(tok)
+			if tok != "" {
+				out = append(out, tok)
+			}
+		}
+	}
+	return out
 }
 
 // audienceClaim decodes an `aud` that is either a JSON string or a JSON array
