@@ -7,6 +7,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
 	"github.com/aws/constructs-go/constructs/v10"
 	"github.com/aws/jsii-runtime-go"
 )
@@ -74,6 +75,40 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		PointInTimeRecoverySpecification: &awsdynamodb.PointInTimeRecoverySpecification{
 			PointInTimeRecoveryEnabled: jsii.Bool(true),
 		},
+	})
+
+	// --- Secrets Manager: GitHub App credentials (Phase 4, P4.2) ---------
+	//
+	// A PLACEHOLDER secret for the GitHub App's credentials — the App id, OAuth
+	// client id/secret, and RSA PRIVATE KEY that the connect/verify flow (P4.3)
+	// uses to call the GitHub API and prove a principal's access to owner/repo
+	// before a grant is written (see src/systems/github, src/systems/secrets).
+	//
+	// It is created EMPTY on purpose: NO real secret value lives in code, this
+	// repo, or the synthesized template. After deploy an operator fills it in
+	// (see docs/github-app-setup.md) with the JSON shape the loader expects:
+	//
+	//	{"app_id":"…","client_id":"…","client_secret":"…","private_key":"-----BEGIN RSA PRIVATE KEY-----\n…"}
+	//
+	// The `generate_string_key`/template here only seeds a well-formed empty
+	// JSON envelope so the secret exists with the right shape; it contains no
+	// credential. RETAIN so a `cdk destroy` never drops an operator-filled key.
+	//
+	// P4.2 only CREATES the secret and wires least-privilege read access ready
+	// for P4.3 — the connect Lambda that consumes it is built in P4.3, not here.
+	// For now the read grant is attached to the existing MCP Lambda's role (the
+	// function that P4.3 extends with the connect routes), scoped to THIS secret
+	// ARN alone.
+	githubAppSecret := awssecretsmanager.NewSecret(stack, jsii.String("GitHubAppSecret"), &awssecretsmanager.SecretProps{
+		SecretName:  jsii.String("cainban/github-app"),
+		Description: jsii.String("cainban GitHub App credentials (Phase 4) — PLACEHOLDER; operator fills app_id/client_id/client_secret/private_key post-deploy. No secret value in code/CDK."),
+		GenerateSecretString: &awssecretsmanager.SecretStringGenerator{
+			// Seed an empty JSON envelope; the generated key is a throwaway
+			// field the operator overwrites. No real credential is generated.
+			SecretStringTemplate: jsii.String(`{"app_id":"","client_id":"","client_secret":"","private_key":""}`),
+			GenerateStringKey:    jsii.String("_placeholder"),
+		},
+		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
 	})
 
 	// --- Cognito user pool (identity provider) ---------------------------
@@ -212,6 +247,11 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			// handler when unset; audience is the app client id.
 			"CAINBAN_AUTH_ISSUER":   issuer,
 			"CAINBAN_AUTH_AUDIENCE": userPoolClient.UserPoolClientId(),
+			// Phase 4 (P4.2): the name of the placeholder GitHub App creds
+			// secret. The connect/verify flow (P4.3) loads the App credentials
+			// from this secret at runtime via src/systems/secrets — never from
+			// code or env. Wired now so P4.3 needs no infra change to read it.
+			"CAINBAN_GITHUB_APP_SECRET": githubAppSecret.SecretName(),
 		},
 		// Build the Go binary into the asset directory. The command runs in a
 		// local shell (no Docker) via TryBundle returning false is not used;
@@ -236,6 +276,17 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		),
 		Resources: &[]*string{table.TableArn()},
 	}))
+
+	// Phase 4 (P4.2): least-privilege READ of the GitHub App creds secret.
+	// Grant ONLY secretsmanager:GetSecretValue, scoped to THIS secret's ARN
+	// alone — not "secretsmanager:*", not a wildcard resource. This is the one
+	// call src/systems/secrets makes. `Secret.GrantRead` attaches exactly that
+	// (GetSecretValue + DescribeSecret) on this secret ARN to the function's
+	// role; no other secret is reachable. Wired onto the existing MCP Lambda now
+	// so the P4.3 connect flow (hosted on this same function) can load the App
+	// credentials without an infra change; the pre-token trigger is deliberately
+	// NOT granted this (it never touches GitHub).
+	githubAppSecret.GrantRead(fn.Role(), nil)
 
 	// --- Function URL (AUTHENTICATED — Phase 3) --------------------------
 	//
@@ -294,6 +345,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	awscdk.NewCfnOutput(stack, jsii.String("GrantsTableName"), &awscdk.CfnOutputProps{
 		Value:       grantsTable.TableName(),
 		Description: jsii.String("DynamoDB grants table (Phase 4) — read by the pre-token trigger"),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("GitHubAppSecretName"), &awscdk.CfnOutputProps{
+		Value:       githubAppSecret.SecretName(),
+		Description: jsii.String("Secrets Manager secret holding GitHub App credentials (Phase 4) — PLACEHOLDER; operator fills post-deploy (see docs/github-app-setup.md)"),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("UserPoolId"), &awscdk.CfnOutputProps{
 		Value:       userPool.UserPoolId(),

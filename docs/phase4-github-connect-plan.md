@@ -124,11 +124,41 @@ agent principal is later required:
     mockable DynamoDB `API` interface, unit-tested with an in-memory fake
     client. (Write methods are implemented now for the P4.3 connect API to use;
     P4.1 only exercises the read path.)
-- **P4.2 — GitHub App package.** App registration doc; Secrets Manager wiring
-  (CDK). `github` package: installation + user token minting, and
-  `VerifyRepoAccess(owner, repo, principal) (bool, error)` handling **org
-  installs** (installation-covers-repo + membership), behind a mockable client
-  interface. Unit tests with a mocked GitHub API (no live calls in CI).
+- **P4.2 — GitHub App package.** ✅ **BUILT** (branch `feat/p4.2-github-app`,
+  not deployed). App registration doc
+  ([`docs/github-app-setup.md`](github-app-setup.md)); Secrets Manager wiring
+  (CDK placeholder secret `cainban/github-app` + least-priv `GetSecretValue`).
+  `github` package (`src/systems/github`): App-JWT minting (RS256, stdlib, short
+  exp), installation-token exchange, and
+  `VerifyRepoAccess(ctx, owner, repo, principal) (bool, error)` handling **org
+  installs** (installation-covers-repo + membership/collaborator), behind a
+  mockable `Client` interface. Secrets loader (`src/systems/secrets`) reads the
+  App creds from Secrets Manager via a mockable `API` interface. Unit tests with
+  a mocked GitHub API + mocked Secrets Manager — **no live calls in CI**.
+  - **Exact GitHub API calls behind the mockable interface** (all github.com):
+    1. `GET /repos/{owner}/{repo}/installation` (App JWT) → **coverage**: the
+       installation id covering the repo, or **404 → not installed → deny**.
+    2. `POST /app/installations/{installation_id}/access_tokens` (App JWT) →
+       a short-lived **installation token** for the following two reads.
+    3. `GET /orgs/{owner}/members/{login}` (installation token) → **org
+       membership** (`204` member / `404`|`302` not a member).
+    4. `GET /repos/{owner}/{repo}/collaborators/{login}/permission`
+       (installation token) → **collaborator permission** fallback
+       (`admin`/`write`/`maintain`/`triage`/`read` = entitled; `none`/`404` = not).
+  - **Org handling:** access is granted **iff** the App installation *covers*
+    `owner/repo` **AND** the principal is *entitled* — an **org member**, or (for
+    outside collaborators / user-owned repos) a **repo collaborator with read+**.
+    Coverage is checked first; entitlement is org-membership-first, collaborator
+    as fallback. The principal's GitHub login is supplied by the caller (P4.3's
+    OAuth leg fills it) — **never a client "I have access" claim**.
+  - **Fail closed:** any GitHub API error (network / non-2xx / decode) returns
+    `(false, err)`; the caller treats a non-nil error as **DENY**. Access is
+    `true` only when every required check returned an affirmative result. `iss`
+    is the App id; App JWT TTL is under GitHub's 10-minute ceiling.
+  - **Secrets:** the App id, OAuth client id/secret, and **private key** come
+    from the Secrets Manager secret **at runtime** (name via env
+    `CAINBAN_GITHUB_APP_SECRET`); the CDK creates a **PLACEHOLDER** secret the
+    operator fills post-deploy. **No secret value in code, the repo, or CDK.**
 - **P4.3 — Connect API Lambda.** Cognito-auth'd routes: `/connect/github/start`,
   `/connect/github/callback`, `POST/DELETE /connect/repo`, `GET /connect/repos`.
   Verifies server-side, writes/revokes grants. Security-scenario tests

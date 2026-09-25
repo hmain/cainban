@@ -14,6 +14,15 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
   repo-scoped tenancy**)
 - **Cognito user pool** `cainban-users` + app client — issues the JWTs the
   Lambda validates; carries the `repos` / `default_repo` authorization claims
+- **Secrets Manager** secret `cainban/github-app` (**Phase 4, P4.2**) — a
+  **PLACEHOLDER** for the GitHub App credentials (App id, OAuth client
+  id/secret, RSA private key) that the connect/verify flow (P4.3) loads at
+  runtime via [`src/systems/secrets`](../src/systems/secrets). Created empty
+  (`RETAIN`); an operator fills it post-deploy (see
+  [`docs/github-app-setup.md`](../docs/github-app-setup.md)). **No secret value
+  in code, this repo, or the CDK template.** The MCP Lambda gets least-privilege
+  `secretsmanager:GetSecretValue` on this secret ARN alone; its name reaches the
+  Lambda via the `CAINBAN_GITHUB_APP_SECRET` env var
 - **Pre-token-generation trigger** `cainban-pretoken` — a pure-Go arm64 Lambda
   attached to the user pool that builds each user's **top-level** `repos` /
   `default_repo` claims (the ones the validator authorizes against). **Phase 4:**
@@ -24,9 +33,11 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
 - **Lambda Function URL** — **`AuthType: AWS_IAM`** (edge auth; no anonymous
   reachability)
 - **IAM** least-privilege: the MCP Lambda gets only `GetItem`, `PutItem`,
-  `UpdateItem`, `DeleteItem`, `Query` on the `cainban` table ARN; the pre-token
-  trigger gets only `GetItem` + `Query` on the `cainban-grants` table ARN (read
-  only, no access to the data table)
+  `UpdateItem`, `DeleteItem`, `Query` on the `cainban` table ARN, plus
+  `secretsmanager:GetSecretValue` (+ `DescribeSecret`) on the
+  `cainban/github-app` secret ARN alone (Phase 4, for the P4.3 connect flow);
+  the pre-token trigger gets only `GetItem` + `Query` on the `cainban-grants`
+  table ARN (read only, no access to the data table, and no secret access)
 - **CloudWatch** log group `/aws/lambda/cainban-mcp` (30-day retention)
 
 > **The endpoint is authenticated (Phase 3).** Two layers gate it: the Function
@@ -95,6 +106,8 @@ cdk deploy CainbanPhase2Stack
 ```
 
 After deploy, the stack outputs `FunctionUrl` (the MCP endpoint), `TableName`,
+`GrantsTableName`, `GitHubAppSecretName` (the placeholder GitHub App secret to
+fill — see [`docs/github-app-setup.md`](../docs/github-app-setup.md)),
 `UserPoolId` and `UserPoolClientId`. Smoke test with a `tools/list` call and one
 tool call (SigV4-sign the request for the `AWS_IAM` edge, and send a Cognito
 `Authorization: Bearer <JWT>` for the app layer), then verify the Lambda
@@ -236,6 +249,27 @@ The application chooses its backend from `CAINBAN_BACKEND`:
 Extra DynamoDB env vars: `CAINBAN_DDB_TABLE` (default `cainban`),
 `CAINBAN_DDB_REGION` (falls back to the standard AWS region resolution). The
 Lambda sets all three via the CDK `Environment` block.
+
+## GitHub App credentials (Phase 4, P4.2)
+
+The connect/verify flow (P4.3, hosted on the MCP Lambda) loads the GitHub App
+credentials from **AWS Secrets Manager at runtime** — never from code or the
+CDK. The CDK creates a **placeholder** secret and grants least-privilege read;
+an operator fills it after deploy.
+
+| Resource / env var | Meaning |
+| --- | --- |
+| Secret `cainban/github-app` | JSON `{app_id, client_id, client_secret, private_key}` for the GitHub App. Created **empty** by the CDK (`RETAIN`); filled by the operator post-deploy. |
+| `CAINBAN_GITHUB_APP_SECRET` | the secret's **name** the Lambda reads (CDK sets it from the `GitHubAppSecretName` output). Consumed by [`src/systems/secrets`](../src/systems/secrets). |
+| `CAINBAN_GITHUB_APP_SECRET_REGION` | optional region override for the Secrets Manager read; absent, standard AWS region resolution applies. |
+
+The loader parses the secret into a `github.AppConfig` and the `github` package
+([`src/systems/github`](../src/systems/github)) uses it to mint the App JWT,
+exchange an installation token, and run `VerifyRepoAccess` — proving a
+principal's access to `owner/repo` **server-side** before a grant is written. No
+secret value is in the repo, code, or CDK template. **Full operator procedure to
+register the App and load the secret:**
+[`docs/github-app-setup.md`](../docs/github-app-setup.md).
 
 ## DynamoDB table / key design
 
