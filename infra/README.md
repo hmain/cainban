@@ -3,6 +3,11 @@
 AWS CDK (Go) app that provisions the serverless stack for cainban:
 
 - **DynamoDB** single table `cainban` (on-demand, PITR, `RETAIN` on delete)
+- **DynamoDB** grants table `cainban-grants` (**Phase 4** — on-demand, PITR,
+  `RETAIN`) — the real home for per-user repo grants
+  (`PK=USER#<sub>` / `SK=GRANT#<owner>/<repo>`), read by the pre-token trigger;
+  supersedes the Cognito `custom:repos` attribute, which stays as a read
+  fallback for migration
 - **Lambda** `cainban-mcp` — `provided.al2023`, **arm64**, pure-Go bootstrap
   built from [`cmd/cainban-lambda`](../cmd/cainban-lambda) (serves the stateless
   Streamable-HTTP MCP handler, wrapped in **signature-first JWT auth +
@@ -10,14 +15,18 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
 - **Cognito user pool** `cainban-users` + app client — issues the JWTs the
   Lambda validates; carries the `repos` / `default_repo` authorization claims
 - **Pre-token-generation trigger** `cainban-pretoken` — a pure-Go arm64 Lambda
-  attached to the user pool that maps each user's `custom:repos` /
-  `custom:default_repo` attributes into the **top-level** `repos` /
-  `default_repo` claims the validator authorizes against (see
+  attached to the user pool that builds each user's **top-level** `repos` /
+  `default_repo` claims (the ones the validator authorizes against). **Phase 4:**
+  it reads grants from the `cainban-grants` table, falling back to the user's
+  `custom:repos` / `custom:default_repo` attributes when the table has nothing,
+  and **failing closed** (no claim) on a table error (see
   [Granting a user access to a repo](#granting-a-user-access-to-a-repo))
 - **Lambda Function URL** — **`AuthType: AWS_IAM`** (edge auth; no anonymous
   reachability)
-- **IAM** least-privilege: only `GetItem`, `PutItem`, `UpdateItem`,
-  `DeleteItem`, `Query` on the `cainban` table ARN
+- **IAM** least-privilege: the MCP Lambda gets only `GetItem`, `PutItem`,
+  `UpdateItem`, `DeleteItem`, `Query` on the `cainban` table ARN; the pre-token
+  trigger gets only `GetItem` + `Query` on the `cainban-grants` table ARN (read
+  only, no access to the data table)
 - **CloudWatch** log group `/aws/lambda/cainban-mcp` (30-day retention)
 
 > **The endpoint is authenticated (Phase 3).** Two layers gate it: the Function
@@ -128,33 +137,80 @@ user's grants would ever reach the validated claim and **every request would
 The `cainban-pretoken` Lambda (`cmd/cainban-pretoken`) closes that gap. It is
 attached to the user pool as the **PreTokenGeneration** trigger (CDK
 `userPool.AddTrigger(UserPoolOperation_PRE_TOKEN_GENERATION(), fn, LambdaVersion_V1_0)`)
-and, during token generation, reads the user's `custom:repos` /
-`custom:default_repo` attributes and returns `claimsToAddOrOverride`:
+and, during token generation, builds `claimsToAddOrOverride`:
 
 | Top-level claim it emits | Value shape                                                        |
 | ------------------------ | ------------------------------------------------------------------ |
 | `repos`                  | a **JSON-array-encoded string** of `owner/repo`, e.g. `["acme/a","acme/b"]` (Cognito claim-override values are always strings) |
-| `default_repo`           | the user's default repo (string), when `custom:default_repo` is set |
+| `default_repo`           | the user's default repo (string), when set |
 
 The validator's `repos`-claim decoder accepts **both** a native JSON array (used
 by the self-signed test tokens) and this string shape (JSON-array-encoded, or
 space/comma-delimited), so the trigger's output flows straight through
-authorization. The trigger is a **pure reflector** of the user's stored
-attributes: if `custom:repos` is empty/absent it emits **no** `repos` claim and
-the user has no grants (→ 403) — it never invents a grant. It needs no
-permissions beyond basic CloudWatch Logs (it reads only what Cognito hands it in
-the event), and needs no extra store or table.
+authorization.
+
+**Phase 4 — the grants table is the grant source.** The trigger now reads the
+subject's grants from the DynamoDB **`cainban-grants`** table
+(`src/systems/grants`), keyed `PK=USER#<sub>` / `SK=GRANT#<owner>/<repo>`. Its
+resolution order per token:
+
+1. **Subject** = the user's `sub` standard attribute (the same value that
+   becomes the token's `sub` claim; `userName` is used only if `sub` is absent).
+2. **Table has grants** → build the `repos` claim from the table (and the
+   `default_repo` from the table's `META` item).
+3. **Table empty** → fall back to the `custom:repos` / `custom:default_repo`
+   attribute path, so users not yet migrated keep working.
+4. **Table ERROR** → **fail closed**: emit **no** `repos` claim. A table error
+   never falls back to the attributes and never fabricates a grant — no claim
+   means the user has no grants on this token (→ 403 downstream), the safe
+   outcome.
+5. If `CAINBAN_GRANTS_TABLE` is **unset**, the trigger degrades to the
+   attribute-only path — it never fails token issuance on missing config.
+
+The trigger is still a **pure reflector**: with an empty table AND empty
+attributes it emits **no** `repos` claim (→ 403) — it never invents a grant. It
+holds **read-only** IAM (`GetItem` + `Query`) on the `cainban-grants` table ARN
+alone — no writes, and no access to the `cainban` data table.
+
+Its grants-table config comes from env vars the CDK stack sets:
+
+| Env var                 | Meaning                                                            |
+| ----------------------- | ------------------------------------------------------------------ |
+| `CAINBAN_GRANTS_TABLE`  | grants table name (`cainban-grants`); unset ⇒ attribute-only path  |
+| `CAINBAN_GRANTS_REGION` | grants table region (falls back to standard AWS region resolution) |
 
 ### Granting a user access to a repo
 
-Grants live entirely in the user's Cognito `custom:repos` attribute (a
-space-, comma-, or JSON-array-delimited list of `owner/repo`), with an optional
-`custom:default_repo`. An operator sets them with the Cognito admin API — no
-deploy, no code change:
+**Phase 4:** the real grant home is the `cainban-grants` table. A grant is one
+item per repo — `PK=USER#<sub>`, `SK=GRANT#<owner>/<repo>` (presence = granted),
+with an optional `default_repo` on the `SK=META` item and a reserved
+`SK=IDENTITY#github` item for the linked GitHub install (populated by later
+phases). Grants will be **written by the P4.3 connect API** once a user's GitHub
+access to `owner/repo` is verified server-side; in the interim an operator can
+put a grant item directly, e.g.:
 
 ```sh
 export AWS_PROFILE=aws-test-hamin AWS_REGION=eu-north-1
-# grant a user two repos + a default (space-delimited is fine; JSON array also accepted)
+aws dynamodb put-item --table-name cainban-grants --item '{
+  "PK": {"S": "USER#<cognito-sub>"},
+  "SK": {"S": "GRANT#acme/repo-a"},
+  "repo": {"S": "acme/repo-a"}
+}'
+# optional default repo:
+aws dynamodb put-item --table-name cainban-grants --item '{
+  "PK": {"S": "USER#<cognito-sub>"},
+  "SK": {"S": "META"},
+  "default_repo": {"S": "acme/repo-a"}
+}'
+```
+
+**Fallback (pre-Phase-4, still supported):** grants may also live in the user's
+Cognito `custom:repos` attribute (a space-, comma-, or JSON-array-delimited list
+of `owner/repo`), with an optional `custom:default_repo`. The trigger uses these
+**only when the grants table has nothing** for the subject:
+
+```sh
+export AWS_PROFILE=aws-test-hamin AWS_REGION=eu-north-1
 aws cognito-idp admin-update-user-attributes \
   --user-pool-id <UserPoolId> \
   --username <user-email-or-sub> \
@@ -163,11 +219,10 @@ aws cognito-idp admin-update-user-attributes \
       Name=custom:default_repo,Value="acme/repo-a"
 ```
 
-The change takes effect on the user's **next token** (the trigger runs at token
-generation), so the user re-authenticates / refreshes to pick up a new grant.
-To **revoke** access, remove the repo from `custom:repos`. A future option (not
-built — frugal for now) is a separate grants table the trigger reads instead of
-the attribute; the custom attribute needs zero extra infrastructure.
+Either way the change takes effect on the user's **next token** (the trigger
+runs at token generation), so the user re-authenticates / refreshes to pick up a
+new grant. To **revoke**, delete the `GRANT#` item (or remove the repo from
+`custom:repos`).
 
 ## Storage backend selector
 
@@ -209,3 +264,33 @@ touches is under that prefix. A request authorized for repo A can only ever
 address `REPO#A#…` — it structurally cannot read or write repo B's items, with
 **no change to the sort-key layout, item shape, or IAM**. The DynamoDB client is
 cached process-wide and reused; only the prefix varies per tenant.
+
+## Grants table / key design (Phase 4)
+
+A **separate** table `cainban-grants` (on-demand, PITR, `RETAIN`) is the home
+for per-user repo grants — the "real" grant store that supersedes the Cognito
+`custom:repos` attribute (kept as a read fallback). It is keyed `(PK, SK)` but on
+a **subject** axis, disjoint from the `cainban` data table's `REPO#…` axis:
+
+| Item      | PK             | SK                       | Purpose                                             |
+| --------- | -------------- | ------------------------ | --------------------------------------------------- |
+| grant     | `USER#<sub>`   | `GRANT#<owner>/<repo>`   | one granted repo (presence = granted)               |
+| default   | `USER#<sub>`   | `META`                   | `default_repo` attribute (the user's default repo)  |
+| identity  | `USER#<sub>`   | `IDENTITY#github`        | linked GitHub identity/install id (reserved; P4.2/P4.3 populate) |
+
+- `<sub>` is the Cognito `sub` (an agent principal, in a later phase, is keyed
+  identically by its client-id). `owner/repo` is normalized via
+  `auth.NormalizeRepo` (the same case-preserving canonicalization the resolver
+  uses), so a grant maps to exactly one partition prefix.
+- **Why separate from `cainban`:** grants are read on the token-minting path and
+  share no partition with board data, so a separate table lets the pre-token
+  Lambda's IAM be scoped to the grants ARN alone (least privilege — it
+  structurally cannot read task data) and keeps PITR/backup boundaries clean.
+  On-demand billing makes the two-table cost identical to co-tenanting (zero at
+  rest).
+- **Access:** `ListReposForSubject` is a single `Query` over the subject's
+  partition (`begins_with(SK, "GRANT#")`); `GetDefaultRepo` is a `GetItem` on
+  `META`. The pre-token Lambda uses only these two reads. The grant package
+  (`src/systems/grants`) also exposes `PutGrant` / `DeleteGrant` /
+  `SetDefaultRepo` for the P4.3 connect API to write verified grants (not used
+  by the read path, no write IAM granted to the trigger).
