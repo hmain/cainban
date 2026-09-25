@@ -34,7 +34,7 @@ func New(dbPath string) (*DB, error) {
 	}
 
 	if err := db.initialize(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to initialize database: %w", err)
 	}
 
@@ -54,7 +54,7 @@ func NewMemory() (*DB, error) {
 	}
 
 	if err := db.initialize(); err != nil {
-		conn.Close()
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to initialize memory database: %w", err)
 	}
 
@@ -124,7 +124,7 @@ func (db *DB) migrate() error {
 	if err != nil {
 		return fmt.Errorf("failed to get table info: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	hasDeletedAt := false
 	hasBoardTaskID := false
@@ -185,7 +185,7 @@ func (db *DB) populateBoardTaskIDs() error {
 	if err != nil {
 		return err
 	}
-	defer boards.Close()
+	defer func() { _ = boards.Close() }()
 
 	for boards.Next() {
 		var boardID int
@@ -203,18 +203,18 @@ func (db *DB) populateBoardTaskIDs() error {
 		for tasks.Next() {
 			var taskID int
 			if err := tasks.Scan(&taskID); err != nil {
-				tasks.Close()
+				_ = tasks.Close()
 				return err
 			}
 
 			_, err = db.conn.Exec("UPDATE tasks SET board_task_id = ? WHERE id = ?", boardTaskID, taskID)
 			if err != nil {
-				tasks.Close()
+				_ = tasks.Close()
 				return err
 			}
 			boardTaskID++
 		}
-		tasks.Close()
+		_ = tasks.Close()
 	}
 
 	return nil

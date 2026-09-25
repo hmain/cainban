@@ -16,10 +16,10 @@ import (
 
 // Version information
 const (
-	VersionMajor = "0"
-	VersionMinor = "2" 
-	VersionPatch = "2"
-	VersionDev   = ""   // Empty for release
+	VersionMajor  = "0"
+	VersionMinor  = "2"
+	VersionPatch  = "2"
+	VersionDev    = ""                            // Empty for release
 	VersionSuffix = "Complete TUI Implementation" // Description of this release
 )
 
@@ -63,7 +63,7 @@ func main() {
 	case "tui":
 		handleTUI()
 	case "mcp":
-		handleMCP()
+		handleMCP(os.Args[2:])
 	case "version":
 		handleVersion()
 	default:
@@ -92,7 +92,8 @@ func printUsage() {
 	fmt.Println("  cainban restore <task_id>            Restore deleted task")
 	fmt.Println("  cainban board <command>              Board management")
 	fmt.Println("  cainban tui                          Start interactive TUI mode")
-	fmt.Println("  cainban mcp                          Start MCP server")
+	fmt.Println("  cainban mcp                          Start MCP server (stdio, default)")
+	fmt.Println("  cainban mcp --http :PORT             Start MCP server (stateless HTTP, 127.0.0.1)")
 	fmt.Println("  cainban version                      Show version")
 	fmt.Println()
 	fmt.Println("Board commands:")
@@ -827,15 +828,45 @@ func handleRestore(args []string) {
 	fmt.Printf("Task %d restored\n", taskID)
 }
 
-func handleMCP() {
-	db, taskSystem, _, err := getCurrentBoardDB()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
-	defer db.Close()
+func handleMCP(args []string) {
+	// The MCP server is stateless: it resolves and opens the correct board
+	// database per request, so there is NO database opened here at process
+	// start (that ambient, once-at-start resolution was the state we removed).
+	server := mcp.NewStateless()
 
-	server := mcp.New(taskSystem)
+	// Parse transport mode. Default is stdio (bare `cainban mcp`). An HTTP
+	// address may be given via `--http :PORT` / `--http host:port` or the
+	// alias `--addr`.
+	httpAddr := ""
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--http", "--addr":
+			if i+1 >= len(args) {
+				fmt.Fprintln(os.Stderr, "Error: --http requires an address (e.g. :8080)")
+				os.Exit(1)
+			}
+			httpAddr = args[i+1]
+			i++
+		default:
+			if strings.HasPrefix(args[i], "--http=") {
+				httpAddr = strings.TrimPrefix(args[i], "--http=")
+			} else if strings.HasPrefix(args[i], "--addr=") {
+				httpAddr = strings.TrimPrefix(args[i], "--addr=")
+			} else {
+				fmt.Fprintf(os.Stderr, "Error: unknown mcp argument %q\n", args[i])
+				os.Exit(1)
+			}
+		}
+	}
+
+	if httpAddr != "" {
+		if err := server.ServeHTTP(httpAddr); err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting MCP HTTP server: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := server.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error starting MCP server: %v\n", err)
 		os.Exit(1)
@@ -844,14 +875,14 @@ func handleMCP() {
 
 func handleTUI() {
 	fmt.Println("Starting interactive TUI...")
-	
+
 	db, _, _, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-	
+
 	// Start the TUI
 	if err := tui.Run(db); err != nil {
 		fmt.Printf("Error starting TUI: %v\n", err)
@@ -866,7 +897,7 @@ func handleVersion() {
 	fmt.Printf("Build: %s\n", VersionSuffix)
 	fmt.Printf("Compiled: %s\n", buildTime)
 	fmt.Println("\nFeatures:")
-	fmt.Println("  ✅ Multi-board support") 
+	fmt.Println("  ✅ Multi-board support")
 	fmt.Println("  ✅ Enhanced TUI with responsive column layout")
 	fmt.Println("  ✅ Improved window resizing and positioning")
 	fmt.Println("  ✅ Dynamic column width calculations")

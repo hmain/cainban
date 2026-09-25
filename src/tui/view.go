@@ -3,7 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
-	
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/hmain/cainban/src/systems/task"
 )
@@ -14,7 +14,7 @@ func (m Model) View() string {
 	if m.boardSwitching {
 		return fmt.Sprintf("\n  Switched to board: %s\n\n  Restart TUI to load the new board:\n  ./cainban tui\n", m.currentBoard)
 	}
-	
+
 	switch m.currentView {
 	case ViewKanban:
 		return m.renderKanbanView()
@@ -40,47 +40,47 @@ func (m Model) View() string {
 // renderKanbanView renders the main kanban board view using viewports
 func (m Model) renderKanbanView() string {
 	debugLog("[RENDER] Starting viewport-based renderKanbanView, terminal size: %dx%d\n", m.width, m.height)
-	
+
 	// Header with board name and search indicator
 	headerText := fmt.Sprintf("📋 Cainban - Board: %s", m.currentBoard)
 	if m.searchQuery != "" {
 		headerText += fmt.Sprintf(" | 🔍 Search: '%s'", m.searchQuery)
 	}
-	
+
 	// Style the header to make it stand out
 	headerStyle := lipgloss.NewStyle().
 		Bold(true).
 		Foreground(lipgloss.Color("#7C3AED")).
 		Padding(0, 1)
 	header := headerStyle.Render(headerText)
-	
+
 	// Render columns using viewports
 	columns := m.renderViewportColumns()
-	
+
 	// Simple status bar with all commands
 	statusBar := "n: new • v: view • e: edit • p: priority • d: delete • /: search • b: boards • ?: help • q: quit"
 	if m.searchQuery != "" {
 		statusBar = "esc: clear search • " + statusBar
 	}
-	
+
 	// Header at bottom for visibility
 	content := columns + "\n" + header + "\n" + statusBar
-	
+
 	debugLog("[RENDER] Viewport-based rendering complete\n")
-	
+
 	return content
 }
 
 // renderSearchView renders the search overlay
 func (m Model) renderSearchView() string {
 	var b strings.Builder
-	
+
 	b.WriteString("\n\n")
 	b.WriteString("  ╔════════════════════════════════════════════════════════════╗\n")
 	b.WriteString("  ║                      🔍 SEARCH TASKS                       ║\n")
 	b.WriteString("  ╠════════════════════════════════════════════════════════════╣\n")
 	b.WriteString("  ║                                                            ║\n")
-	
+
 	// Render input with proper padding
 	inputView := m.searchInput.View()
 	padding := 56 - len(inputView)
@@ -88,24 +88,24 @@ func (m Model) renderSearchView() string {
 		padding = 0
 	}
 	b.WriteString("  ║  " + inputView + strings.Repeat(" ", padding) + "║\n")
-	
+
 	b.WriteString("  ║                                                            ║\n")
 	b.WriteString("  ╠════════════════════════════════════════════════════════════╣\n")
 	b.WriteString("  ║  Enter: Search  •  Esc: Cancel                             ║\n")
 	b.WriteString("  ╚════════════════════════════════════════════════════════════╝\n")
-	
+
 	return b.String()
 }
 
 // renderViewportColumns renders the three columns using viewport components
 func (m Model) renderViewportColumns() string {
 	debugLog("[VIEWPORT] Rendering columns with viewports\n")
-	
+
 	// Get the viewport content for each column
 	todoView := m.renderViewportColumn(ColumnTodo, "📝 Todo")
 	doingView := m.renderViewportColumn(ColumnDoing, "🔄 Doing")
 	doneView := m.renderViewportColumn(ColumnDone, "✅ Done")
-	
+
 	// Join horizontally - simple approach
 	columns := lipgloss.JoinHorizontal(
 		lipgloss.Top,
@@ -113,7 +113,7 @@ func (m Model) renderViewportColumns() string {
 		doingView,
 		doneView,
 	)
-	
+
 	return columns
 }
 
@@ -121,120 +121,61 @@ func (m Model) renderViewportColumns() string {
 func (m Model) renderViewportColumn(col Column, title string) string {
 	status := m.columnToStatus(col)
 	tasks := m.tasks[status]
-	
+
 	// Filter tasks by search query
 	var filteredTasks []*task.Task
 	if m.searchQuery != "" {
 		query := strings.ToLower(m.searchQuery)
 		for _, t := range tasks {
 			if strings.Contains(strings.ToLower(t.Title), query) ||
-			   strings.Contains(strings.ToLower(t.Description), query) {
+				strings.Contains(strings.ToLower(t.Description), query) {
 				filteredTasks = append(filteredTasks, t)
 			}
 		}
 	} else {
 		filteredTasks = tasks
 	}
-	
+
 	titleWithCount := fmt.Sprintf("%s (%d)", title, len(filteredTasks))
-	
+
 	// Simple column style
 	columnStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(1).
 		Margin(0, 1).
 		Width(m.calculateColumnWidth())
-	
+
 	// Highlight focused column
 	if col == m.focused {
 		columnStyle = columnStyle.BorderForeground(lipgloss.Color("#7C3AED"))
 	} else {
 		columnStyle = columnStyle.BorderForeground(lipgloss.Color("#4B5563"))
 	}
-	
+
 	// Get viewport content
 	vp := m.viewports[col]
 	viewportContent := vp.View()
-	
+
 	// Add scroll indicator if there are more tasks than fit in viewport
 	scrollInfo := ""
 	if len(filteredTasks) > 0 {
 		selectedIndex := m.selectedTask[col] + 1 // 1-indexed for display
 		totalTasks := len(filteredTasks)
-		
+
 		if totalTasks > vp.Height {
 			// Show scroll position when there's overflow
 			scrollInfo = fmt.Sprintf(" [%d/%d]", selectedIndex, totalTasks)
 		}
 	}
-	
+
 	// Combine title, scroll info, and viewport content
 	header := titleWithCount + scrollInfo
 	content := header + "\n\n" + viewportContent
-	
-	debugLog("[VIEWPORT] Column %d: title=%s, viewport_lines=%d\n", 
+
+	debugLog("[VIEWPORT] Column %d: title=%s, viewport_lines=%d\n",
 		col, titleWithCount, strings.Count(viewportContent, "\n")+1)
-	
+
 	return columnStyle.Render(content)
-}
-
-
-
-// renderTask renders a single task
-func (m Model) renderTask(t *task.Task, selected bool) string {
-	// Priority indicator
-	priority := m.styles.PriorityIndicator(t.Priority)
-	
-	// Dynamic task title truncation based on column width
-	columnWidth := m.calculateColumnWidth()
-	// Account for padding, border, priority indicator, and some breathing room
-	maxTitleLength := columnWidth - 10
-	if maxTitleLength < 15 {
-		maxTitleLength = 15 // Minimum readable length
-	}
-	
-	title := t.Title
-	if len(title) > maxTitleLength {
-		title = title[:maxTitleLength-3] + "..."
-	}
-	
-	// Task content
-	taskContent := fmt.Sprintf("%s %s", priority, title)
-	
-	// Apply styling
-	style := m.styles.Task
-	if selected {
-		style = m.styles.TaskSelected
-	} else {
-		// Use priority-based styling
-		if priorityStyle, exists := m.styles.TaskPriority[t.Priority]; exists {
-			style = priorityStyle
-		}
-	}
-	
-	return style.Render(taskContent)
-}
-
-// renderStatusBar renders the bottom status/help bar
-func (m Model) renderStatusBar() string {
-	var help []string
-	
-	switch m.currentView {
-	case ViewKanban:
-		help = append(help, 
-			"h/l: columns", 
-			"j/k: navigate tasks",
-			"enter: move task",
-			"n: new task",
-			"d: delete",
-			"r: refresh",
-			"?: help",
-			"q: quit",
-		)
-	}
-	
-	helpText := strings.Join(help, " • ")
-	return m.styles.StatusBar.Render(helpText)
 }
 
 // renderHelpView renders the help screen
@@ -279,7 +220,7 @@ Press ? or Esc to return to the kanban board...
 	)
 }
 
-// renderTaskDetailView renders detailed task information  
+// renderTaskDetailView renders detailed task information
 func (m Model) renderTaskDetailView() string {
 	// Find the task
 	var foundTask *task.Task
@@ -294,56 +235,56 @@ func (m Model) renderTaskDetailView() string {
 			break
 		}
 	}
-	
+
 	if foundTask == nil {
 		return "Task not found\n\nPress Esc to return..."
 	}
-	
+
 	var b strings.Builder
-	
+
 	b.WriteString("\n  Task Details\n")
 	b.WriteString("  " + strings.Repeat("─", 60) + "\n\n")
-	
-	b.WriteString(fmt.Sprintf("  ID: #%d\n", foundTask.BoardTaskID))
-	b.WriteString(fmt.Sprintf("  Title: %s\n\n", foundTask.Title))
-	
+
+	fmt.Fprintf(&b, "  ID: #%d\n", foundTask.BoardTaskID)
+	fmt.Fprintf(&b, "  Title: %s\n\n", foundTask.Title)
+
 	if foundTask.Description != "" {
-		b.WriteString(fmt.Sprintf("  Description:\n  %s\n\n", foundTask.Description))
+		fmt.Fprintf(&b, "  Description:\n  %s\n\n", foundTask.Description)
 	}
-	
+
 	priorityNames := []string{"none", "low", "medium", "high", "critical"}
-	b.WriteString(fmt.Sprintf("  Priority: %s\n", priorityNames[foundTask.Priority]))
-	b.WriteString(fmt.Sprintf("  Status: %s\n\n", foundTask.Status))
-	
-	b.WriteString(fmt.Sprintf("  Created: %s\n", foundTask.CreatedAt.Format("2006-01-02 15:04")))
-	b.WriteString(fmt.Sprintf("  Updated: %s\n\n", foundTask.UpdatedAt.Format("2006-01-02 15:04")))
-	
+	fmt.Fprintf(&b, "  Priority: %s\n", priorityNames[foundTask.Priority])
+	fmt.Fprintf(&b, "  Status: %s\n\n", foundTask.Status)
+
+	fmt.Fprintf(&b, "  Created: %s\n", foundTask.CreatedAt.Format("2006-01-02 15:04"))
+	fmt.Fprintf(&b, "  Updated: %s\n\n", foundTask.UpdatedAt.Format("2006-01-02 15:04"))
+
 	b.WriteString("  Press Esc to return\n")
-	
+
 	return b.String()
 }
 
 // renderTaskCreateView renders the task creation form
 func (m Model) renderTaskCreateView() string {
 	var b strings.Builder
-	
+
 	priorityNames := []string{"none", "low", "medium", "high", "critical"}
-	
+
 	b.WriteString("\n  Create New Task\n\n")
 	b.WriteString("  " + m.titleInput.View() + "\n\n")
 	b.WriteString("  " + m.descriptionInput.View() + "\n\n")
-	b.WriteString(fmt.Sprintf("  Priority: %s\n\n", priorityNames[m.selectedPriority]))
+	fmt.Fprintf(&b, "  Priority: %s\n\n", priorityNames[m.selectedPriority])
 	b.WriteString("  Tab: Switch fields | P: Change priority | Enter: Create | Esc: Cancel\n")
-	
+
 	return b.String()
 }
 
 // renderConfirmDialog renders the confirmation dialog
 func (m Model) renderConfirmDialog() string {
 	var b strings.Builder
-	
+
 	b.WriteString("\n\n")
-	
+
 	if m.confirmAction == "hard_delete" {
 		b.WriteString("  ⚠️  Permanently delete this task?\n\n")
 		b.WriteString("  This cannot be undone!\n\n")
@@ -351,47 +292,46 @@ func (m Model) renderConfirmDialog() string {
 		b.WriteString("  Delete this task?\n\n")
 		b.WriteString("  (Can be restored later)\n\n")
 	}
-	
+
 	b.WriteString("  Y: Yes | N: No\n")
-	
+
 	return b.String()
 }
 
 // renderTaskEditView renders the task edit form
 func (m Model) renderTaskEditView() string {
 	var b strings.Builder
-	
+
 	b.WriteString("\n  Edit Task\n\n")
 	b.WriteString("  " + m.titleInput.View() + "\n\n")
 	b.WriteString("  " + m.descriptionInput.View() + "\n\n")
 	b.WriteString("  Tab: Switch fields | Enter: Save | Esc: Cancel\n")
-	
+
 	return b.String()
 }
 
 // renderBoardSelectorView renders the board selector
 func (m Model) renderBoardSelectorView() string {
 	var b strings.Builder
-	
+
 	b.WriteString("\n  Select Board\n")
 	b.WriteString("  " + strings.Repeat("─", 40) + "\n\n")
-	
+
 	for i, board := range m.availableBoards {
 		prefix := "  "
 		if i == m.selectedBoardIndex {
 			prefix = "> "
 		}
-		
+
 		marker := " "
 		if board == m.currentBoard {
 			marker = "●"
 		}
-		
-		b.WriteString(fmt.Sprintf("  %s%s %s\n", prefix, marker, board))
+
+		fmt.Fprintf(&b, "  %s%s %s\n", prefix, marker, board)
 	}
-	
+
 	b.WriteString("\n  ↑/↓: Navigate | Enter: Select | Esc: Cancel\n")
-	
+
 	return b.String()
 }
-

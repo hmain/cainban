@@ -7,7 +7,17 @@ import (
 	"github.com/hmain/cainban/src/systems/task"
 )
 
-func setupTestServer(t *testing.T) *Server {
+// testServer bundles a stateless Server with a task.System bound to an
+// in-memory database, so the behavioral tests below can drive the underlying
+// task operations directly (the MCP SDK owns the protocol layer). The server
+// itself is stateless and resolves its board DB per request, so the task
+// system is held here in the test harness rather than on the server.
+type testServer struct {
+	server     *Server
+	taskSystem *task.System
+}
+
+func setupTestServer(t *testing.T) *testServer {
 	// Setup in-memory database
 	db, err := storage.NewMemory()
 	if err != nil {
@@ -15,38 +25,36 @@ func setupTestServer(t *testing.T) *Server {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	taskSystem := task.New(db.Conn())
-	server := New(taskSystem)
-
-	return server
+	return &testServer{
+		server:     NewStateless(),
+		taskSystem: task.New(db.Conn()),
+	}
 }
 
 func TestServer_New(t *testing.T) {
-	server := setupTestServer(t)
+	ts := setupTestServer(t)
 
-	if server == nil {
+	if ts.server == nil {
 		t.Fatal("Server should not be nil")
 	}
 
-	if server.taskSystem == nil {
-		t.Error("Task system should not be nil")
-	}
-
-	if server.boardSystem == nil {
+	if ts.server.boardSystem == nil {
 		t.Error("Board system should not be nil")
 	}
 
-	if server.mcpServer == nil {
+	if ts.server.mcpServer == nil {
 		t.Error("MCP server should not be nil")
+	}
+
+	if ts.server.schemaCache == nil {
+		t.Error("Schema cache should not be nil")
 	}
 }
 
 func TestServer_CreateTask(t *testing.T) {
-	server := setupTestServer(t)
+	ts := setupTestServer(t)
 
-	// Test creating a task through the task system directly
-	// since the MCP SDK handles the protocol layer
-	taskData, err := server.taskSystem.Create(1, "Test task", "Test description")
+	taskData, err := ts.taskSystem.Create(1, "Test task", "Test description")
 	if err != nil {
 		t.Errorf("Create task should not return error: %v", err)
 	}
@@ -61,16 +69,14 @@ func TestServer_CreateTask(t *testing.T) {
 }
 
 func TestServer_ListTasks(t *testing.T) {
-	server := setupTestServer(t)
+	ts := setupTestServer(t)
 
-	// Create a test task first
-	_, err := server.taskSystem.Create(1, "Test task for listing", "")
+	_, err := ts.taskSystem.Create(1, "Test task for listing", "")
 	if err != nil {
 		t.Fatalf("Failed to create test task: %v", err)
 	}
 
-	// List tasks
-	tasks, err := server.taskSystem.List(1)
+	tasks, err := ts.taskSystem.List(1)
 	if err != nil {
 		t.Errorf("List tasks should not return error: %v", err)
 	}
@@ -80,8 +86,8 @@ func TestServer_ListTasks(t *testing.T) {
 	}
 
 	found := false
-	for _, task := range tasks {
-		if task.Title == "Test task for listing" {
+	for _, tk := range tasks {
+		if tk.Title == "Test task for listing" {
 			found = true
 			break
 		}
@@ -93,22 +99,19 @@ func TestServer_ListTasks(t *testing.T) {
 }
 
 func TestServer_UpdateTaskStatus(t *testing.T) {
-	server := setupTestServer(t)
+	ts := setupTestServer(t)
 
-	// Create a test task
-	taskData, err := server.taskSystem.Create(1, "Test task for status update", "")
+	taskData, err := ts.taskSystem.Create(1, "Test task for status update", "")
 	if err != nil {
 		t.Fatalf("Failed to create test task: %v", err)
 	}
 
-	// Update task status
-	err = server.taskSystem.UpdateStatus(taskData.ID, "doing")
+	err = ts.taskSystem.UpdateStatus(taskData.ID, "doing")
 	if err != nil {
 		t.Errorf("Update task status should not return error: %v", err)
 	}
 
-	// Verify status was updated
-	updatedTask, err := server.taskSystem.GetByID(taskData.ID)
+	updatedTask, err := ts.taskSystem.GetByID(taskData.ID)
 	if err != nil {
 		t.Errorf("Failed to get updated task: %v", err)
 	}
@@ -119,16 +122,14 @@ func TestServer_UpdateTaskStatus(t *testing.T) {
 }
 
 func TestServer_GetTask(t *testing.T) {
-	server := setupTestServer(t)
+	ts := setupTestServer(t)
 
-	// Create a test task
-	taskData, err := server.taskSystem.Create(1, "Test task for retrieval", "Test description")
+	taskData, err := ts.taskSystem.Create(1, "Test task for retrieval", "Test description")
 	if err != nil {
 		t.Fatalf("Failed to create test task: %v", err)
 	}
 
-	// Get the task
-	retrievedTask, err := server.taskSystem.GetByID(taskData.ID)
+	retrievedTask, err := ts.taskSystem.GetByID(taskData.ID)
 	if err != nil {
 		t.Errorf("Get task should not return error: %v", err)
 	}
@@ -143,22 +144,19 @@ func TestServer_GetTask(t *testing.T) {
 }
 
 func TestServer_UpdateTaskPriority(t *testing.T) {
-	server := setupTestServer(t)
+	ts := setupTestServer(t)
 
-	// Create a test task
-	taskData, err := server.taskSystem.Create(1, "Test task for priority", "")
+	taskData, err := ts.taskSystem.Create(1, "Test task for priority", "")
 	if err != nil {
 		t.Fatalf("Failed to create test task: %v", err)
 	}
 
-	// Update task priority
-	err = server.taskSystem.UpdatePriority(taskData.ID, 3) // high priority
+	err = ts.taskSystem.UpdatePriority(taskData.ID, 3) // high priority
 	if err != nil {
 		t.Errorf("Update task priority should not return error: %v", err)
 	}
 
-	// Verify priority was updated
-	updatedTask, err := server.taskSystem.GetByID(taskData.ID)
+	updatedTask, err := ts.taskSystem.GetByID(taskData.ID)
 	if err != nil {
 		t.Errorf("Failed to get updated task: %v", err)
 	}
@@ -169,40 +167,35 @@ func TestServer_UpdateTaskPriority(t *testing.T) {
 }
 
 func TestServer_DeleteAndRestoreTask(t *testing.T) {
-	server := setupTestServer(t)
+	ts := setupTestServer(t)
 
-	// Create a test task
-	taskData, err := server.taskSystem.Create(1, "Test task for deletion", "")
+	taskData, err := ts.taskSystem.Create(1, "Test task for deletion", "")
 	if err != nil {
 		t.Fatalf("Failed to create test task: %v", err)
 	}
 
-	// Delete the task (soft delete)
-	err = server.taskSystem.Delete(taskData.ID)
+	err = ts.taskSystem.Delete(taskData.ID)
 	if err != nil {
 		t.Errorf("Delete task should not return error: %v", err)
 	}
 
-	// Verify task is deleted (should not appear in regular list)
-	tasks, err := server.taskSystem.List(1)
+	tasks, err := ts.taskSystem.List(1)
 	if err != nil {
 		t.Errorf("List tasks should not return error: %v", err)
 	}
 
-	for _, task := range tasks {
-		if task.ID == taskData.ID {
+	for _, tk := range tasks {
+		if tk.ID == taskData.ID {
 			t.Error("Deleted task should not appear in regular list")
 		}
 	}
 
-	// Restore the task
-	err = server.taskSystem.RestoreTask(taskData.ID)
+	err = ts.taskSystem.RestoreTask(taskData.ID)
 	if err != nil {
 		t.Errorf("Restore task should not return error: %v", err)
 	}
 
-	// Verify task is restored
-	restoredTask, err := server.taskSystem.GetByID(taskData.ID)
+	restoredTask, err := ts.taskSystem.GetByID(taskData.ID)
 	if err != nil {
 		t.Errorf("Failed to get restored task: %v", err)
 	}

@@ -134,8 +134,8 @@ type TaskLink struct {
 
 // Task represents a kanban task
 type Task struct {
-	ID          int        `json:"id"`           // Internal global ID
-	BoardID     int        `json:"board_id"`     // Board this task belongs to
+	ID          int        `json:"id"`            // Internal global ID
+	BoardID     int        `json:"board_id"`      // Board this task belongs to
 	BoardTaskID int        `json:"board_task_id"` // Board-scoped task ID (1, 2, 3, etc.)
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
@@ -260,7 +260,7 @@ func (s *System) List(boardID int) ([]*Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tasks: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tasks []*Task
 	for rows.Next() {
@@ -294,7 +294,7 @@ func (s *System) ListByStatus(boardID int, status Status) ([]*Task, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to list tasks by status: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var tasks []*Task
 	for rows.Next() {
@@ -667,7 +667,7 @@ func (s *System) GetTaskLinks(taskID int) ([]TaskLink, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to query task links: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var links []TaskLink
 	for rows.Next() {

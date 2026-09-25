@@ -3,7 +3,8 @@ package tui
 import (
 	"strings"
 	"time"
-	"github.com/charmbracelet/bubbletea"
+
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hmain/cainban/src/systems/storage"
 	"github.com/hmain/cainban/src/systems/task"
 )
@@ -14,31 +15,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		// DEBUG: Log window resize events
 		debugLog("[DEBUG] WindowSizeMsg: %dx%d\n", msg.Width, msg.Height)
-		
+
 		oldWidth, oldHeight := m.width, m.height
 		oldColumnWidth := m.calculateColumnWidth()
-		
+
 		// Update dimensions
 		m.width = msg.Width
 		m.height = msg.Height
-		
+
 		// DEBUG: Log dimension changes
 		debugLog("[DEBUG] Dimensions changed: %dx%d -> %dx%d\n", oldWidth, oldHeight, m.width, m.height)
-		
+
 		// Recalculate styles when window is resized - CRITICAL FIX
 		m = m.updateStyles()
 		newColumnWidth := m.calculateColumnWidth()
-		
+
 		// DEBUG: Log column width calculation
 		debugLog("[DEBUG] Column width: %d -> %d\n", oldColumnWidth, newColumnWidth)
-		
+
 		// Force a re-render by returning a command that does nothing
 		// This ensures the UI is updated with new dimensions
 		return m, tea.Tick(1, func(_ time.Time) tea.Msg { return nil })
-		
+
 	case tea.KeyMsg:
 		return m.handleKeyPress(msg)
-		
+
 	case TasksRefreshedMsg:
 		m.tasks = msg.Tasks
 		// Update viewport content when tasks change
@@ -49,7 +50,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentBoard = currentBoard
 		}
 		return m, nil
-		
+
 	case BoardsLoadedMsg:
 		m.availableBoards = msg.Boards
 		m.selectedBoardIndex = 0
@@ -62,33 +63,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.currentView = ViewBoardSelector
 		return m, nil
-		
+
 	case BoardSwitchedMsg:
 		// Board switched - reload database and tasks
 		m.currentBoard = msg.BoardName
-		
+
 		// Close old database
 		if m.storage != nil {
-			m.storage.Close()
+			_ = m.storage.Close()
 		}
-		
+
 		// Open new board's database
 		newPath := m.boardSystem.GetBoardPath(msg.BoardName)
 		newDB, err := storage.New(newPath)
 		if err != nil {
 			return m, func() tea.Msg { return ErrorMsg{Err: err} }
 		}
-		
+
 		m.storage = newDB
 		m.taskSystem = task.New(newDB.Conn())
-		
+
 		// Refresh tasks from new board
 		return m, m.refreshTasks()
-		
+
 	case ErrorMsg:
 		// Handle errors (could show in status bar)
 		return m, nil
-		
+
 	case string:
 		if msg == "init_viewports" {
 			// Initialize viewport content
@@ -96,7 +97,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	
+
 	return m, nil
 }
 
@@ -120,7 +121,7 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case ViewSearch:
 		return m.handleSearchKeys(msg)
 	}
-	
+
 	return m, nil
 }
 
@@ -128,11 +129,11 @@ func (m Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	var cmds []tea.Cmd
-	
+
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
-		
+
 	case "esc":
 		// Clear search if active
 		if m.searchQuery != "" {
@@ -141,35 +142,35 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, nil
-		
+
 	case "?":
 		m.currentView = ViewHelp
 		return m, nil
-		
+
 	case "r":
 		return m, m.refreshTasks()
-		
+
 	// Navigation
 	case "h", "left":
 		if m.focused > ColumnTodo {
 			m.focused--
 		}
 		return m, nil
-		
+
 	case "l", "right":
 		if m.focused < ColumnDone {
 			m.focused++
 		}
 		return m, nil
-		
+
 	case "shift+left":
 		// Move task to previous column
 		return m.moveSelectedTaskToPreviousColumn()
-		
+
 	case "shift+right":
 		// Move task to next column
 		return m.moveSelectedTaskToNextColumn()
-		
+
 	case "j", "down":
 		m.moveSelectionDown()
 		// Also update the focused viewport to handle scrolling
@@ -178,7 +179,7 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewports[m.focused] = vp
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
-		
+
 	case "k", "up":
 		m.moveSelectionUp()
 		// Also update the focused viewport to handle scrolling
@@ -187,32 +188,32 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewports[m.focused] = vp
 		cmds = append(cmds, cmd)
 		return m, tea.Batch(cmds...)
-		
+
 	// Task actions
 	case "enter":
 		return m.handleTaskAction()
-		
+
 	case "n":
 		m.currentView = ViewTaskCreate
 		m.titleInput.Focus()
 		m.descriptionInput.Blur()
 		m.formFocusIndex = 0
 		return m, nil
-		
+
 	case "d":
 		return m.handleDeleteTask(false)
-		
+
 	case "D":
 		return m.handleDeleteTask(true)
-		
+
 	case "p":
 		return m.handleCyclePriority()
-		
+
 	case "e":
 		// Edit task
 		currentStatus := m.columnToStatus(m.focused)
 		tasks := m.tasks[currentStatus]
-		
+
 		if len(tasks) > 0 {
 			selectedIndex := m.selectedTask[m.focused]
 			if selectedIndex < len(tasks) {
@@ -227,12 +228,12 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-		
+
 	case "v":
 		// View task details
 		currentStatus := m.columnToStatus(m.focused)
 		tasks := m.tasks[currentStatus]
-		
+
 		if len(tasks) > 0 {
 			selectedIndex := m.selectedTask[m.focused]
 			if selectedIndex < len(tasks) {
@@ -242,18 +243,18 @@ func (m Model) handleKanbanKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		return m, nil
-		
+
 	case "b":
 		// Open board selector
 		return m, m.loadBoards()
-		
+
 	case "/":
 		// Open search view
 		m.currentView = ViewSearch
 		m.searchInput.SetValue("")
 		m.searchInput.Focus()
 		return m, m.searchInput.Cursor.BlinkCmd()
-		
+
 	// Pass other keys to focused viewport for scrolling (pgup/pgdn, etc.)
 	default:
 		vp := m.viewports[m.focused]
@@ -270,7 +271,7 @@ func (m Model) handleHelpKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewKanban
 		return m, nil
 	}
-	
+
 	return m, nil
 }
 
@@ -281,14 +282,14 @@ func (m Model) handleTaskDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.currentView = ViewKanban
 		return m, nil
 	}
-	
+
 	return m, nil
 }
 
 // handleTaskCreateKeys processes keyboard input for the task creation form
 func (m Model) handleTaskCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	
+
 	switch msg.String() {
 	case "esc":
 		// Cancel and return to kanban
@@ -297,12 +298,12 @@ func (m Model) handleTaskCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.descriptionInput.SetValue("")
 		m.selectedPriority = 0
 		return m, nil
-		
+
 	case "p":
 		// Cycle through priority levels
 		m.selectedPriority = (m.selectedPriority + 1) % 5
 		return m, nil
-		
+
 	case "tab", "shift+tab":
 		// Switch between title and description
 		if m.formFocusIndex == 0 {
@@ -315,33 +316,33 @@ func (m Model) handleTaskCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.titleInput.Focus()
 		}
 		return m, nil
-		
+
 	case "enter":
 		// Submit form
 		title := strings.TrimSpace(m.titleInput.Value())
 		if title == "" {
 			return m, nil
 		}
-		
+
 		description := strings.TrimSpace(m.descriptionInput.Value())
-		
+
 		// Create task and return to kanban
 		m.currentView = ViewKanban
 		m.titleInput.SetValue("")
 		m.descriptionInput.SetValue("")
 		priority := m.selectedPriority
 		m.selectedPriority = 0
-		
+
 		return m, m.createTaskWithPriority(title, description, priority)
 	}
-	
+
 	// Update the focused input
 	if m.formFocusIndex == 0 {
 		m.titleInput, cmd = m.titleInput.Update(msg)
 	} else {
 		m.descriptionInput, cmd = m.descriptionInput.Update(msg)
 	}
-	
+
 	return m, cmd
 }
 
@@ -352,26 +353,26 @@ func (m Model) handleConfirmDialogKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Confirm action
 		m.currentView = ViewKanban
 		m.showConfirmDialog = false
-		
+
 		if m.confirmAction == "hard_delete" {
 			return m, m.hardDeleteTask(m.confirmTaskID)
 		}
 		return m, m.deleteTask(m.confirmTaskID)
-		
+
 	case "n", "N", "esc":
 		// Cancel
 		m.currentView = ViewKanban
 		m.showConfirmDialog = false
 		return m, nil
 	}
-	
+
 	return m, nil
 }
 
 // handleTaskEditKeys processes keyboard input for the task edit form
 func (m Model) handleTaskEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	
+
 	switch msg.String() {
 	case "esc":
 		// Cancel and return to kanban
@@ -379,7 +380,7 @@ func (m Model) handleTaskEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.titleInput.SetValue("")
 		m.descriptionInput.SetValue("")
 		return m, nil
-		
+
 	case "tab", "shift+tab":
 		// Switch between title and description
 		if m.formFocusIndex == 0 {
@@ -392,31 +393,31 @@ func (m Model) handleTaskEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.titleInput.Focus()
 		}
 		return m, nil
-		
+
 	case "enter":
 		// Submit form
 		title := strings.TrimSpace(m.titleInput.Value())
 		if title == "" {
 			return m, nil
 		}
-		
+
 		description := strings.TrimSpace(m.descriptionInput.Value())
-		
+
 		// Update task and return to kanban
 		m.currentView = ViewKanban
 		m.titleInput.SetValue("")
 		m.descriptionInput.SetValue("")
-		
+
 		return m, m.updateTask(m.editTaskID, title, description)
 	}
-	
+
 	// Update the focused input
 	if m.formFocusIndex == 0 {
 		m.titleInput, cmd = m.titleInput.Update(msg)
 	} else {
 		m.descriptionInput, cmd = m.descriptionInput.Update(msg)
 	}
-	
+
 	return m, cmd
 }
 
@@ -424,7 +425,7 @@ func (m Model) handleTaskEditKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) moveSelectionDown() {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) > 0 {
 		current := m.selectedTask[m.focused]
 		if current < len(tasks)-1 {
@@ -449,19 +450,19 @@ func (m *Model) moveSelectionUp() {
 func (m Model) handleTaskAction() (tea.Model, tea.Cmd) {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) == 0 {
 		return m, nil
 	}
-	
+
 	selectedIndex := m.selectedTask[m.focused]
 	if selectedIndex >= len(tasks) {
 		return m, nil
 	}
-	
+
 	selectedTask := tasks[selectedIndex]
 	var newStatus task.Status
-	
+
 	switch currentStatus {
 	case task.StatusTodo:
 		newStatus = task.StatusDoing
@@ -471,7 +472,7 @@ func (m Model) handleTaskAction() (tea.Model, tea.Cmd) {
 		// Already done, maybe show task details instead
 		return m, nil
 	}
-	
+
 	return m, m.moveTask(selectedTask.ID, newStatus)
 }
 
@@ -479,18 +480,18 @@ func (m Model) handleTaskAction() (tea.Model, tea.Cmd) {
 func (m Model) handleDeleteTask(hardDelete bool) (tea.Model, tea.Cmd) {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) == 0 {
 		return m, nil
 	}
-	
+
 	selectedIndex := m.selectedTask[m.focused]
 	if selectedIndex >= len(tasks) {
 		return m, nil
 	}
-	
+
 	selectedTask := tasks[selectedIndex]
-	
+
 	// Show confirmation dialog
 	m.showConfirmDialog = true
 	m.confirmTaskID = selectedTask.ID
@@ -500,7 +501,7 @@ func (m Model) handleDeleteTask(hardDelete bool) (tea.Model, tea.Cmd) {
 		m.confirmAction = "delete"
 	}
 	m.currentView = ViewConfirmDialog
-	
+
 	return m, nil
 }
 
@@ -508,19 +509,19 @@ func (m Model) handleDeleteTask(hardDelete bool) (tea.Model, tea.Cmd) {
 func (m Model) handleCyclePriority() (tea.Model, tea.Cmd) {
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) == 0 {
 		return m, nil
 	}
-	
+
 	selectedIndex := m.selectedTask[m.focused]
 	if selectedIndex >= len(tasks) {
 		return m, nil
 	}
-	
+
 	selectedTask := tasks[selectedIndex]
 	newPriority := (selectedTask.Priority + 1) % 5
-	
+
 	return m, m.updateTaskPriority(selectedTask.ID, newPriority)
 }
 
@@ -529,22 +530,22 @@ func (m Model) moveSelectedTaskToPreviousColumn() (tea.Model, tea.Cmd) {
 	if m.focused == ColumnTodo {
 		return m, nil // Already at first column
 	}
-	
+
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) == 0 {
 		return m, nil
 	}
-	
+
 	selectedIndex := m.selectedTask[m.focused]
 	if selectedIndex >= len(tasks) {
 		return m, nil
 	}
-	
+
 	selectedTask := tasks[selectedIndex]
 	var newStatus task.Status
-	
+
 	switch currentStatus {
 	case task.StatusDoing:
 		newStatus = task.StatusTodo
@@ -553,7 +554,7 @@ func (m Model) moveSelectedTaskToPreviousColumn() (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	
+
 	return m, m.moveTask(selectedTask.ID, newStatus)
 }
 
@@ -562,22 +563,22 @@ func (m Model) moveSelectedTaskToNextColumn() (tea.Model, tea.Cmd) {
 	if m.focused == ColumnDone {
 		return m, nil // Already at last column
 	}
-	
+
 	currentStatus := m.columnToStatus(m.focused)
 	tasks := m.tasks[currentStatus]
-	
+
 	if len(tasks) == 0 {
 		return m, nil
 	}
-	
+
 	selectedIndex := m.selectedTask[m.focused]
 	if selectedIndex >= len(tasks) {
 		return m, nil
 	}
-	
+
 	selectedTask := tasks[selectedIndex]
 	var newStatus task.Status
-	
+
 	switch currentStatus {
 	case task.StatusTodo:
 		newStatus = task.StatusDoing
@@ -586,11 +587,9 @@ func (m Model) moveSelectedTaskToNextColumn() (tea.Model, tea.Cmd) {
 	default:
 		return m, nil
 	}
-	
+
 	return m, m.moveTask(selectedTask.ID, newStatus)
 }
-
-
 
 // handleBoardSelectorKeys processes keyboard input for board selector
 func (m Model) handleBoardSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -598,19 +597,19 @@ func (m Model) handleBoardSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		m.currentView = ViewKanban
 		return m, nil
-		
+
 	case "j", "down":
 		if m.selectedBoardIndex < len(m.availableBoards)-1 {
 			m.selectedBoardIndex++
 		}
 		return m, nil
-		
+
 	case "k", "up":
 		if m.selectedBoardIndex > 0 {
 			m.selectedBoardIndex--
 		}
 		return m, nil
-		
+
 	case "enter":
 		if m.selectedBoardIndex < len(m.availableBoards) {
 			selectedBoard := m.availableBoards[m.selectedBoardIndex]
@@ -619,14 +618,14 @@ func (m Model) handleBoardSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	
+
 	return m, nil
 }
 
 // handleSearchKeys processes keyboard input for search view
 func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
-	
+
 	switch msg.String() {
 	case "esc":
 		// Cancel search and return
@@ -635,14 +634,14 @@ func (m Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.searchQuery = ""
 		m.updateViewportContent()
 		return m, nil
-		
+
 	case "enter":
 		// Apply search and return
 		m.searchQuery = m.searchInput.Value()
 		m.currentView = ViewKanban
 		m.updateViewportContent()
 		return m, nil
-		
+
 	default:
 		// Update search input
 		m.searchInput, cmd = m.searchInput.Update(msg)

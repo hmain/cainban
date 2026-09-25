@@ -2,16 +2,17 @@ package tui
 
 import (
 	"testing"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hmain/cainban/src/systems/storage"
 )
 
 func TestCalculateColumnWidth(t *testing.T) {
 	tests := []struct {
-		name           string
-		terminalWidth  int
-		expectedWidth  int
-		description    string
+		name          string
+		terminalWidth int
+		expectedWidth int
+		description   string
 	}{
 		{
 			name:          "Small terminal",
@@ -51,11 +52,11 @@ func TestCalculateColumnWidth(t *testing.T) {
 
 			// Allow some flexibility in the exact calculation
 			if result < 20 || result > 60 {
-				t.Errorf("calculateColumnWidth() = %d, expected reasonable range 20-60 for width %d", 
+				t.Errorf("calculateColumnWidth() = %d, expected reasonable range 20-60 for width %d",
 					result, tt.terminalWidth)
 			}
 
-			t.Logf("Terminal width %d -> Column width %d (%s)", 
+			t.Logf("Terminal width %d -> Column width %d (%s)",
 				tt.terminalWidth, result, tt.description)
 		})
 	}
@@ -81,7 +82,7 @@ func TestCalculateColumnHeight(t *testing.T) {
 			description:    "Standard terminal should have reasonable height",
 		},
 		{
-			name:           "Large terminal", 
+			name:           "Large terminal",
 			terminalHeight: 50,
 			expectedMin:    40, // 50-6 reserved = 44, should be around that
 			description:    "Large terminal should use available space",
@@ -98,11 +99,11 @@ func TestCalculateColumnHeight(t *testing.T) {
 			result := model.calculateColumnHeight()
 
 			if result < tt.expectedMin {
-				t.Errorf("calculateColumnHeight() = %d, expected >= %d for height %d", 
+				t.Errorf("calculateColumnHeight() = %d, expected >= %d for height %d",
 					result, tt.expectedMin, tt.terminalHeight)
 			}
 
-			t.Logf("Terminal height %d -> Column height %d (%s)", 
+			t.Logf("Terminal height %d -> Column height %d (%s)",
 				tt.terminalHeight, result, tt.description)
 		})
 	}
@@ -114,20 +115,20 @@ func setupTestModel(t *testing.T) Model {
 	if err != nil {
 		t.Fatalf("Failed to create test database: %v", err)
 	}
-	
+
 	model := NewModel(db)
 	model.width = 120
 	model.height = 24
 	*model = model.updateStyles()
-	
+
 	return *model
 }
 
 func TestKeyNavigation(t *testing.T) {
 	tests := []struct {
-		name          string
-		key           string
-		initialColumn Column
+		name           string
+		key            string
+		initialColumn  Column
 		expectedColumn Column
 	}{
 		{"Move right from TODO", "l", ColumnTodo, ColumnDoing},
@@ -144,9 +145,10 @@ func TestKeyNavigation(t *testing.T) {
 			m.focused = tt.initialColumn
 
 			msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tt.key)}
-			if tt.key == "left" {
+			switch tt.key {
+			case "left":
 				msg = tea.KeyMsg{Type: tea.KeyLeft}
-			} else if tt.key == "right" {
+			case "right":
 				msg = tea.KeyMsg{Type: tea.KeyRight}
 			}
 
@@ -186,7 +188,7 @@ func TestQuitKeys(t *testing.T) {
 
 func TestWindowResize(t *testing.T) {
 	m := setupTestModel(t)
-	
+
 	// Send window resize message
 	msg := tea.WindowSizeMsg{Width: 160, Height: 40}
 	updatedModel, _ := m.Update(msg)
@@ -210,7 +212,7 @@ func TestWindowResize(t *testing.T) {
 }
 func TestSearchActivation(t *testing.T) {
 	m := setupTestModel(t)
-	
+
 	// Press '/' to activate search
 	msg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")}
 	updatedModel, cmd := m.Update(msg)
@@ -218,17 +220,17 @@ func TestSearchActivation(t *testing.T) {
 	if !ok {
 		t.Fatal("Update did not return Model type")
 	}
-	
+
 	// Verify search view is active
 	if m.currentView != ViewSearch {
 		t.Errorf("Expected ViewSearch, got %v", m.currentView)
 	}
-	
+
 	// Verify cursor blink command was returned
 	if cmd == nil {
 		t.Error("Expected cursor blink command, got nil")
 	}
-	
+
 	// Type 't' (simulating typing)
 	msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("t")}
 	updatedModel, _ = m.Update(msg)
@@ -236,7 +238,7 @@ func TestSearchActivation(t *testing.T) {
 	if !ok {
 		t.Fatal("Update did not return Model type")
 	}
-	
+
 	// Press Enter to apply search
 	msg = tea.KeyMsg{Type: tea.KeyEnter}
 	updatedModel, _ = m.Update(msg)
@@ -244,12 +246,12 @@ func TestSearchActivation(t *testing.T) {
 	if !ok {
 		t.Fatal("Update did not return Model type")
 	}
-	
+
 	// Verify back to kanban view
 	if m.currentView != ViewKanban {
 		t.Errorf("Expected ViewKanban after Enter, got %v", m.currentView)
 	}
-	
+
 	// The query should contain what was typed
 	if m.searchQuery == "" {
 		t.Error("Expected non-empty search query after Enter")
