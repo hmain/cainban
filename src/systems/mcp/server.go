@@ -3,95 +3,195 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/http"
 
 	"github.com/hmain/cainban/src/systems/board"
+	"github.com/hmain/cainban/src/systems/storage"
 	"github.com/hmain/cainban/src/systems/task"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// Server wraps the official MCP SDK server with cainban functionality
+// serverName / serverVersion identify the cainban MCP server in the
+// initialize handshake. Kept as package constants so stdio and HTTP transports
+// advertise the same implementation info.
+const (
+	serverName    = "cainban"
+	serverVersion = "0.2.1"
+)
+
+// Server wraps the official MCP SDK server with cainban functionality.
+//
+// It is deliberately STATELESS with respect to request routing: it holds no
+// database handle and no "current board" selection. Every tool call resolves
+// and opens the correct board database on its own, so the same Server value can
+// safely serve concurrent requests for different boards (required by the
+// stateless Streamable HTTP transport, where a fresh *mcp.Server is built per
+// request via getServer).
 type Server struct {
-	taskSystem  *task.System
 	boardSystem *board.System
-	mcpServer   *mcp.Server
+	// schemaCache is shared across the per-request *mcp.Server instances built
+	// by getServer, so JSON schema reflection/resolution happens once rather
+	// than on every request.
+	schemaCache *mcp.SchemaCache
+	// mcpServer is the underlying SDK server used by the stdio transport
+	// (Start). The HTTP transport builds its own per-request servers.
+	mcpServer *mcp.Server
 }
 
-// New creates a new MCP server using the official Go SDK
-func New(taskSystem *task.System) *Server {
-	server := &Server{
-		taskSystem:  taskSystem,
+// New creates a new stateless cainban MCP server.
+//
+// The taskSystem argument is retained for backwards compatibility with existing
+// callers/tests but is IGNORED: the server no longer keeps a process-wide task
+// system, because board resolution is now per request. Pass nil.
+func New(_ *task.System) *Server {
+	return NewStateless()
+}
+
+// NewStateless creates a new stateless cainban MCP server. This is the
+// preferred constructor.
+func NewStateless() *Server {
+	s := &Server{
 		boardSystem: board.New(),
+		schemaCache: mcp.NewSchemaCache(),
 	}
-
-	// Create MCP server with cainban implementation info
-	server.mcpServer = mcp.NewServer(&mcp.Implementation{
-		Name:    "cainban",
-		Version: "0.2.1",
-	}, nil)
-
-	// Register all tools
-	server.registerTools()
-
-	return server
+	s.mcpServer = s.newMCPServer()
+	return s
 }
 
-// Start starts the MCP server using stdio transport
+// newMCPServer builds a fresh *mcp.Server with all cainban tools registered and
+// the shared schema cache installed. Used both for the long-lived stdio server
+// and, via getServer, for each stateless HTTP request.
+func (s *Server) newMCPServer() *mcp.Server {
+	mcpServer := mcp.NewServer(&mcp.Implementation{
+		Name:    serverName,
+		Version: serverVersion,
+	}, &mcp.ServerOptions{
+		SchemaCache: s.schemaCache,
+	})
+	s.registerTools(mcpServer)
+	return mcpServer
+}
+
+// Start starts the MCP server using the stdio transport (the default mode).
 func (s *Server) Start() error {
 	return s.mcpServer.Run(context.Background(), &mcp.StdioTransport{})
 }
 
-// registerTools registers all cainban tools with the MCP server
-func (s *Server) registerTools() {
-	// Create Task tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+// getServer returns a per-request *mcp.Server for the stateless HTTP handler.
+// Tools and the schema cache are shared; no request state leaks between calls
+// because the handlers themselves open their board DB per request.
+func (s *Server) getServer(_ *http.Request) *mcp.Server {
+	return s.newMCPServer()
+}
+
+// ServeHTTP serves the stateless Streamable HTTP transport on addr, bound to
+// loopback only. addr may be ":8080" or "127.0.0.1:8080"; a bare-port or
+// wildcard host is rewritten to 127.0.0.1 so the server never binds a public
+// interface (multi-user/public exposure is deferred to Phase 3).
+func (s *Server) ServeHTTP(addr string) error {
+	handler := mcp.NewStreamableHTTPHandler(s.getServer, &mcp.StreamableHTTPOptions{
+		Stateless: true,
+	})
+
+	loopbackAddr, err := loopbackOnly(addr)
+	if err != nil {
+		return err
+	}
+
+	httpServer := &http.Server{
+		Addr:    loopbackAddr,
+		Handler: handler,
+	}
+	fmt.Printf("cainban MCP server (stateless, Streamable HTTP) listening on http://%s\n", loopbackAddr)
+	return httpServer.ListenAndServe()
+}
+
+// loopbackOnly forces the host portion of addr to 127.0.0.1, keeping the port.
+func loopbackOnly(addr string) (string, error) {
+	if addr == "" {
+		return "", fmt.Errorf("empty address")
+	}
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		// addr had no host:port form (e.g. bare port "8080" or ":8080" already
+		// handled by SplitHostPort). Treat a bare number as a port.
+		return "", fmt.Errorf("invalid address %q (use host:port or :port): %w", addr, err)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "*" {
+		host = "127.0.0.1"
+	}
+	return net.JoinHostPort(host, port), nil
+}
+
+// resolveTaskSystem opens the correct board database for a single request and
+// returns a task.System bound to it plus a close func the caller MUST defer.
+//
+// Board selection is fully explicit per request (no reliance on the
+// ~/.cainban/current-board file):
+//   - boardName selects which board DATABASE FILE to open; empty means the
+//     default board.
+//   - boardID selects the board ROW inside that database file. Each board DB has
+//     its own boards table whose primary board is id 1, so boardID defaults to 1
+//     when zero (preserving prior behaviour).
+func (s *Server) resolveTaskSystem(boardName string) (*task.System, func(), error) {
+	if boardName == "" {
+		boardName = "default"
+	}
+	dbPath := s.boardSystem.GetBoardPath(boardName)
+	db, err := storage.New(dbPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open board %q: %w", boardName, err)
+	}
+	closeFn := func() { _ = db.Close() }
+	return task.New(db.Conn()), closeFn, nil
+}
+
+// registerTools registers all cainban tools on the given SDK server.
+func (s *Server) registerTools(mcpServer *mcp.Server) {
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "create_task",
 		Description: "Create a new task in the kanban board",
 	}, s.handleCreateTask)
 
-	// List Tasks tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_tasks",
 		Description: "List tasks from the kanban board",
 	}, s.handleListTasks)
 
-	// Update Task Status tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "update_task_status",
 		Description: "Update the status of a task",
 	}, s.handleUpdateTaskStatus)
 
-	// Get Task tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_task",
 		Description: "Get a specific task by ID",
 	}, s.handleGetTask)
 
-	// Update Task Priority tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "update_task_priority",
 		Description: "Update the priority of a task",
 	}, s.handleUpdateTaskPriority)
 
-	// Update Task tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "update_task",
 		Description: "Update a task's title and description",
 	}, s.handleUpdateTask)
 
-	// List Boards tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_boards",
 		Description: "List all available kanban boards",
 	}, s.handleListBoards)
 
-	// Change Board tool
-	mcp.AddTool(s.mcpServer, &mcp.Tool{
+	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "change_board",
 		Description: "Change the active kanban board",
 	}, s.handleChangeBoard)
 }
 
-// Tool handler types for the Go SDK
+// Tool handler argument types.
+
 type CreateTaskArgs struct {
 	Title       string      `json:"title" jsonschema:"the title of the task"`
 	Description string      `json:"description,omitempty" jsonschema:"the description of the task"`
@@ -130,22 +230,26 @@ type ChangeBoardArgs struct {
 	BoardName string `json:"board_name" jsonschema:"the name of the board to switch to"`
 }
 
-// Tool handlers
+// Tool handlers. Each resolves its board database per request.
+
 func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest, args CreateTaskArgs) (*mcp.CallToolResult, any, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
 	boardID := args.BoardID
 	if boardID == 0 {
 		boardID = 1
 	}
 
 	var createdTask *task.Task
-	var err error
-
 	if args.Priority != nil && task.IsValidPriority(args.Priority) {
-		createdTask, err = s.taskSystem.CreateWithPriority(boardID, args.Title, args.Description, args.Priority)
+		createdTask, err = taskSystem.CreateWithPriority(boardID, args.Title, args.Description, args.Priority)
 	} else {
-		createdTask, err = s.taskSystem.Create(boardID, args.Title, args.Description)
+		createdTask, err = taskSystem.Create(boardID, args.Title, args.Description)
 	}
-
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create task: %w", err)
 	}
@@ -165,23 +269,26 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest,
 }
 
 func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, args ListTasksArgs) (*mcp.CallToolResult, any, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
 	boardID := args.BoardID
 	if boardID == 0 {
 		boardID = 1
 	}
 
 	var tasks []*task.Task
-	var err error
-
 	if args.Status != "" {
 		if !task.IsValidStatus(args.Status) {
 			return nil, nil, fmt.Errorf("invalid status: %s", args.Status)
 		}
-		tasks, err = s.taskSystem.ListByStatus(boardID, task.Status(args.Status))
+		tasks, err = taskSystem.ListByStatus(boardID, task.Status(args.Status))
 	} else {
-		tasks, err = s.taskSystem.List(boardID)
+		tasks, err = taskSystem.List(boardID)
 	}
-
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list tasks: %w", err)
 	}
@@ -227,18 +334,21 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("invalid status: %s", args.Status)
 	}
 
-	// Use board ID 1 (each board database has its own boards table with ID 1)
+	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	// Board row 1: each board database has its own boards table with ID 1.
 	boardID := 1
 
-	// Get task by board-scoped ID
-	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
+	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
 	}
 
-	// Update using internal ID
-	err = s.taskSystem.UpdateStatus(t.ID, task.Status(args.Status))
-	if err != nil {
+	if err := taskSystem.UpdateStatus(t.ID, task.Status(args.Status)); err != nil {
 		return nil, nil, fmt.Errorf("failed to update task status: %w", err)
 	}
 
@@ -252,11 +362,15 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 }
 
 func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, any, error) {
-	// Use board ID 1 (each board database has its own boards table with ID 1)
+	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
 	boardID := 1
 
-	// Get task by board-scoped ID
-	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
+	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get task #%d: %w", args.ID, err)
 	}
@@ -275,18 +389,20 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 		return nil, nil, fmt.Errorf("invalid priority level")
 	}
 
-	// Use board ID 1 (each board database has its own boards table with ID 1)
+	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
 	boardID := 1
 
-	// Get task by board-scoped ID
-	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
+	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
 	}
 
-	// Update using internal ID
-	err = s.taskSystem.UpdatePriority(t.ID, args.Priority)
-	if err != nil {
+	if err := taskSystem.UpdatePriority(t.ID, args.Priority); err != nil {
 		return nil, nil, fmt.Errorf("failed to update task priority: %w", err)
 	}
 
@@ -303,18 +419,20 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 }
 
 func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskArgs) (*mcp.CallToolResult, any, error) {
-	// Use board ID 1 (each board database has its own boards table with ID 1)
+	taskSystem, closeFn, err := s.resolveTaskSystem("")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
 	boardID := 1
 
-	// Get task by board-scoped ID
-	t, err := s.taskSystem.GetByBoardTaskID(boardID, args.ID)
+	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
 	}
 
-	// Update using internal ID
-	err = s.taskSystem.Update(t.ID, args.Title, args.Description)
-	if err != nil {
+	if err := taskSystem.Update(t.ID, args.Title, args.Description); err != nil {
 		return nil, nil, fmt.Errorf("failed to update task: %w", err)
 	}
 
@@ -333,8 +451,6 @@ func (s *Server) handleListBoards(ctx context.Context, req *mcp.CallToolRequest,
 		return nil, nil, fmt.Errorf("failed to list boards: %w", err)
 	}
 
-	currentBoard, _ := s.boardSystem.GetCurrentBoard()
-
 	if len(boards) == 0 {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
@@ -346,35 +462,32 @@ func (s *Server) handleListBoards(ctx context.Context, req *mcp.CallToolRequest,
 	var content []mcp.Content
 	content = append(content, &mcp.TextContent{Text: "Available boards:"})
 	for _, b := range boards {
-		marker := ""
-		if b.Name == currentBoard {
-			marker = " (current)"
-		}
 		content = append(content, &mcp.TextContent{
-			Text: fmt.Sprintf("• %s%s", b.Name, marker),
+			Text: fmt.Sprintf("• %s", b.Name),
 		})
 	}
 
 	return &mcp.CallToolResult{Content: content}, boards, nil
 }
 
+// handleChangeBoard is now a NO-OP with respect to server-side state.
+//
+// In the stateful design it wrote ~/.cainban/current-board, a process-wide,
+// cross-client global side effect that made request routing depend on ambient
+// state. In the stateless design each request selects its own board, so this
+// handler only VALIDATES that the requested board exists and reports success;
+// it does NOT mutate any shared state. The tool is retained (rather than
+// removed) so the tools/list schema is unchanged. Board selection per request
+// is deferred to Phase 3 (auth-scoped, repo-keyed tenancy).
 func (s *Server) handleChangeBoard(ctx context.Context, req *mcp.CallToolRequest, args ChangeBoardArgs) (*mcp.CallToolResult, any, error) {
-	// Check if board exists
-	_, err := s.boardSystem.GetBoard(args.BoardName)
-	if err != nil {
+	if _, err := s.boardSystem.GetBoard(args.BoardName); err != nil {
 		return nil, nil, fmt.Errorf("board '%s' not found", args.BoardName)
-	}
-
-	// Set as current board
-	err = s.boardSystem.SetCurrentBoard(args.BoardName)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to change board: %w", err)
 	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
-				Text: fmt.Sprintf("Changed to board: %s", args.BoardName),
+				Text: fmt.Sprintf("Board '%s' exists. Note: board selection is now per-request (change_board no longer changes global state); pass the board explicitly on each call.", args.BoardName),
 			},
 		},
 	}, nil, nil
