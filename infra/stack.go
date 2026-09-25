@@ -47,6 +47,35 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	})
 
+	// --- DynamoDB grants table (Phase 4) ---------------------------------
+	//
+	// A SEPARATE table from the "cainban" tenant-data table. Grants are keyed by
+	// SUBJECT (PK=USER#<cognitoSub>, SK=GRANT#<owner>/<repo>) — a disjoint
+	// keyspace and a different access path (the pre-token trigger queries by
+	// user; it never touches board/task data). A separate table is chosen over
+	// reusing the single "cainban" table so the pre-token Lambda's IAM can be
+	// scoped to the grants table ARN ALONE (least privilege — a token-minting
+	// trigger structurally cannot read task data), and so PITR/backup boundaries
+	// stay clean per concern. Cost is identical: PAY_PER_REQUEST (on-demand),
+	// zero at rest. Same durability posture as the main table (PITR + RETAIN).
+	// See src/systems/grants for the key design and fallback/fail-closed rules.
+	grantsTable := awsdynamodb.NewTable(stack, jsii.String("GrantsTable"), &awsdynamodb.TableProps{
+		TableName: jsii.String("cainban-grants"),
+		PartitionKey: &awsdynamodb.Attribute{
+			Name: jsii.String("PK"),
+			Type: awsdynamodb.AttributeType_STRING,
+		},
+		SortKey: &awsdynamodb.Attribute{
+			Name: jsii.String("SK"),
+			Type: awsdynamodb.AttributeType_STRING,
+		},
+		BillingMode:   awsdynamodb.BillingMode_PAY_PER_REQUEST,
+		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
+		PointInTimeRecoverySpecification: &awsdynamodb.PointInTimeRecoverySpecification{
+			PointInTimeRecoveryEnabled: jsii.Bool(true),
+		},
+	})
+
 	// --- Cognito user pool (identity provider) ---------------------------
 	//
 	// A self-contained Cognito user pool issues the JWTs the Lambda validates
@@ -112,8 +141,31 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Handler:      jsii.String("bootstrap"),
 		MemorySize:   jsii.Number(128),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(5)),
-		Code:         awslambda.Code_FromAsset(jsii.String("../.build/pretoken"), nil),
+		// Phase 4: the trigger reads grants from the grants table. Name + region
+		// come from env; the custom:repos attribute remains a read fallback when
+		// the table has nothing for a subject (and if this env were unset the
+		// trigger degrades to the attribute-only path — it never fails token
+		// issuance on missing config).
+		Environment: &map[string]*string{
+			"CAINBAN_GRANTS_TABLE":  grantsTable.TableName(),
+			"CAINBAN_GRANTS_REGION": stack.Region(),
+		},
+		Code: awslambda.Code_FromAsset(jsii.String("../.build/pretoken"), nil),
 	})
+
+	// Least-privilege: the pre-token trigger only READS grants — it issues
+	// GetItem (default_repo META item) + Query (a subject's GRANT# items). Grant
+	// ONLY those two actions, scoped to the grants table ARN alone. It gets NO
+	// write actions and NO access to the "cainban" tenant-data table, so a
+	// token-minting trigger structurally cannot mutate grants or read task data.
+	preTokenFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Effect: awsiam.Effect_ALLOW,
+		Actions: jsii.Strings(
+			"dynamodb:GetItem",
+			"dynamodb:Query",
+		),
+		Resources: &[]*string{grantsTable.TableArn()},
+	}))
 
 	// Attach as the pool's PreTokenGeneration trigger. LambdaVersion V1_0 emits
 	// the overrides as top-level ID-token claims via ClaimsToAddOrOverride
@@ -238,6 +290,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	awscdk.NewCfnOutput(stack, jsii.String("TableName"), &awscdk.CfnOutputProps{
 		Value:       table.TableName(),
 		Description: jsii.String("DynamoDB table backing cainban"),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("GrantsTableName"), &awscdk.CfnOutputProps{
+		Value:       grantsTable.TableName(),
+		Description: jsii.String("DynamoDB grants table (Phase 4) — read by the pre-token trigger"),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("UserPoolId"), &awscdk.CfnOutputProps{
 		Value:       userPool.UserPoolId(),
