@@ -31,7 +31,7 @@ testing).
 | --- | --- |
 | **GitHub App name** | e.g. `cainban-connect` (must be globally unique) |
 | **Homepage URL** | your cainban homepage or repo URL |
-| **Callback URL** | the P4.3 connect callback, e.g. `https://<function-url>/connect/github/callback` (can be a placeholder now; P4.3 finalizes it) |
+| **Callback URL** | the P4.3 connect callback: `<ConnectFunctionUrl>connect/github/callback` — read `<ConnectFunctionUrl>` from the stack output after deploy (see below). You can register a placeholder now and update it once the stack is deployed. |
 | **Expire user authorization tokens** | ✅ enabled (short-lived user tokens) |
 | **Request user authorization (OAuth) during installation** | ✅ enabled (needed for the P4.3 OAuth leg that identifies the connecting user) |
 | **Webhook** | **☐ OFF** — uncheck **Active**. No webhook is used in Phase 4 (issue/PR sync is a later phase). Leave the webhook URL/secret blank. |
@@ -83,6 +83,37 @@ After creating the App, on its settings page:
 Install the App on the target **organization** (or user) and select the repos it
 should cover. Verification will only pass for covered repos.
 
+## 5a. Finalize the App Callback URL (P4.3)
+
+The connect flow's OAuth callback is served by the **connect Lambda's Function
+URL**. After `cdk deploy`, read the URL from the stack's **`ConnectFunctionUrl`**
+output and set the GitHub App's **Callback URL** to that URL **plus**
+`connect/github/callback`:
+
+```sh
+export AWS_PROFILE=aws-test-hamin AWS_REGION=eu-north-1
+
+# The connect endpoint base (note the trailing slash Function URLs include):
+CONNECT_URL=$(aws cloudformation describe-stacks \
+  --stack-name CainbanPhase2Stack \
+  --query "Stacks[0].Outputs[?OutputKey=='ConnectFunctionUrl'].OutputValue" \
+  --output text)
+
+# The value to paste into the GitHub App's "Callback URL" field:
+echo "${CONNECT_URL}connect/github/callback"
+```
+
+Set that exact value as the App's **Callback URL** (GitHub → your App →
+**General** → *Identifying and authorizing users* → **Callback URL**). It must
+match the `redirect_uri` the connect Lambda sends; the stack passes the connect
+Lambda a `CAINBAN_CONNECT_REDIRECT_URI` only if you set that env var — leave it
+unset to rely on the App's registered default callback.
+
+> The Function URL edge is **AWS_IAM**, so the browser hop to
+> `/connect/github/start` and back to `/connect/github/callback` is SigV4-signed
+> by an authenticated client (or a small signing front-end), not an anonymous
+> browser request. This mirrors the MCP endpoint's edge auth.
+
 ## 6. Load the credentials into AWS Secrets Manager
 
 The CDK stack creates a **placeholder** secret named **`cainban/github-app`**
@@ -102,9 +133,11 @@ deploy, fill it with the JSON the loader (`src/systems/secrets`) expects:
 - `app_id` may be a JSON string or number.
 - `private_key` is the **full PEM**, newlines escaped as `\n` inside the JSON
   string (or use the file-based command below, which handles newlines for you).
-- `client_id` / `client_secret` are read but used only by the P4.3 OAuth leg —
-  they may be left empty until P4.3, but the private key + app_id are required
-  for `VerifyRepoAccess`.
+- `client_id` / `client_secret` are used by the P4.3 OAuth leg (code↔login
+  exchange) **and** to derive the connect API's anti-CSRF state-signing key.
+  They are now **required** for the connect flow (`/connect/*`) — the connect
+  Lambda fails at cold start if either is empty. `app_id` + `private_key` remain
+  required for `VerifyRepoAccess`.
 
 Put the value in with the AWS CLI (never echo the key into shell history in a
 shared environment; prefer the file form). The PEM you downloaded is

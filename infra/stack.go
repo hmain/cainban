@@ -333,10 +333,104 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
 	})
 
+	// --- Connect API Lambda (Phase 4, P4.3) ------------------------------
+	//
+	// A SEPARATE function from the MCP Lambda. The connect flow has a distinct
+	// job (human OAuth + server-side repo verification + grant writes) and a
+	// distinct IAM surface (Secrets Manager read + grants-table read/WRITE, and
+	// crucially NO access to the "cainban" board/task data table). Keeping it
+	// its own function keeps each function's blast radius and least-privilege
+	// IAM minimal, and lets the connect endpoint be a browser-facing redirect
+	// surface without touching the MCP data path. Same runtime/arch as the other
+	// functions: provided.al2023 + arm64 + pure-Go bootstrap (CGO off — no
+	// SQLite here). Built into ../.build/connect (see `make connect`/`bundles`).
+	connectFn := awslambda.NewFunction(stack, jsii.String("ConnectFunction"), &awslambda.FunctionProps{
+		FunctionName: jsii.String("cainban-connect"),
+		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Handler:      jsii.String("bootstrap"),
+		MemorySize:   jsii.Number(256),
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		Environment: &map[string]*string{
+			// Same Cognito pool as the MCP Lambda — the connect API validates
+			// the SAME signature-first JWT before any GitHub/secret/grant action.
+			"CAINBAN_AUTH_ISSUER":   issuer,
+			"CAINBAN_AUTH_AUDIENCE": userPoolClient.UserPoolClientId(),
+			// GitHub App credentials (App id, OAuth client id/secret, private
+			// key) are loaded at runtime from this Secrets Manager secret —
+			// never from code or env.
+			"CAINBAN_GITHUB_APP_SECRET": githubAppSecret.SecretName(),
+			// Grants table: the connect API READS and WRITES grants here (the
+			// pre-token trigger only reads). Region for the DynamoDB client.
+			"CAINBAN_GRANTS_TABLE":  grantsTable.TableName(),
+			"CAINBAN_GRANTS_REGION": stack.Region(),
+		},
+		Code: awslambda.Code_FromAsset(jsii.String("../.build/connect"), nil),
+	})
+
+	// Least-privilege DynamoDB: the connect API issues GetItem/Query (read a
+	// subject's grants + linked identity) and PutItem/DeleteItem (write/revoke a
+	// grant, persist the linked identity) on the GRANTS table ONLY. It is
+	// deliberately NOT granted anything on the "cainban" data table — the
+	// connect flow never touches board/task data. UpdateItem is not granted
+	// because the grants store never issues it (item put/delete only).
+	connectFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Effect: awsiam.Effect_ALLOW,
+		Actions: jsii.Strings(
+			"dynamodb:GetItem",
+			"dynamodb:Query",
+			"dynamodb:PutItem",
+			"dynamodb:DeleteItem",
+		),
+		Resources: &[]*string{grantsTable.TableArn()},
+	}))
+
+	// Least-privilege secret read: ONLY GetSecretValue (+ DescribeSecret) on the
+	// GitHub App secret ARN alone — the connect Lambda loads the App credentials
+	// at runtime to mint App JWTs, exchange OAuth codes, and call the GitHub API.
+	githubAppSecret.GrantRead(connectFn.Role(), nil)
+
+	// --- Connect Function URL (AUTHENTICATED) ----------------------------
+	//
+	// A Function URL is chosen (over an API Gateway HTTP API) for the same
+	// reasons as the MCP endpoint: the security core is the IN-LAMBDA
+	// signature-first Cognito JWT validation (unit-testable with a mock JWKS),
+	// and a Function URL adds no extra managed surface. AuthType AWS_IAM at the
+	// edge means no anonymous reachability; the in-Lambda validator then
+	// authenticates every /connect route.
+	//
+	// UX note: the GitHub OAuth browser redirect (GET /connect/github/start ->
+	// GitHub -> GET /connect/github/callback) targets THIS URL. Because the edge
+	// is AWS_IAM, the browser-facing calls are SigV4-signed (issued by an
+	// authenticated client / a small signing front-end), exactly like the MCP
+	// endpoint — there is no anonymous browser hop. The callback URL an operator
+	// registers on the GitHub App is <connect-function-url>connect/github/callback.
+	connectURL := connectFn.AddFunctionUrl(&awslambda.FunctionUrlOptions{
+		AuthType: awslambda.FunctionUrlAuthType_AWS_IAM,
+		Cors: &awslambda.FunctionUrlCorsOptions{
+			AllowedOrigins: jsii.Strings("*"),
+			AllowedMethods: &[]awslambda.HttpMethod{awslambda.HttpMethod_ALL},
+			AllowedHeaders: jsii.Strings(
+				"content-type", "authorization",
+				"x-amz-date", "x-amz-security-token", "x-amz-content-sha256",
+			),
+		},
+	})
+
+	awslogs.NewLogGroup(stack, jsii.String("ConnectLogGroup"), &awslogs.LogGroupProps{
+		LogGroupName:  jsii.String("/aws/lambda/cainban-connect"),
+		Retention:     awslogs.RetentionDays_ONE_MONTH,
+		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
+	})
+
 	// --- Outputs ----------------------------------------------------------
 	awscdk.NewCfnOutput(stack, jsii.String("FunctionUrl"), &awscdk.CfnOutputProps{
 		Value:       fnURL.Url(),
 		Description: jsii.String("MCP Streamable-HTTP endpoint — AWS_IAM edge auth + in-Lambda Cognito JWT (Phase 3, authenticated)"),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("ConnectFunctionUrl"), &awscdk.CfnOutputProps{
+		Value:       connectURL.Url(),
+		Description: jsii.String("Connect API endpoint (Phase 4 P4.3) — /connect/* routes; AWS_IAM edge + in-Lambda Cognito JWT. The GitHub App Callback URL is <this>connect/github/callback"),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("TableName"), &awscdk.CfnOutputProps{
 		Value:       table.TableName(),

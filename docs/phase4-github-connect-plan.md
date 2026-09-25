@@ -159,11 +159,50 @@ agent principal is later required:
     from the Secrets Manager secret **at runtime** (name via env
     `CAINBAN_GITHUB_APP_SECRET`); the CDK creates a **PLACEHOLDER** secret the
     operator fills post-deploy. **No secret value in code, the repo, or CDK.**
-- **P4.3 — Connect API Lambda.** Cognito-auth'd routes: `/connect/github/start`,
-  `/connect/github/callback`, `POST/DELETE /connect/repo`, `GET /connect/repos`.
-  Verifies server-side, writes/revokes grants. Security-scenario tests
-  (unauth→401, no-github-link→link-required, verify-fail→403, ok→grant,
-  revoke→removed, cannot-write-another-subject).
+- **P4.3 — Connect API Lambda.** ✅ **BUILT** (branch `feat/p4.3-connect-api`,
+  not deployed). A SEPARATE Cognito-auth'd Lambda (`cmd/cainban-connect`, arm64,
+  its own `../.build/connect` bundle + Function URL, AWS_IAM edge) whose
+  `src/systems/connect` handler serves:
+  - `GET  /connect/github/start` — issues a sub-bound anti-CSRF state and 302
+    redirects to the GitHub App OAuth authorize URL.
+  - `GET  /connect/github/callback?code&state` — validates the state, exchanges
+    the code for the user's GitHub **login** (server-side, via the App's
+    user-OAuth leg), and persists it on the `IDENTITY#github` grants item for
+    the validated Cognito sub.
+  - `POST /connect/repo {owner,repo}` — requires a linked identity
+    (`409` link-required otherwise), runs `VerifyRepoAccess(owner, repo,
+    Principal{login})` against the **OAuth-derived login**, and writes the grant
+    only on `true`; `false` → `403`, a verify **error** → fail closed (`502`, no
+    grant).
+  - `DELETE /connect/repo {owner,repo}` — revokes the grant for the validated sub.
+  - `GET  /connect/repos` — lists only the caller's granted repos + linked login.
+
+  All routes validate the Cognito JWT **signature-first** (via `auth.Validator`)
+  before any GitHub/secret/grant action; unauth → `401`. `owner/repo` is
+  normalized via `auth.NormalizeRepo`. Grants are written/read only for the
+  validated sub — a caller can never address another subject's grants.
+
+  - **Anti-CSRF state mechanism** (`src/systems/connect/state.go`): the OAuth
+    `state` is an HMAC-SHA256 token over `"<sub>|<expiryUnix>|<nonce>"`, signed
+    with a per-deployment key **derived from the App's OAuth client secret**
+    (SHA-256, so the state key never exposes the secret and rotates with it). It
+    is stateless (no server-side store), **sub-bound** (the callback rejects a
+    state whose sub ≠ the caller's validated sub), **expiring** (10 min), and
+    unforgeable without the key. The callback recomputes the MAC (constant-time
+    compare) before trusting any field.
+  - **Identity vs authorization (where each originates now):**
+    - IDENTITY (which GitHub user this is) comes ONLY from the OAuth leg — the
+      callback exchanges a real `code` for the login via GitHub and persists it.
+      A client can never assert "I am login X".
+    - AUTHORIZATION (may this sub touch owner/repo) comes ONLY from
+      `github.VerifyRepoAccess` run against that OAuth-derived login. A client
+      claim of access is never sufficient; a verify error fails closed.
+  - Security-scenario tests (all mocked, no live GitHub/AWS): unauth→401 every
+    route; start→redirect+state; callback bad-state→reject; callback ok→identity
+    persisted; POST verify-true→grant; verify-false→403 no write; verify-error→
+    fail closed no write; POST without linked identity→link-required; grant
+    scoped to the validated sub (cannot touch another sub's); DELETE removes; GET
+    lists only the caller's.
 - **P4.4 — (OPTIONAL, deferred) Dedicated agent principal.** ONLY if a distinct
   agent identity is later needed (separate audit/revocation/unattended). Implement
   a client-credentials machine token authorized against the same `repos` claim;
