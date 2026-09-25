@@ -99,6 +99,8 @@ go build -o cainban cmd/cainban/main.go
 
 cainban includes a built-in Model Context Protocol (MCP) server using the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk), ensuring full compatibility with AI tools like Amazon Q CLI, Claude Desktop, and other MCP clients.
 
+> **Using cainban as an AI agent's task backend?** See [`docs/agent-via-mcp.md`](docs/agent-via-mcp.md) for the agent-over-MCP guide: the auth/repo-scoping model, the exact MCP tools, and a worked agent loop against the serverless endpoint.
+
 1. **For Amazon Q CLI** (recommended):
    
 Add to `~/.aws/amazonq/mcp.json`:
