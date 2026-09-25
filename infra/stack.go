@@ -176,6 +176,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Handler:      jsii.String("bootstrap"),
 		MemorySize:   jsii.Number(128),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(5)),
+		// Frugality: cap concurrency so a burst of token issuance (or abuse)
+		// cannot fan out Lambda + on-demand DynamoDB cost. This is a fast
+		// per-request trigger; 5 is ample at dev scale.
+		ReservedConcurrentExecutions: jsii.Number(5),
 		// Phase 4: the trigger reads grants from the grants table. Name + region
 		// come from env; the custom:repos attribute remains a read fallback when
 		// the table has nothing for a subject (and if this env were unset the
@@ -238,6 +242,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Handler:      jsii.String("bootstrap"),
 		MemorySize:   jsii.Number(256),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		// Frugality: cap concurrency on the hot MCP path so a runaway agent
+		// loop or traffic spike cannot scale out Lambda + on-demand DynamoDB
+		// cost unbounded. 10 is generous for a dev-scale shared board.
+		ReservedConcurrentExecutions: jsii.Number(10),
 		Environment: &map[string]*string{
 			"CAINBAN_BACKEND":    jsii.String("dynamodb"),
 			"CAINBAN_DDB_TABLE":  table.TableName(),
@@ -351,6 +359,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Handler:      jsii.String("bootstrap"),
 		MemorySize:   jsii.Number(256),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
+		// Frugality: the connect API is low-frequency (interactive OAuth +
+		// grant writes), so a small cap prevents any burst from scaling out
+		// GitHub-verify calls and grants-table writes. 5 is ample.
+		ReservedConcurrentExecutions: jsii.Number(5),
 		Environment: &map[string]*string{
 			// Same Cognito pool as the MCP Lambda — the connect API validates
 			// the SAME signature-first JWT before any GitHub/secret/grant action.
