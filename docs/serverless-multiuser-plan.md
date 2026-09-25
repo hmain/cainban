@@ -1,6 +1,6 @@
 # cainban: stateless MCP → AWS serverless → multi-user (team kanban) plan
 
-Status: draft · Owner: default (Kiro) · Last updated: 2026-09-25
+Status: draft · Owner: default (Kiro) · Last updated: 2026-09-25 (Phase 3 built; repos-claim mapping closed via pre-token trigger)
 
 This is a staged plan. Each phase is an independent PR that leaves `main`
 deployable. Ordering is deliberate: statelessness is the precondition for
@@ -123,21 +123,108 @@ deployed.)*
 
 Goal: many users, each repo one shared board, no cross-tenant access.
 
-1. **Identity:** bearer/JWT (Cognito or existing IdP) validated at the edge.
-   Handlers read the caller via `RequestExtra.TokenInfo` / request headers.
-2. **Tenancy key = repo (shared):**
-   - Partition key `REPO#<owner>/<repo>`; all collaborators of a repo share one
-     board partition.
-   - Sort keys namespace boards/tasks/links/counter within the repo partition.
-   - Repo identity derived from the client (git remote) or passed explicitly per
-     call; validated against the caller's authorization.
-3. **Authorization:** every handler is scoped to `REPO#<owner>/<repo>`; a caller
-   may only touch repos they're authorized for. No global board list leakage.
-4. **Verify:** an isolation test proving user A cannot read/write user B's repo
-   board, and that two collaborators on the same repo see the same board.
+### Status: BUILT (branch `feat/phase3-auth-multitenant`) — NOT deployed
 
-Exit criteria: two users on the same repo share a board; a user with no access
-to a repo is denied; all access is repo-scoped.
+What shipped:
+
+1. **Identity / authn (signature-first).** A new `src/systems/auth` package
+   validates a bearer **JWT** on every HTTP/Lambda request, in this strict order
+   (`auth.Validator.Validate`):
+   1. **Signature** verified against the IdP **JWKS** (RS256/384/512; `alg=none`
+      and unknown algs are rejected — no downgrade), then **issuer**,
+      **audience** and **expiry** (`exp`/`nbf`) checked.
+   2. Only **after** (1) passes are claims read.
+   A missing/invalid/expired/unsigned/wrong-key/wrong-issuer/wrong-audience
+   token is a **401** and **no tenant is resolved** (so no store is ever
+   opened). No claim-based decision is made before signature validation.
+   The `AuthMiddleware` (`src/systems/mcp/tenant.go`) wraps the stateless MCP
+   handler and is the only entrypoint on the Lambda (`mcp.HandlerWithAuth`).
+
+2. **IdP: Amazon Cognito user pool** (in the CDK stack), issuing the JWTs. Chosen
+   because it is self-contained and frugal for this dev account (no cost at rest)
+   and needs no external federation to stand up. It is **swappable**: the Lambda
+   only consumes an OIDC **issuer + audience + JWKS URL** via
+   `CAINBAN_AUTH_ISSUER` / `CAINBAN_AUTH_AUDIENCE` / `CAINBAN_AUTH_JWKS_URL`, so
+   pointing at an existing IdP later is a config change, not a code change.
+   - *Why in-Lambda JWKS validation, not an API Gateway JWT authorizer:* the
+     signature-first ordering is the security core of this phase and must be
+     **unit-testable locally with a mock JWKS** — the in-Lambda validator is;
+     a managed authorizer is not. It also avoids adding an API Gateway surface
+     for no functional gain over the Function URL the Phase 2 transport already
+     targets.
+
+3. **Tenancy key = repo (shared team board).** After auth, the request resolves
+   to exactly one authorized repo and the store is built with that repo's
+   DynamoDB partition prefix `REPO#<owner>/<repo>#` via
+   `dynamo.NewWithPrefix` (the hook Phase 2 reserved) — wired through
+   `store.OpenTaskForTenant` and a per-request tenant carried in the request
+   context. The DynamoDB **client is cached and reused** across requests; only
+   the prefix varies per tenant. The stdio/local CLI path sets no tenant
+   (empty prefix, single-tenant SQLite) — **auth applies only to the
+   HTTP/Lambda path**.
+
+4. **Repo IDENTITY vs AUTHORIZATION (where each comes from):**
+   - **Identity** (which repo a request targets): the client-supplied target —
+     an MCP tool arg, else the `X-Cainban-Repo` header, else the token's
+     `default_repo` claim. This is **untrusted on its own**: it only names a
+     repo.
+   - **Authorization** (may this caller touch that repo): the **validated
+     `repos` claim** inside the signature-checked JWT. Access is granted **iff**
+     the target repo is a member of that claim. A valid token targeting a repo
+     it does not grant is a **403**. The client-supplied target is never trusted
+     for authorization; it can only *narrow* to a repo the token already grants,
+     never escalate.
+
+   **Repos claim delivery (deferred item — now CLOSED).** The `repos` /
+   `default_repo` claims are populated by a Cognito **pre-token-generation
+   Lambda trigger** (`cmd/cainban-pretoken`, wired in `infra/stack.go` via
+   `userPool.AddTrigger(UserPoolOperation_PRE_TOKEN_GENERATION(), fn, V1_0)`).
+   Cognito does not surface custom attributes as top-level claims, so without
+   this bridge every request 403s. The trigger reads the user's `custom:repos` /
+   `custom:default_repo` attributes and emits the **top-level** `repos` claim as
+   a **JSON-array-encoded string** (Cognito claim-override values are always
+   strings) plus `default_repo`. The validator's `repos` decoder was made
+   tolerant to accept **both** a native JSON array (self-signed test tokens) and
+   that string shape (JSON-array-encoded or space/comma-delimited). The trigger
+   is a pure reflector of the user's stored attributes and never invents a
+   grant (empty attribute → no claim → 403). Grants are administered by setting
+   `custom:repos` (`aws cognito-idp admin-update-user-attributes`) — no extra
+   store or IAM; see `infra/README.md` → "Granting a user access to a repo".
+
+5. **Isolation is structural.** Every DynamoDB key for a request is built under
+   its tenant prefix, so a request authorized for repo A can only ever address
+   PK values under `REPO#A#…` — it cannot read or write repo B's items. This is
+   a key-space property, not a runtime filter that could be bypassed. IAM stays
+   least-privilege on the one table (prefixing is a data-model concern, same
+   table and actions).
+
+6. **Edge auth (CDK).** The Phase 2 Function URL `AuthType: NONE` is **replaced
+   by `AWS_IAM`** — the endpoint rejects any request not SigV4-signed by an
+   allowed principal, so **no anonymous reachability remains** (defence in depth
+   on top of the in-Lambda JWT). The Cognito user pool + app client are added to
+   the stack; the Lambda gets `CAINBAN_AUTH_ISSUER`/`CAINBAN_AUTH_AUDIENCE`.
+   Still **NO deploy** — `cdk synth` verified only.
+
+### The 5 verified scenarios (unit tests, mock DynamoDB + self-signed JWKS)
+
+| # | Scenario | Test | Result |
+|---|----------|------|--------|
+| a | valid token for repo A → CRUD on repo A | `auth.TestResolve_ValidTokenAuthorizedRepo`, `dynamo.TestTenantIsolation_*` | PASS |
+| b | valid token **without** repo A access → 403 | `auth.TestResolve_ValidTokenUnauthorizedRepo`, `mcp.TestAuthMiddleware_UnauthorizedRepo403` | PASS |
+| c | invalid/expired/unsigned token → 401, no store access | `auth.TestValidate_Rejects*`, `auth.TestResolve_InvalidTokenNoTenant`, `mcp.TestAuthMiddleware_{Missing,Invalid}Token401` | PASS |
+| d | isolation: caller scoped to A cannot touch B | `dynamo.TestTenantIsolation_AcannotSeeB`, `auth.TestResolve_TenantPrefixIsolation` | PASS |
+| e | two users, same repo → same board | `dynamo.TestTenantIsolation_SameRepoSharedBoard` | PASS |
+| f | pre-token trigger maps `custom:repos` → JSON-array-string `repos` claim; empty attrs → no claim (no invented grant) | `pretoken.TestBuildClaims`, `pretoken.TestBuildClaims_ReposIsJSONArrayEncodedString`, `pretoken.TestHandler_{SetsOverrides,NoGrantsNoOverrides}` | PASS |
+| g | a token whose `repos` claim is the trigger's JSON-array-**string** shape authorizes the granted repos through the real resolver and 403s others | `auth.TestResolve_TriggerStringReposClaim`, `auth.TestResolve_TriggerSpaceDelimitedReposClaim`, `auth.TestResolve_EmptyReposClaimDenies`, `auth.TestReposClaim_Shapes` | PASS |
+
+Also covered: `alg=none` downgrade rejected, payload-tamper rejected, wrong
+signing key rejected, wrong issuer/audience rejected, client-supplied target can
+only narrow within the validated claim (never escalate).
+
+Exit criteria (met): two users on the same repo share a board; a user with no
+access to a repo is denied (403); an unauthenticated request is denied (401);
+all access is repo-scoped. **Endpoint is defined and authenticated but NOT
+deployed** — deploy is a separate approved step.
 
 ---
 

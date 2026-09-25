@@ -1,8 +1,9 @@
 // Command cainban-lambda is the AWS Lambda entrypoint for cainban's MCP server.
 //
 // It serves the SAME stateless Streamable-HTTP handler the local `cainban mcp
-// --http` command serves (mcp.Server.Handler), adapted to Lambda via a Function
-// URL. A Function URL delivers a payload-format-2.0 event, which the
+// --http` command serves, wrapped in Phase 3 with signature-first JWT auth +
+// repo-scoped tenancy (mcp.Server.HandlerWithAuth), adapted to Lambda via a
+// Function URL. A Function URL delivers a payload-format-2.0 event, which the
 // aws-lambda-go-api-proxy httpadapter (NewV2) turns into a net/http request the
 // handler already understands. One *mcp.Server is built per request inside the
 // handler (via getServer), so the function is safe for concurrent invocations.
@@ -18,13 +19,16 @@
 //	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc \
 //	    -o bootstrap ./cmd/cainban-lambda
 //
-// NOTE: the Function URL is currently unauthenticated (auth NONE) — that is a
-// TEMPORARY Phase 2 state for a private dev endpoint. Phase 3 adds auth-gated,
-// repo-scoped tenancy. Do not expose this to untrusted callers.
+// NOTE: Phase 3 replaces the Phase 2 unauthenticated Function URL. The Lambda
+// now performs signature-first JWT validation (Cognito JWKS) and repo-scoped
+// tenant resolution on EVERY request via mcp.HandlerWithAuth; the Function URL
+// AuthType is AWS_IAM at the edge (no anonymous reachability). Issuer, audience
+// and JWKS URL come from env vars the CDK stack sets from the Cognito user pool.
 package main
 
 import (
 	"context"
+	"log"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -38,8 +42,16 @@ func main() {
 	// Lambda has no durable local disk.
 	_ = ensureDynamoBackend()
 
+	// Build the signature-first auth resolver from env (Cognito user pool). A
+	// misconfiguration is fatal at cold start rather than silently serving an
+	// unauthenticated or fail-open endpoint.
+	resolver, err := buildResolver()
+	if err != nil {
+		log.Fatalf("cainban-lambda: auth configuration error: %v", err)
+	}
+
 	server := mcp.NewStateless()
-	adapter := httpadapter.NewV2(server.Handler())
+	adapter := httpadapter.NewV2(server.HandlerWithAuth(resolver))
 
 	lambda.Start(func(ctx context.Context, req events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
 		// A Function URL request is payload format 2.0, structurally the same as
