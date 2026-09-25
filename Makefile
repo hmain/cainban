@@ -39,8 +39,17 @@ lint-fix:
 
 # Clean build artifacts
 clean:
-	rm -rf bin/
+	rm -rf bin/ .build/
 	$(GOCMD) clean
+
+# Build the Lambda bootstrap (pure Go, arm64, provided.al2023).
+# Output goes to .build/lambda/bootstrap, which the CDK stack packages via
+# Code.fromAsset("../.build/lambda"). Run this before `cdk synth`/`cdk deploy`.
+.PHONY: lambda
+lambda:
+	mkdir -p .build/lambda
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
+		-o .build/lambda/bootstrap ./cmd/cainban-lambda
 
 # Development setup
 dev: setup-hooks

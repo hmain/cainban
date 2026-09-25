@@ -1,0 +1,14 @@
+{
+  "app": "go mod download && go run .",
+  "watch": {
+    "include": ["**"],
+    "exclude": ["README.md", "cdk*.json", "go.sum", "**/*_test.go"]
+  },
+  "context": {
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
+    "@aws-cdk/core:target-partitions": ["aws"]
+  }
+}

@@ -7,7 +7,7 @@ import (
 	"net/http"
 
 	"github.com/hmain/cainban/src/systems/board"
-	"github.com/hmain/cainban/src/systems/storage"
+	"github.com/hmain/cainban/src/systems/store"
 	"github.com/hmain/cainban/src/systems/task"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -85,14 +85,23 @@ func (s *Server) getServer(_ *http.Request) *mcp.Server {
 	return s.newMCPServer()
 }
 
+// Handler returns the stateless Streamable-HTTP MCP handler as a plain
+// http.Handler. Both the local HTTP server (ServeHTTP) and the Lambda
+// entrypoint (cmd/cainban-lambda) mount this same handler, so the transport
+// behavior is identical in-process and on Lambda. A fresh *mcp.Server is built
+// per request via getServer, keeping the handler safe for concurrent requests.
+func (s *Server) Handler() http.Handler {
+	return mcp.NewStreamableHTTPHandler(s.getServer, &mcp.StreamableHTTPOptions{
+		Stateless: true,
+	})
+}
+
 // ServeHTTP serves the stateless Streamable HTTP transport on addr, bound to
 // loopback only. addr may be ":8080" or "127.0.0.1:8080"; a bare-port or
 // wildcard host is rewritten to 127.0.0.1 so the server never binds a public
 // interface (multi-user/public exposure is deferred to Phase 3).
 func (s *Server) ServeHTTP(addr string) error {
-	handler := mcp.NewStreamableHTTPHandler(s.getServer, &mcp.StreamableHTTPOptions{
-		Stateless: true,
-	})
+	handler := s.Handler()
 
 	loopbackAddr, err := loopbackOnly(addr)
 	if err != nil {
@@ -124,27 +133,33 @@ func loopbackOnly(addr string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
-// resolveTaskSystem opens the correct board database for a single request and
-// returns a task.System bound to it plus a close func the caller MUST defer.
+// resolveTaskSystem opens the correct board store for a single request and
+// returns a store.TaskStore bound to it plus a close func the caller MUST
+// defer.
+//
+// The concrete backend is chosen by store.OpenTask from CAINBAN_BACKEND
+// (default sqlite for local dev; dynamodb for the Lambda/serverless path). The
+// handlers below depend only on the store.TaskStore interface, so swapping the
+// backend requires no handler change.
 //
 // Board selection is fully explicit per request (no reliance on the
 // ~/.cainban/current-board file):
-//   - boardName selects which board DATABASE FILE to open; empty means the
-//     default board.
-//   - boardID selects the board ROW inside that database file. Each board DB has
-//     its own boards table whose primary board is id 1, so boardID defaults to 1
-//     when zero (preserving prior behavior).
-func (s *Server) resolveTaskSystem(boardName string) (*task.System, func(), error) {
+//   - boardName selects which board DATABASE FILE to open under the SQLite
+//     backend; empty means the default board. Under DynamoDB the path is
+//     ignored (a single table holds every board partition).
+//   - Each board DB has its own boards table whose primary board is id 1, so
+//     the numeric board ROW defaults to 1 in the handlers.
+func (s *Server) resolveTaskSystem(boardName string) (store.TaskStore, func(), error) {
 	if boardName == "" {
 		boardName = "default"
 	}
 	dbPath := s.boardSystem.GetBoardPath(boardName)
-	db, err := storage.New(dbPath)
+	ts, closer, err := store.OpenTask(context.Background(), dbPath)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to open board %q: %w", boardName, err)
 	}
-	closeFn := func() { _ = db.Close() }
-	return task.New(db.Conn()), closeFn, nil
+	closeFn := func() { _ = closer() }
+	return ts, closeFn, nil
 }
 
 // registerTools registers all cainban tools on the given SDK server.

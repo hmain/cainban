@@ -14,7 +14,7 @@ precondition for clean multi-user.
   the user.
 - **MCP SDK:** `github.com/modelcontextprotocol/go-sdk` → `v1.8.0`.
 - **IaC:** AWS CDK (per user preference; avoid SAM).
-- **Region/account:** TBD by user at deploy time.
+- **Region/account:** AWS profile `aws-test-hamin` (aws-test-hamin dev account), region `eu-north-1`.
 
 ## Current state (verified 2026-09-25)
 
@@ -61,22 +61,61 @@ no shared mutable process state across requests.
 Goal: run the Phase 1 stateless HTTP handler on Lambda with durable, non-local
 storage.
 
-1. **Storage swap (the real work):** replace SQLite with **DynamoDB** behind the
-   existing `task.System` / `board.System` interfaces so handlers don't change.
-   - Tables (single-table or multi-table TBD): boards, tasks, task_links.
-   - Replace SQLite AUTOINCREMENT for `board_task_id` with an **atomic counter**
-     item per board (DynamoDB `UpdateItem ADD`).
-   - After this, `CGO_ENABLED=0` (pure Go) — required for a clean Lambda build.
-2. **Compute:** Lambda `provided.al2023`, ARM64, serving the stateless
-   Streamable-HTTP handler (one `Server` per request via `getServer`).
-3. **Edge:** Lambda Function URL or API Gateway HTTP API (decide on auth needs).
-4. **CDK stack** (Go CDK or TS): DynamoDB tables, Lambda, URL/APIGW, IAM
-   least-privilege, CloudWatch logs.
-5. Deploy discipline: `cdk diff` first; after deploy verify Lambda `LastModified`
-   advanced and smoke-test a `tools/list` + one tool call.
+### Status: BUILT (branch `feat/phase2-dynamodb-cdk`) — NOT deployed
+
+The plan below was implemented as described. Summary of what shipped:
+
+1. **Storage swap (done).** A backend-neutral `store.TaskStore` interface
+   (`src/systems/store`) is the seam the MCP handlers depend on. Two backends
+   satisfy it:
+   - SQLite `task.System` (unchanged, CGO) — local `cainban` CLI/TUI.
+   - DynamoDB `dynamo.Store` (`src/systems/dynamo`, pure Go, aws-sdk-go-v2) —
+     the serverless path.
+   A **selector** (`CAINBAN_BACKEND=sqlite|dynamodb`, default `sqlite`) picks the
+   backend at runtime; the Lambda forces `dynamodb`. Handlers were **not**
+   changed beyond swapping the concrete return type of `resolveTaskSystem` for
+   the interface.
+   - **Single table** `cainban`, keyed `(PK, SK)` — chosen over three tables so a
+     board's counter + tasks + links stay co-located in one partition (cheaper,
+     single-partition consistency, one IAM/infra surface).
+     - `PK = BOARD#<id>` (Phase 2), `SK` namespaces items: `META`, `COUNTER`,
+       `TASK#<padded id>`, `LINK#<from>#<to>#<type>`.
+   - SQLite `AUTOINCREMENT` for `board_task_id` is replaced by an **atomic
+     counter** item per board: `UpdateItem ADD seq :one` with
+     `ReturnValues=UPDATED_NEW`, giving unique monotonic `1..N` ids per board
+     under concurrency.
+   - Soft-delete (`deleted_at`) and `task_links` relationships are preserved.
+   - Lambda code path is `CGO_ENABLED=0` (pure Go), verified.
+2. **Compute (done).** New `cmd/cainban-lambda`: Lambda `provided.al2023`,
+   **arm64**, serving the same stateless Streamable-HTTP handler
+   (`mcp.Server.Handler`, one `*mcp.Server` per request via `getServer`), adapted
+   to a Function URL event via `aws-lambda-go-api-proxy`.
+3. **Edge (done).** Lambda **Function URL**, `AuthType: NONE` — a TEMPORARY,
+   dev-only, unauthenticated endpoint. Auth is deferred to Phase 3.
+4. **CDK stack (done).** Go CDK app in `infra/`: DynamoDB table (on-demand,
+   PITR, RETAIN), arm64 Lambda, Function URL, **least-privilege IAM** (only
+   `GetItem`/`PutItem`/`UpdateItem`/`DeleteItem`/`Query` on the table ARN),
+   explicit CloudWatch log group. `cdk synth` verified; **not deployed**.
+5. Deploy discipline (documented, un-run): see `infra/README.md` for the exact
+   `cdk bootstrap` / `cdk diff` / `cdk deploy` commands for profile
+   `aws-test-hamin`, region `eu-north-1`.
+
+**ID model note:** DynamoDB has no global auto-increment, so in the
+single-board/single-tenant Phase 2 world `Task.ID == Task.BoardTaskID` (the
+user-visible `#N`). Task links reference that same `1..N` number, which is what
+the CLI link commands already pass.
+
+**Backend selector:** `CAINBAN_BACKEND` (`sqlite` default | `dynamodb`), plus
+`CAINBAN_DDB_TABLE` (default `cainban`) and `CAINBAN_DDB_REGION`.
+
+**Verification (local, no cloud):** `CGO_ENABLED=0 go build ./...`, `go vet`,
+`gofmt -l`, `golangci-lint run` (v2.14.0), DynamoDB backend tests against an
+in-memory fake aws-sdk-go-v2 client (host has no Docker/JVM for DynamoDB Local),
+existing SQLite CLI/TUI tests (CGO), and `cdk synth`.
 
 Exit criteria: a public (auth-gated in Phase 3) endpoint speaks MCP; data
-persists in DynamoDB; no local disk.
+persists in DynamoDB; no local disk. *(Endpoint is defined but not yet
+deployed.)*
 
 ---
 
