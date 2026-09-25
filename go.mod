@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.6
 	github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue v1.21.7
 	github.com/aws/aws-sdk-go-v2/service/dynamodb v1.69.1
+	github.com/aws/aws-sdk-go-v2/service/secretsmanager v1.50.1
 	github.com/awslabs/aws-lambda-go-api-proxy v0.16.2
 	github.com/charmbracelet/bubbles v0.21.0
 	github.com/charmbracelet/bubbletea v1.3.8
