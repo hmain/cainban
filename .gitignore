@@ -48,6 +48,14 @@ temp/
 # Build artifacts
 dist/
 build/
+bin/
+.build/
+
+# CDK synth output / local CDK state (infra/)
+infra/cdk.out/
+cdk.out/
+# compiled CDK app binary (name == dir basename)
+infra/infra
 
 # Test coverage
 coverage.out

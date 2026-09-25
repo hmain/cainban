@@ -498,6 +498,15 @@ func (s *System) FindTaskByFuzzyID(boardID int, idOrQuery string) (*Task, error)
 		idOrQuery, strings.Join(suggestions, "\n"))
 }
 
+// FuzzyMatchScore calculates a fuzzy match score between title and query.
+//
+// Exported so alternative storage backends (e.g. the DynamoDB store, which
+// cannot delegate search to SQL) rank search results identically to the SQLite
+// path. It is a pure function of its string inputs.
+func FuzzyMatchScore(title, query string) int {
+	return fuzzyMatchScore(title, query)
+}
+
 // fuzzyMatchScore calculates a fuzzy match score between title and query
 func fuzzyMatchScore(title, query string) int {
 	if title == query {
