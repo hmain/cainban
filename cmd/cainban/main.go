@@ -16,10 +16,10 @@ import (
 
 // Version information
 const (
-	VersionMajor = "0"
-	VersionMinor = "2" 
-	VersionPatch = "2"
-	VersionDev   = ""   // Empty for release
+	VersionMajor  = "0"
+	VersionMinor  = "2"
+	VersionPatch  = "2"
+	VersionDev    = ""                            // Empty for release
 	VersionSuffix = "Complete TUI Implementation" // Description of this release
 )
 
@@ -875,14 +875,14 @@ func handleMCP(args []string) {
 
 func handleTUI() {
 	fmt.Println("Starting interactive TUI...")
-	
+
 	db, _, _, err := getCurrentBoardDB()
 	if err != nil {
 		fmt.Printf("Error: %v\n", err)
 		os.Exit(1)
 	}
 	defer db.Close()
-	
+
 	// Start the TUI
 	if err := tui.Run(db); err != nil {
 		fmt.Printf("Error starting TUI: %v\n", err)
@@ -897,7 +897,7 @@ func handleVersion() {
 	fmt.Printf("Build: %s\n", VersionSuffix)
 	fmt.Printf("Compiled: %s\n", buildTime)
 	fmt.Println("\nFeatures:")
-	fmt.Println("  ✅ Multi-board support") 
+	fmt.Println("  ✅ Multi-board support")
 	fmt.Println("  ✅ Enhanced TUI with responsive column layout")
 	fmt.Println("  ✅ Improved window resizing and positioning")
 	fmt.Println("  ✅ Dynamic column width calculations")

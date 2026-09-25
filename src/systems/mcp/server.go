@@ -133,7 +133,7 @@ func loopbackOnly(addr string) (string, error) {
 //     default board.
 //   - boardID selects the board ROW inside that database file. Each board DB has
 //     its own boards table whose primary board is id 1, so boardID defaults to 1
-//     when zero (preserving prior behaviour).
+//     when zero (preserving prior behavior).
 func (s *Server) resolveTaskSystem(boardName string) (*task.System, func(), error) {
 	if boardName == "" {
 		boardName = "default"

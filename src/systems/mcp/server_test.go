@@ -8,7 +8,7 @@ import (
 )
 
 // testServer bundles a stateless Server with a task.System bound to an
-// in-memory database, so the behavioural tests below can drive the underlying
+// in-memory database, so the behavioral tests below can drive the underlying
 // task operations directly (the MCP SDK owns the protocol layer). The server
 // itself is stateless and resolves its board DB per request, so the task
 // system is held here in the test harness rather than on the server.

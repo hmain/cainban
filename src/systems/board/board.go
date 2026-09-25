@@ -77,8 +77,9 @@ func (s *System) SetCurrentBoard(boardName string) error {
 	currentFile := filepath.Join(s.configDir, "current-board")
 
 	if boardName == "" || boardName == "default" {
-		// Remove current board file to use default
-		os.Remove(currentFile)
+		// Remove current board file to use default; a missing file is not an
+		// error here, so an unlink failure is intentionally ignored.
+		_ = os.Remove(currentFile)
 		return nil
 	}
 

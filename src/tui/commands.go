@@ -1,7 +1,7 @@
 package tui
 
 import (
-	"github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/hmain/cainban/src/systems/task"
 )
 
@@ -24,28 +24,28 @@ func (m Model) refreshTasks() tea.Cmd {
 	return func() tea.Msg {
 		// Get current board ID (assuming board ID 1 for now)
 		boardID := 1 // TODO: Get actual board ID from board system
-		
+
 		// Load tasks by status
 		tasks := make(map[task.Status][]*task.Task)
-		
+
 		// Load todo tasks
 		todoTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusTodo)
 		if err == nil {
 			tasks[task.StatusTodo] = todoTasks
 		}
-		
-		// Load doing tasks  
+
+		// Load doing tasks
 		doingTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusDoing)
 		if err == nil {
 			tasks[task.StatusDoing] = doingTasks
 		}
-		
+
 		// Load done tasks
-		doneTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusDone) 
+		doneTasks, err := m.taskSystem.ListByStatus(boardID, task.StatusDone)
 		if err == nil {
 			tasks[task.StatusDone] = doneTasks
 		}
-		
+
 		return TasksRefreshedMsg{Tasks: tasks}
 	}
 }
@@ -57,7 +57,7 @@ func (m Model) moveTask(taskID int, newStatus task.Status) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Refresh tasks after move
 		return m.refreshTasks()()
 	}
@@ -70,7 +70,7 @@ func (m Model) deleteTask(taskID int) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Refresh tasks after deletion
 		return m.refreshTasks()()
 	}
@@ -83,7 +83,7 @@ func (m Model) hardDeleteTask(taskID int) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Refresh tasks after deletion
 		return m.refreshTasks()()
 	}
@@ -96,7 +96,7 @@ func (m Model) updateTaskPriority(taskID int, priority int) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Refresh tasks after update
 		return m.refreshTasks()()
 	}
@@ -109,7 +109,7 @@ func (m Model) updateTask(taskID int, title, description string) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Refresh tasks after update
 		return m.refreshTasks()()
 	}
@@ -132,13 +132,13 @@ func (m Model) loadBoards() tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Extract board names
 		boardNames := make([]string, len(boards))
 		for i, board := range boards {
 			boardNames[i] = board.Name
 		}
-		
+
 		return BoardsLoadedMsg{Boards: boardNames}
 	}
 }
@@ -150,14 +150,9 @@ func (m Model) switchBoard(boardName string) tea.Cmd {
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		return BoardSwitchedMsg{BoardName: boardName}
 	}
-}
-
-// createTask creates a new task
-func (m Model) createTask(title, description string) tea.Cmd {
-	return m.createTaskWithPriority(title, description, 0)
 }
 
 // createTaskWithPriority creates a new task with specified priority
@@ -165,12 +160,12 @@ func (m Model) createTaskWithPriority(title, description string, priority int) t
 	return func() tea.Msg {
 		// Get current board ID (assuming board ID 1 for now)
 		boardID := 1 // TODO: Get actual board ID from board system
-		
+
 		t, err := m.taskSystem.Create(boardID, title, description)
 		if err != nil {
 			return ErrorMsg{Err: err}
 		}
-		
+
 		// Set priority if specified
 		if priority > 0 {
 			err = m.taskSystem.UpdatePriority(t.ID, priority)
@@ -178,7 +173,7 @@ func (m Model) createTaskWithPriority(title, description string, priority int) t
 				return ErrorMsg{Err: err}
 			}
 		}
-		
+
 		// Refresh tasks after creation
 		return m.refreshTasks()()
 	}
