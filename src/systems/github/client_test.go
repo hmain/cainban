@@ -273,6 +273,33 @@ func TestUserInstallations_Non2xx_FailsClosed(t *testing.T) {
 	}
 }
 
+func TestAppSlug(t *testing.T) {
+	doer := &fakeDoer{respond: func(req *http.Request) (*http.Response, error) {
+		if req.Method != http.MethodGet || !strings.HasSuffix(req.URL.Path, "/app") {
+			t.Errorf("unexpected %s %q, want GET /app", req.Method, req.URL.Path)
+		}
+		return jsonResp(http.StatusOK, `{"id":7,"slug":"cainban-connect","name":"cainban"}`), nil
+	}}
+	c := newTestClient(t, doer)
+	slug, err := c.AppSlug(context.Background())
+	if err != nil {
+		t.Fatalf("AppSlug: %v", err)
+	}
+	if slug != "cainban-connect" {
+		t.Fatalf("slug = %q, want cainban-connect", slug)
+	}
+}
+
+func TestAppSlug_Non2xx_FailsClosed(t *testing.T) {
+	doer := &fakeDoer{respond: func(_ *http.Request) (*http.Response, error) {
+		return jsonResp(http.StatusUnauthorized, `bad`), nil
+	}}
+	c := newTestClient(t, doer)
+	if _, err := c.AppSlug(context.Background()); err == nil {
+		t.Fatal("a non-2xx must fail closed")
+	}
+}
+
 func TestUserInstallations_EmptyToken(t *testing.T) {
 	c := newTestClient(t, &fakeDoer{respond: func(_ *http.Request) (*http.Response, error) {
 		t.Fatal("must not call GitHub with an empty user token")

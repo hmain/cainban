@@ -60,7 +60,7 @@ func newEnv(t *testing.T) *testEnv {
 	state := newTestSigner(t)
 	oauth := &fakeOAuth{login: "octocat"}
 	verify := &fakeVerifier{}
-	lister := &fakeLister{}
+	lister := &fakeLister{slug: "cainban-connect"}
 	cr := &fakeCrypter{}
 	store := newFakeStore()
 	h, err := NewHandler(Config{
@@ -71,6 +71,7 @@ func newEnv(t *testing.T) *testEnv {
 		Grants:  store,
 		Crypter: cr,
 		State:   state,
+		AppSlug: "cainban-connect",
 	})
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
@@ -116,6 +117,42 @@ func (e *testEnv) do(t *testing.T, method, target, bearer, body string) *httptes
 	w := httptest.NewRecorder()
 	e.handler.ServeHTTP(w, r)
 	return w
+}
+
+// app-info returns the App install URL built from the configured slug, with a
+// signed state, and needs a JWT but NOT a linked identity.
+func TestAppInfo_ReturnsInstallURL(t *testing.T) {
+	e := newEnv(t)
+	r := httptest.NewRequest("GET", "/connect/app-info", nil)
+	r.Header.Set("Authorization", "Bearer "+e.token(t, subA))
+	w := httptest.NewRecorder()
+	e.handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("app-info status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		InstallURL string `json:"install_url"`
+		AppSlug    string `json:"app_slug"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("app-info body not JSON: %v (%s)", err, w.Body.String())
+	}
+	// newEnv configures the handler with a test app slug; the URL must point at
+	// github.com/apps/<slug>/installations/new and carry a state.
+	if !strings.Contains(body.InstallURL, "/apps/") ||
+		!strings.Contains(body.InstallURL, "/installations/new") ||
+		!strings.Contains(body.InstallURL, "state=") {
+		t.Fatalf("unexpected install_url: %s", body.InstallURL)
+	}
+}
+
+// app-info requires a JWT (401 without one).
+func TestAppInfo_Unauth401(t *testing.T) {
+	e := newEnv(t)
+	if w := e.do(t, "GET", "/connect/app-info", "", ""); w.Code != http.StatusUnauthorized {
+		t.Fatalf("app-info no-token status = %d, want 401", w.Code)
+	}
 }
 
 // --- fakes -----------------------------------------------------------------
@@ -168,6 +205,8 @@ type fakeLister struct {
 	reposErr    error
 	instCalls   int
 	repoCalls   int
+	slug        string
+	slugErr     error
 }
 
 func (f *fakeLister) UserInstallations(_ context.Context, _ string) ([]github.Installation, error) {
@@ -177,6 +216,9 @@ func (f *fakeLister) UserInstallations(_ context.Context, _ string) ([]github.In
 func (f *fakeLister) InstallationRepositories(_ context.Context, _ string, _ int64) ([]string, error) {
 	f.repoCalls++
 	return f.repos, f.reposErr
+}
+func (f *fakeLister) AppSlug(_ context.Context) (string, error) {
+	return f.slug, f.slugErr
 }
 
 // fakeCrypter is a reversible crypter that XOR-obfuscates the bytes (with a

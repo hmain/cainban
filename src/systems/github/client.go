@@ -53,6 +53,12 @@ type Client interface {
 	// pagination until exhausted. Authenticated with the USER's token. Returns
 	// each repo's full_name ("owner/repo").
 	InstallationRepositories(ctx context.Context, userToken string, installationID int64) ([]string, error)
+
+	// AppSlug returns THIS GitHub App's slug (the name in its public URL) via
+	// GET /app, authenticated with the App JWT. It lets the connect API build
+	// the install URL (github.com/apps/<slug>/installations/new) with no
+	// operator-supplied slug env var — self-configuring. The slug is public.
+	AppSlug(ctx context.Context) (string, error)
 }
 
 // ErrNotInstalled signals the App is not installed on the target repo (a 404
@@ -340,7 +346,35 @@ func (c *httpClient) InstallationRepositories(ctx context.Context, userToken str
 	return repos, nil
 }
 
-// snippet trims a response body for inclusion in an error message without
+// AppSlug: GET /app (App JWT auth) -> the App's `slug`. The slug is public
+// (it appears in the App's own URL), so this exposes no secret. A transport or
+// non-200 is returned as an error so the caller can fall back / fail closed.
+func (c *httpClient) AppSlug(ctx context.Context) (string, error) {
+	jwt, err := c.appJWT()
+	if err != nil {
+		return "", err
+	}
+	url := fmt.Sprintf("%s/app", apiBase)
+	resp, err := c.do(ctx, http.MethodGet, url, jwt)
+	if err != nil {
+		return "", fmt.Errorf("github: app: %w", err)
+	}
+	body := drain(resp)
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("github: app: unexpected status %d: %s", resp.StatusCode, snippet(body))
+	}
+	var out struct {
+		Slug string `json:"slug"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil {
+		return "", fmt.Errorf("github: decode app: %w", err)
+	}
+	if strings.TrimSpace(out.Slug) == "" {
+		return "", errors.New("github: app: empty slug")
+	}
+	return out.Slug, nil
+}
+
 // dumping a full page or leaking large payloads into logs.
 func snippet(b []byte) string {
 	s := strings.TrimSpace(string(b))

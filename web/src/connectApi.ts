@@ -143,6 +143,27 @@ export async function listAvailableRepos(): Promise<AvailableReposResult> {
 }
 
 /**
+ * GET /connect/app-info -> the GitHub App install URL (with a signed state) so
+ * the SPA can send the user to install the App when they have no installation
+ * yet. Returns "" when the backend has no slug configured (SPA then keeps the
+ * manual-entry fallback only). Fail-closed: any error yields "".
+ */
+export async function getAppInstallUrl(): Promise<string> {
+  try {
+    const res = await fetch(`${CONNECT_API}/connect/app-info`, {
+      headers: await authHeader(),
+    });
+    if (!res.ok) return "";
+    const body = (await res.json().catch(() => ({}))) as {
+      install_url?: string;
+    };
+    return body.install_url ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/**
  * Start the GitHub OAuth link. A plain browser navigation cannot set the
  * Authorization header, and a fetch() cannot follow a 302 into github.com
  * (cross-origin auth page has no CORS headers). So we fetch

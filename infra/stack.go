@@ -746,6 +746,11 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
 		Integration: connectIntegration,
 	})
+	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/connect/app-info"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: connectIntegration,
+	})
 
 	// The GitHub OAuth callback — EXEMPT from the JWT authorizer. HttpNoneAuthorizer
 	// explicitly removes the default authorizer for this one route. Auth here is

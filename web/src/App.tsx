@@ -12,6 +12,7 @@ import {
   listRepos,
   linkGitHubIdentity,
   listAvailableRepos,
+  getAppInstallUrl,
   type AvailableRepo,
 } from "./connectApi";
 
@@ -161,6 +162,7 @@ function ChooseRepo() {
     "loading",
   );
   const [notice, setNotice] = useState("");
+  const [installUrl, setInstallUrl] = useState("");
   const [busyRepo, setBusyRepo] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(
     null,
@@ -186,8 +188,11 @@ function ChooseRepo() {
     if (r.noInstallation) {
       setState("manual-only");
       setNotice(
-        "The cainban GitHub App isn't installed on any account you can access yet — enter a repo manually below.",
+        "The cainban GitHub App isn't installed on any account you can access yet — install it below, or enter a repo manually.",
       );
+      // Offer a one-click install: fetch the App install URL (with a signed
+      // state) so the user can install and be returned here.
+      setInstallUrl(await getAppInstallUrl());
       return;
     }
     setRepos(r.repos);
@@ -271,6 +276,14 @@ function ChooseRepo() {
       {notice && (
         <p role="status" className="hint">
           {notice}
+        </p>
+      )}
+
+      {installUrl && (
+        <p>
+          <a className="btn" href={installUrl}>
+            Install the cainban GitHub App
+          </a>
         </p>
       )}
 
