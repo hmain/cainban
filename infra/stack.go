@@ -558,6 +558,33 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Integration: mcpIntegration,
 	})
 
+	// --- RFC 9728 protected-resource metadata route (MCP OAuth step a) ---
+	//
+	// GET /.well-known/oauth-protected-resource is PUBLIC — a spec-compliant MCP
+	// client (MCP authorization spec 2026-07-28) must be able to discover
+	// cainban's authorization server BEFORE it holds any token. HttpNoneAuthorizer
+	// explicitly removes the default JWT authorizer for this ONE route (mirroring
+	// the connect /connect/github/callback exemption pattern); every other MCP
+	// route above stays behind the managed Cognito JWT authorizer. The document
+	// itself is served by the MCP Lambda (mcp.PublicMux), which routes only this
+	// exact path publicly and everything else through the authed handler — so a
+	// tool call can never reach an unauthenticated code path.
+	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/.well-known/oauth-protected-resource"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: mcpIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
+	})
+
+	// The MCP Lambda serves the RFC 9728 metadata document from its OWN canonical
+	// URL. mcpAPI is created after the function, so the URL is added as env here
+	// (a lazily-resolved CDK token) rather than at function construction. This is
+	// the `resource` field of the metadata doc, the RFC 8707 resource indicator,
+	// and the base of the WWW-Authenticate resource_metadata pointer. The
+	// authorization server in the doc is the Cognito issuer, derived by the
+	// Lambda from CAINBAN_AUTH_ISSUER (already set above) — never hardcoded.
+	fn.AddEnvironment(jsii.String("CAINBAN_MCP_RESOURCE"), mcpAPI.Url(), nil)
+
 	// --- Explicit CloudWatch log group -----------------------------------
 	//
 	// Created explicitly (rather than the implicit /aws/lambda/<name> group) so
@@ -772,6 +799,13 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	awscdk.NewCfnOutput(stack, jsii.String("McpApiUrl"), &awscdk.CfnOutputProps{
 		Value:       mcpAPI.Url(),
 		Description: jsii.String("MCP Streamable-HTTP endpoint — API Gateway v2 HTTP API + managed Cognito JWT authorizer. Client sends Authorization: Bearer <jwt> (no SigV4)."),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("McpProtectedResourceMetadataUrl"), &awscdk.CfnOutputProps{
+		Value: awscdk.Fn_Join(jsii.String(""), &[]*string{
+			mcpAPI.Url(),
+			jsii.String(".well-known/oauth-protected-resource"),
+		}),
+		Description: jsii.String("RFC 9728 Protected Resource Metadata (MCP OAuth step a) — PUBLIC (AuthorizationType NONE), returns {resource, authorization_servers, scopes_supported, bearer_methods_supported}. mcpAPI.Url() ends with '/', so this is <McpApiUrl>.well-known/oauth-protected-resource."),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("ConnectApiUrl"), &awscdk.CfnOutputProps{
 		Value:       connectAPI.Url(),

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/hmain/cainban/src/systems/auth"
 )
@@ -35,7 +36,25 @@ func tenantFromContext(ctx context.Context) (*auth.Tenant, bool) {
 // resolveTaskSystem reads it to build a DynamoDB store scoped to that tenant's
 // partition prefix. On failure it writes a JSON-RPC-shaped error with the right
 // HTTP status (401 unauthenticated, 403 forbidden) and never calls next.
+//
+// This form emits the legacy `WWW-Authenticate: Bearer realm="cainban"` on 401.
+// Use AuthMiddlewareWithChallenge to additionally advertise the RFC 9728
+// protected-resource metadata URL (the MCP-OAuth discovery pointer).
 func AuthMiddleware(resolver *auth.Resolver, next http.Handler) http.Handler {
+	return AuthMiddlewareWithChallenge(resolver, "", next)
+}
+
+// AuthMiddlewareWithChallenge is AuthMiddleware plus the RFC 9728 discovery
+// pointer: when resourceMetadataURL is non-empty, a 401 carries
+//
+//	WWW-Authenticate: Bearer resource_metadata="<url>", scope="cainban:tasks"
+//
+// which is what tells a spec-compliant MCP client (MCP authorization spec
+// 2026-07-28) WHERE to discover cainban's authorization server. resourceMetadataURL
+// is the absolute URL of the protected-resource metadata document
+// (<McpApiUrl>/.well-known/oauth-protected-resource), derived from env by the
+// entrypoint — never from the request.
+func AuthMiddlewareWithChallenge(resolver *auth.Resolver, resourceMetadataURL string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// The target repo comes from the header at the transport edge; an MCP
 		// tool arg can further scope per call, but the header is the request's
@@ -43,7 +62,7 @@ func AuthMiddleware(resolver *auth.Resolver, next http.Handler) http.Handler {
 		// inside Resolve, not from this header.
 		tenant, err := resolver.Resolve(r, "")
 		if err != nil {
-			writeAuthError(w, err)
+			writeAuthError(w, err, resourceMetadataURL)
 			return
 		}
 		ctx := withTenant(r.Context(), tenant)
@@ -53,11 +72,19 @@ func AuthMiddleware(resolver *auth.Resolver, next http.Handler) http.Handler {
 
 // writeAuthError writes a minimal JSON error body with the auth-appropriate
 // status. The message is intentionally generic (no token internals leak).
-func writeAuthError(w http.ResponseWriter, err error) {
+//
+// On a 401 it sets the WWW-Authenticate challenge. When resourceMetadataURL is
+// non-empty it emits the RFC 9728 MCP-OAuth form
+//
+//	Bearer resource_metadata="<url>", scope="cainban:tasks"
+//
+// so a spec-compliant MCP client can discover the authorization server; when it
+// is empty it falls back to the legacy `Bearer realm="cainban"` challenge.
+func writeAuthError(w http.ResponseWriter, err error, resourceMetadataURL string) {
 	status := auth.HTTPStatus(err)
 	w.Header().Set("Content-Type", "application/json")
 	if status == http.StatusUnauthorized {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="cainban"`)
+		w.Header().Set("WWW-Authenticate", bearerChallenge(resourceMetadataURL))
 	}
 	w.WriteHeader(status)
 	msg := "unauthorized"
@@ -70,4 +97,18 @@ func writeAuthError(w http.ResponseWriter, err error) {
 			"message": msg,
 		},
 	})
+}
+
+// bearerChallenge builds the 401 WWW-Authenticate header value. With a
+// resource-metadata URL it is the RFC 9728 MCP-OAuth challenge pointing a client
+// at the discovery document; without one it is the legacy realm challenge.
+func bearerChallenge(resourceMetadataURL string) string {
+	if u := strings.TrimSpace(resourceMetadataURL); u != "" {
+		// resource_metadata is a URL; scope is the resource's scope hint. Both
+		// are quoted-string auth-param values per RFC 7235. The URL is
+		// constructed from trusted env (never the request), so it needs no
+		// escaping beyond the surrounding quotes.
+		return `Bearer resource_metadata="` + u + `", scope="` + MCPResourceScope + `"`
+	}
+	return `Bearer realm="cainban"`
 }

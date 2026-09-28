@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/hmain/cainban/src/systems/auth"
+	"github.com/hmain/cainban/src/systems/mcp"
 	"github.com/hmain/cainban/src/systems/store"
 )
 
@@ -15,7 +16,39 @@ const (
 	envAuthIssuer   = "CAINBAN_AUTH_ISSUER"   // e.g. https://cognito-idp.<region>.amazonaws.com/<poolId>
 	envAuthAudience = "CAINBAN_AUTH_AUDIENCE" // Cognito app client id
 	envAuthJWKSURL  = "CAINBAN_AUTH_JWKS_URL" // optional override; else <issuer>/.well-known/jwks.json
+	// envMcpResource is the MCP API's canonical URL (McpApiUrl). The CDK stack
+	// sets it from the HTTP API's own Url() output. It is the RFC 8707 resource
+	// indicator and the `resource` field of the RFC 9728 protected-resource
+	// metadata document, and the base for the WWW-Authenticate resource_metadata
+	// pointer. Optional: when unset the discovery document/challenge degrade
+	// gracefully (empty resource / legacy realm challenge) rather than failing.
+	envMcpResource = "CAINBAN_MCP_RESOURCE"
 )
+
+// resourceMetadataConfig builds the RFC 9728 protected-resource metadata config
+// from env: the canonical MCP URL (CAINBAN_MCP_RESOURCE, trailing slash trimmed)
+// as the resource, and the Cognito issuer (CAINBAN_AUTH_ISSUER — the SAME env
+// the validator already uses, never hardcoded) as the authorization server. The
+// metadata handler canonicalizes the resource again defensively.
+func resourceMetadataConfig() mcp.ResourceMetadataConfig {
+	return mcp.ResourceMetadataConfig{
+		Resource:            strings.TrimRight(strings.TrimSpace(os.Getenv(envMcpResource)), "/"),
+		AuthorizationServer: strings.TrimSpace(os.Getenv(envAuthIssuer)),
+	}
+}
+
+// resourceMetadataURL is the absolute URL of the protected-resource metadata
+// document (<McpApiUrl>/.well-known/oauth-protected-resource), used as the
+// resource_metadata pointer in the 401 WWW-Authenticate challenge. Empty when
+// CAINBAN_MCP_RESOURCE is unset (the challenge then falls back to the legacy
+// realm form).
+func resourceMetadataURL() string {
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv(envMcpResource)), "/")
+	if base == "" {
+		return ""
+	}
+	return base + mcp.WellKnownProtectedResourcePath
+}
 
 // buildResolver constructs the signature-first auth resolver from env. It fails
 // (rather than serving an unauthenticated endpoint) if issuer/audience are
