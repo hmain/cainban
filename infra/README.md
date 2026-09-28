@@ -316,17 +316,25 @@ radius stay minimal (grants read/write + secret read; **no data-table access**).
 | `DELETE /connect/repo {owner,repo}` | revoke the grant for the validated sub |
 | `GET /connect/repos` | list only the caller's grants + linked login |
 
-**Compute choice — Function URL (not API Gateway).** Same rationale as the MCP
-endpoint: the security core is the **in-Lambda** signature-first Cognito JWT
-validation (unit-testable with a mock JWKS), and a Function URL adds no managed
-surface. Edge is `AuthType: AWS_IAM`, so the browser OAuth hop is SigV4-signed by
-an authenticated client — no anonymous reachability.
+**Compute choice — API Gateway HTTP API + Cognito JWT authorizer.** Same as the
+MCP endpoint: an HTTP API fronts the connect Lambda, and a **managed Cognito JWT
+authorizer** validates the token (signature/issuer/audience/expiry) at the edge,
+so the client sends `Authorization: Bearer <jwt>` with **no SigV4**. This
+replaced an earlier `AuthType: AWS_IAM` Function URL, whose SigV4 signature
+collided with the app JWT in the `Authorization` header. Every `/connect/*` route
+requires the authorizer **except `/connect/github/callback`**, which is
+**authorizer-exempt** (a GitHub browser redirect carries no JWT) and
+authenticates from the signed `state` instead (below).
 
 **Anti-CSRF state.** `state` is an HMAC-SHA256 token over
 `"<sub>|<expiryUnix>|<nonce>"`, keyed by a value **derived from the App's OAuth
 client secret** (so the key lives only in Secrets Manager and rotates with it).
-It is stateless, **sub-bound** (the callback rejects a state whose sub ≠ the
-caller's validated sub), expiring (10 min) and unforgeable.
+It is stateless, **sub-bound**, expiring (10 min) and unforgeable. Because the
+callback route is authorizer-exempt and carries no JWT, the callback
+authenticates **from the state itself**: it verifies the HMAC + expiry and
+extracts the bound sub (which could only have been minted by
+`/connect/github/start`, a route that *did* require a valid JWT for that sub).
+The JWT-guarded routes still cross-check `state.sub == validated-sub`.
 
 **Identity vs authorization.** IDENTITY (the GitHub login) comes ONLY from the
 OAuth leg; AUTHORIZATION (may this sub touch owner/repo) comes ONLY from
@@ -345,7 +353,7 @@ successful link).
 `cainban` data table.
 
 **Operator callback URL:** after deploy, set the GitHub App's Callback URL to the
-`ConnectFunctionUrl` output **plus** `connect/github/callback` (see
+`ConnectApiUrl` output **plus** `connect/github/callback` (see
 [`docs/github-app-setup.md`](../docs/github-app-setup.md) § 5a).
 
 ## DynamoDB table / key design

@@ -101,6 +101,17 @@ cainban includes a built-in Model Context Protocol (MCP) server using the offici
 
 > **Using cainban as an AI agent's task backend?** See [`docs/agent-via-mcp.md`](docs/agent-via-mcp.md) for the agent-over-MCP guide: the auth/repo-scoping model, the exact MCP tools, and a worked agent loop against the serverless endpoint.
 
+> **Serverless / multi-user.** Beyond the local CLI, cainban also runs as a
+> multi-user serverless deployment: the stateless MCP server on AWS Lambda
+> (arm64) behind an **API Gateway HTTP API + Cognito JWT authorizer**, with a
+> DynamoDB backend and repo-scoped tenancy (`REPO#<owner>/<repo>#`). Clients send
+> `Authorization: Bearer <Cognito JWT>` (no request signing). A GitHub App
+> "connect" flow verifies a user's repo access before granting it. See
+> [`infra/README.md`](infra/README.md) for the deployed stack and IAM surface,
+> [`docs/github-app-setup.md`](docs/github-app-setup.md) to connect a repo, and
+> [`docs/serverless-multiuser-plan.md`](docs/serverless-multiuser-plan.md) for
+> the full design.
+
 1. **For Amazon Q CLI** (recommended):
    
 Add to `~/.aws/amazonq/mcp.json`:

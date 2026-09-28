@@ -31,7 +31,7 @@ testing).
 | --- | --- |
 | **GitHub App name** | e.g. `cainban-connect` (must be globally unique) |
 | **Homepage URL** | your cainban homepage or repo URL |
-| **Callback URL** | the P4.3 connect callback: `<ConnectFunctionUrl>connect/github/callback` — read `<ConnectFunctionUrl>` from the stack output after deploy (see below). You can register a placeholder now and update it once the stack is deployed. |
+| **Callback URL** | the P4.3 connect callback: `<ConnectApiUrl>connect/github/callback` — read `<ConnectApiUrl>` from the stack output after deploy (see below). You can register a placeholder now and update it once the stack is deployed. |
 | **Expire user authorization tokens** | ✅ enabled (short-lived user tokens) |
 | **Request user authorization (OAuth) during installation** | ✅ enabled (needed for the P4.3 OAuth leg that identifies the connecting user) |
 | **Webhook** | **☐ OFF** — uncheck **Active**. No webhook is used in Phase 4 (issue/PR sync is a later phase). Leave the webhook URL/secret blank. |
@@ -85,18 +85,18 @@ should cover. Verification will only pass for covered repos.
 
 ## 5a. Finalize the App Callback URL (P4.3)
 
-The connect flow's OAuth callback is served by the **connect Lambda's Function
-URL**. After `cdk deploy`, read the URL from the stack's **`ConnectFunctionUrl`**
+The connect flow's OAuth callback is served by the **connect API Gateway HTTP
+API**. After `cdk deploy`, read the URL from the stack's **`ConnectApiUrl`**
 output and set the GitHub App's **Callback URL** to that URL **plus**
 `connect/github/callback`:
 
 ```sh
 export AWS_PROFILE=aws-test-hamin AWS_REGION=eu-north-1
 
-# The connect endpoint base (note the trailing slash Function URLs include):
+# The connect endpoint base (note the trailing slash the API GW URL includes):
 CONNECT_URL=$(aws cloudformation describe-stacks \
   --stack-name CainbanPhase2Stack \
-  --query "Stacks[0].Outputs[?OutputKey=='ConnectFunctionUrl'].OutputValue" \
+  --query "Stacks[0].Outputs[?OutputKey=='ConnectApiUrl'].OutputValue" \
   --output text)
 
 # The value to paste into the GitHub App's "Callback URL" field:
@@ -109,10 +109,15 @@ match the `redirect_uri` the connect Lambda sends; the stack passes the connect
 Lambda a `CAINBAN_CONNECT_REDIRECT_URI` only if you set that env var — leave it
 unset to rely on the App's registered default callback.
 
-> The Function URL edge is **AWS_IAM**, so the browser hop to
-> `/connect/github/start` and back to `/connect/github/callback` is SigV4-signed
-> by an authenticated client (or a small signing front-end), not an anonymous
-> browser request. This mirrors the MCP endpoint's edge auth.
+> **Transport:** the `/connect/*` routes are fronted by an **API Gateway HTTP
+> API with a managed Cognito JWT authorizer** — every route requires
+> `Authorization: Bearer <Cognito JWT>` (no SigV4). The **callback route
+> (`/connect/github/callback`) is deliberately exempt from the authorizer**:
+> it is a GitHub browser redirect that carries no JWT, and it authenticates from
+> the HMAC-signed, sub-bound `state` parameter instead (minted by
+> `/connect/github/start`, which itself required a valid JWT). So the browser
+> hop to `/connect/github/start` needs a Cognito token, but the redirect back to
+> the callback works as a plain browser navigation.
 
 ## 6. Load the credentials into AWS Secrets Manager
 

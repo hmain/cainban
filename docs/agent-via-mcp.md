@@ -141,15 +141,17 @@ Authorization: Bearer <JWT whose validated repos claim includes owner/repo>
 X-Cainban-Repo: <owner>/<repo>
 ```
 
-`<endpoint>` is the cainban MCP Lambda's Function URL (an
-`https://….lambda-url.<region>.on.aws/` address). Illustrative HTTP-client
-config:
+`<endpoint>` is the cainban MCP **API Gateway HTTP API** URL (an
+`https://<api-id>.execute-api.<region>.amazonaws.com/` address — the
+`McpApiUrl` stack output). A managed Cognito JWT authorizer validates the token
+at the edge, so the agent sends **only** the bearer token — no request signing.
+Illustrative HTTP-client config:
 
 ```json
 {
   "mcpServers": {
     "cainban": {
-      "url": "https://<function-url-id>.lambda-url.<region>.on.aws/",
+      "url": "https://<api-id>.execute-api.<region>.amazonaws.com/",
       "headers": {
         "Authorization": "Bearer <token>",
         "X-Cainban-Repo": "<owner>/<repo>"
@@ -219,9 +221,12 @@ writes a JSON error body (`writeAuthError` in
   Prerequisites and [`docs/github-app-setup.md`](./github-app-setup.md)), then
   obtain a token whose `repos` claim includes `<owner>/<repo>`.
 
-Note the Function URL's edge `AuthType` is `AWS_IAM`, so requests must also be
-SigV4-signed at the edge in addition to carrying the application bearer token —
-there is no anonymous reachability to the endpoint.
+The MCP endpoint is fronted by an **API Gateway HTTP API with a managed Cognito
+JWT authorizer**. The authorizer validates the token's signature, issuer,
+audience and expiry at the edge, so an unauthenticated or invalid-token request
+is rejected with **401** before it reaches the Lambda — there is no anonymous
+reachability. A valid token is required; **no request signing (SigV4) is
+needed** — the agent sends only `Authorization: Bearer <token>`.
 
 ## Related docs
 
