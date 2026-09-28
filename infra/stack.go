@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscognito"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
@@ -579,6 +580,20 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// surface without touching the MCP data path. Same runtime/arch as the other
 	// functions: provided.al2023 + arm64 + pure-Go bootstrap (CGO off — no
 	// SQLite here). Built into ../.build/connect (see `make connect`/`bundles`).
+
+	// KMS customer-managed key that encrypts the user GitHub OAuth REFRESH token
+	// stored on the grants IDENTITY#github item (Option A: /connect/available-repos
+	// mints a short-lived user access token from it at list time). The plaintext
+	// refresh token NEVER lands in DynamoDB — only its KMS ciphertext, bound to
+	// the subject via KMS EncryptionContext. Key rotation is enabled; the connect
+	// Lambda is granted ONLY kms:Encrypt/kms:Decrypt on THIS key (below).
+	connectRefreshKey := awskms.NewKey(stack, jsii.String("ConnectRefreshTokenKey"), &awskms.KeyProps{
+		Alias:             jsii.String("cainban/connect-refresh-token"),
+		Description:       jsii.String("Encrypts the stored GitHub OAuth refresh token for the cainban connect flow (Option A available-repos)."),
+		EnableKeyRotation: jsii.Bool(true),
+		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
+	})
+
 	connectFn := awslambda.NewFunction(stack, jsii.String("ConnectFunction"), &awslambda.FunctionProps{
 		FunctionName: jsii.String("cainban-connect"),
 		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
@@ -603,6 +618,19 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			// pre-token trigger only reads). Region for the DynamoDB client.
 			"CAINBAN_GRANTS_TABLE":  grantsTable.TableName(),
 			"CAINBAN_GRANTS_REGION": stack.Region(),
+			// KMS key id used to encrypt/decrypt the stored refresh token
+			// (Option A). Required at cold start — no plaintext-fallback path.
+			"CAINBAN_CONNECT_KMS_KEY_ID": connectRefreshKey.KeyId(),
+			// Optional GitHub App slug so available-repos can pick THIS App's
+			// installation when a user can see several. The App id (from the
+			// secret) is the primary discriminator; this is a secondary hint.
+			"CAINBAN_GITHUB_APP_SLUG": jsii.String(ctxOr("githubAppSlug", "")),
+			// Where the OAuth callback sends the browser after a successful
+			// identity link — set to the connect-page SPA so the user lands back
+			// in the app instead of seeing the raw JSON confirmation. Supplied at
+			// deploy: -c connectSuccessUrl=https://<amplify-app>/ (empty => the
+			// callback returns a JSON {linked:true} confirmation instead).
+			"CAINBAN_CONNECT_SUCCESS_URL": jsii.String(ctxOr("connectSuccessUrl", "")),
 		},
 		Code: awslambda.Code_FromAsset(jsii.String("../.build/connect"), nil),
 	})
@@ -628,6 +656,22 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// GitHub App secret ARN alone — the connect Lambda loads the App credentials
 	// at runtime to mint App JWTs, exchange OAuth codes, and call the GitHub API.
 	githubAppSecret.GrantRead(connectFn.Role(), nil)
+
+	// Least-privilege KMS: grant EXACTLY kms:Encrypt + kms:Decrypt on the
+	// refresh-token key ARN alone — the connect Lambda encrypts the stored
+	// refresh token at link time and decrypts it at list time via direct
+	// Encrypt/Decrypt (the token is well under the 4 KB direct-encrypt limit).
+	// GrantEncryptDecrypt would additionally add GenerateDataKey*/ReEncrypt*,
+	// which the code never issues; an explicit two-action statement keeps the
+	// surface to exactly what is used. No key-management actions are granted.
+	connectFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Effect: awsiam.Effect_ALLOW,
+		Actions: jsii.Strings(
+			"kms:Encrypt",
+			"kms:Decrypt",
+		),
+		Resources: &[]*string{connectRefreshKey.KeyArn()},
+	}))
 
 	// --- API Gateway v2 HTTP API + Cognito JWT authorizer (Connect) ------
 	//
@@ -691,6 +735,14 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	})
 	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
 		Path:        jsii.String("/connect/repos"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: connectIntegration,
+	})
+	// Option A: list the repos the signed-in user can access through the App
+	// installation. Cognito-JWT-authed under the SAME default authorizer as the
+	// other authenticated /connect routes (NOT the callback exemption).
+	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/connect/available-repos"),
 		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
 		Integration: connectIntegration,
 	})

@@ -47,6 +47,16 @@ func (m *mockClient) CollaboratorPermission(_ context.Context, _, _, _, _ string
 	return m.perm, m.permErr
 }
 
+// UserInstallations / InstallationRepositories are not exercised by
+// VerifyRepoAccess (they belong to the Option A listing path), so the mock just
+// satisfies the interface with empty results.
+func (m *mockClient) UserInstallations(_ context.Context, _ string) ([]Installation, error) {
+	return nil, nil
+}
+func (m *mockClient) InstallationRepositories(_ context.Context, _ string, _ int64) ([]string, error) {
+	return nil, nil
+}
+
 const (
 	testOwner = "acme"
 	testRepo  = "widgets"

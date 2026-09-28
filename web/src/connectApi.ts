@@ -72,6 +72,76 @@ export async function listRepos(): Promise<ReposList> {
   return { repos: body.repos ?? [], github_login: body.github_login ?? null };
 }
 
+/** One repo the signed-in user can access through the App installation. */
+export interface AvailableRepo {
+  full_name: string;
+  already_granted: boolean;
+}
+
+/**
+ * Result of GET /connect/available-repos. `ok` distinguishes a real list from a
+ * fail-closed condition so the SPA NEVER mistakes an error/empty for "no repos"
+ * and always offers manual entry when it cannot list.
+ *   ok:true                      -> render the pick-list (may be empty +
+ *                                    noInstallation when the App isn't installed)
+ *   ok:false, needsLink:true     -> 409: prompt "Link GitHub first" / re-link
+ *   ok:false, needsLink:false    -> other error: show manual entry + reason
+ */
+export interface AvailableReposResult {
+  ok: boolean;
+  repos: AvailableRepo[];
+  githubLogin: string | null;
+  noInstallation: boolean;
+  needsLink: boolean;
+  error?: string;
+}
+
+/**
+ * GET /connect/available-repos. FAIL CLOSED on the client too: any non-200 (or
+ * a fetch/parse throw) resolves to { ok:false, ... } with a reason — it never
+ * throws and never returns a fabricated list, so the caller renders manual
+ * entry instead of an empty pick-list that could read as "you have no repos".
+ */
+export async function listAvailableRepos(): Promise<AvailableReposResult> {
+  try {
+    const res = await fetch(`${CONNECT_API}/connect/available-repos`, {
+      headers: await authHeader(),
+    });
+    const body = (await res.json().catch(() => ({}))) as {
+      repos?: AvailableRepo[];
+      github_login?: string | null;
+      no_installation?: boolean;
+      error?: string;
+    };
+    if (!res.ok) {
+      return {
+        ok: false,
+        repos: [],
+        githubLogin: body.github_login ?? null,
+        noInstallation: false,
+        needsLink: res.status === 409,
+        error: body.error || `Request failed (${res.status}).`,
+      };
+    }
+    return {
+      ok: true,
+      repos: body.repos ?? [],
+      githubLogin: body.github_login ?? null,
+      noInstallation: body.no_installation ?? false,
+      needsLink: false,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      repos: [],
+      githubLogin: null,
+      noInstallation: false,
+      needsLink: false,
+      error: String(e),
+    };
+  }
+}
+
 /**
  * Start the GitHub OAuth link. A plain browser navigation cannot set the
  * Authorization header, and a fetch() cannot follow a 302 into github.com
