@@ -153,6 +153,8 @@ Single-region EU deployment keeps this tractable:
 | 5e | Per-tenant limits/quotas (revisit global reserved concurrency) | 5b | planned |
 | 5f | Ops/compliance hardening (GDPR export/erasure, per-tenant observability) | 5c | planned |
 | 5g | (optional) issue/PR ↔ task sync via the webhook | 5b | deferred |
+| 5h | MCP-native OAuth: (a) resource-server metadata + pre-registered client, then (b) OAuth-proxy façade — see `docs/phase5-mcp-oauth.md` | Phase 4 | (a) **in progress** |
+| 5i | go-sdk upgrade to MCP spec **2026-07-28**: fully-stateless transport (remove `Mcp-Session-Id` + `initialize` handshake), `server/discover` RPC, `Mcp-Method`/`Mcp-Name` headers, `CacheableResult` (`ttlMs`/`cacheScope`), deterministic `tools/list` order. Gated on the go-sdk publishing 2026-07-28 support; cainban is already stateless-by-design so this is a clean adopt, not a redesign | go-sdk release | planned |
 
 ## 8. Explicitly out of scope for Phase 5 (record so it isn't silently assumed)
 - GitLab / non-GitHub forges (Phase 4 is github.com-only by design).
