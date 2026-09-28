@@ -22,8 +22,8 @@ const (
 // missing — there is no fail-open path.
 func buildResolver() (*auth.Resolver, error) {
 	issuer := strings.TrimSpace(os.Getenv(envAuthIssuer))
-	audience := strings.TrimSpace(os.Getenv(envAuthAudience))
-	if issuer == "" || audience == "" {
+	audiences := splitAudiences(os.Getenv(envAuthAudience))
+	if issuer == "" || len(audiences) == 0 {
 		return nil, fmt.Errorf("both %s and %s must be set (no unauthenticated endpoint)", envAuthIssuer, envAuthAudience)
 	}
 	jwksURL := strings.TrimSpace(os.Getenv(envAuthJWKSURL))
@@ -32,9 +32,9 @@ func buildResolver() (*auth.Resolver, error) {
 	}
 
 	validator, err := auth.NewValidator(auth.Config{
-		Issuer:   issuer,
-		Audience: audience,
-		Keys:     auth.NewJWKSCache(jwksURL),
+		Issuer:    issuer,
+		Audiences: audiences,
+		Keys:      auth.NewJWKSCache(jwksURL),
 	})
 	if err != nil {
 		return nil, err
@@ -48,4 +48,19 @@ func ensureDynamoBackend() string {
 	prev := os.Getenv(store.EnvBackend)
 	_ = os.Setenv(store.EnvBackend, store.BackendDynamoDB)
 	return prev
+}
+
+// splitAudiences parses a comma-separated CAINBAN_AUTH_AUDIENCE into a list of
+// accepted app-client-id audiences (trimmed, non-empty). This lets one Cognito
+// pool that issues tokens to several app clients — the machine client AND the
+// browser SPA client — be validated by one authorizer/Lambda. A single value
+// (no commas) yields a one-element list, preserving the prior behavior.
+func splitAudiences(raw string) []string {
+	out := []string{}
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

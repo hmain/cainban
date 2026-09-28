@@ -26,14 +26,20 @@ type KeySource interface {
 }
 
 // Config pins the trust anchors a token is validated against. A token is only
-// accepted if its `iss` equals Issuer and its `aud` contains Audience.
+// accepted if its `iss` equals Issuer and its `aud` contains at least one of the
+// accepted audiences (Audience and/or any entry in Audiences).
 type Config struct {
 	// Issuer is the expected `iss` claim (e.g. the Cognito user-pool issuer
 	// URL). Required.
 	Issuer string
-	// Audience is the expected `aud` claim (the Cognito app client id).
-	// Required.
+	// Audience is an accepted `aud` claim (a Cognito app client id). Required
+	// (at least one of Audience / Audiences must be non-empty).
 	Audience string
+	// Audiences are ADDITIONAL accepted `aud` values, so one pool that issues
+	// tokens to several app clients (e.g. a machine client AND a browser SPA
+	// client) can be validated by one Validator. A token is accepted if its
+	// `aud` contains Audience OR any entry here. Optional.
+	Audiences []string
 	// Keys resolves signing keys by kid. Required.
 	Keys KeySource
 	// Now allows tests to control the clock for expiry checks. Defaults to
@@ -55,8 +61,8 @@ func NewValidator(cfg Config) (*Validator, error) {
 	if strings.TrimSpace(cfg.Issuer) == "" {
 		return nil, fmt.Errorf("auth: Issuer is required")
 	}
-	if strings.TrimSpace(cfg.Audience) == "" {
-		return nil, fmt.Errorf("auth: Audience is required")
+	if strings.TrimSpace(cfg.Audience) == "" && len(cfg.acceptedAudiences()) == 0 {
+		return nil, fmt.Errorf("auth: at least one Audience is required")
 	}
 	if cfg.Keys == nil {
 		return nil, fmt.Errorf("auth: Keys (JWKS source) is required")
@@ -256,7 +262,7 @@ func (v *Validator) Validate(rawToken string) (*Identity, error) {
 	if c.Issuer != v.cfg.Issuer {
 		return nil, unauthenticated("token issuer not trusted", nil)
 	}
-	if !containsString(c.Audience, v.cfg.Audience) {
+	if !v.audienceAccepted(c.Audience) {
 		return nil, unauthenticated("token audience mismatch", nil)
 	}
 
@@ -317,6 +323,32 @@ func rsaAlg(alg string) (func([]byte) []byte, crypto.Hash, error) {
 func containsString(hay []string, needle string) bool {
 	for _, h := range hay {
 		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// acceptedAudiences returns the full set of accepted `aud` values (the single
+// Audience plus any Audiences), trimmed and non-empty.
+func (c Config) acceptedAudiences() []string {
+	out := make([]string, 0, 1+len(c.Audiences))
+	if a := strings.TrimSpace(c.Audience); a != "" {
+		out = append(out, a)
+	}
+	for _, a := range c.Audiences {
+		if a = strings.TrimSpace(a); a != "" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// audienceAccepted reports whether the token's `aud` claim contains at least
+// one of the configured accepted audiences.
+func (v *Validator) audienceAccepted(tokenAud []string) bool {
+	for _, want := range v.cfg.acceptedAudiences() {
+		if containsString(tokenAud, want) {
 			return true
 		}
 	}
