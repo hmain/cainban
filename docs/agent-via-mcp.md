@@ -228,8 +228,35 @@ is rejected with **401** before it reaches the Lambda — there is no anonymous
 reachability. A valid token is required; **no request signing (SigV4) is
 needed** — the agent sends only `Authorization: Bearer <token>`.
 
+## MCP-native OAuth discovery (RFC 9728 / RFC 8707 — step a)
+
+Beyond the "paste a bearer token" flow above, cainban is a spec-compliant OAuth
+2.1 **resource server** (MCP authorization spec 2026-07-28), so an MCP client
+that supports OAuth can **discover** where to authenticate and drive PKCE itself:
+
+- **Public discovery endpoint:** `GET <McpApiUrl>/.well-known/oauth-protected-resource`
+  (no auth) returns the RFC 9728 document — `resource` (cainban's canonical MCP
+  URL), `authorization_servers` (the Cognito issuer), `scopes_supported`
+  (`cainban:tasks`), `bearer_methods_supported` (`["header"]`).
+- **401 challenge:** a protected route without a valid token replies
+  `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource", scope="cainban:tasks"`,
+  which points a client at that document.
+- The client runs the **PKCE authorization-code flow against the Cognito Hosted
+  UI** using the pre-registered SPA `client_id`, then sends the resulting token
+  exactly as `Authorization: Bearer <token>` (the same header this guide uses).
+
+This is **step (a)**: it works with any MCP client that supports a
+**pre-registered** client id. Dynamic Client Registration (DCR, now deprecated)
+and Client ID Metadata Documents (CIMD) are **not yet supported** — they need
+the step-(b) OAuth proxy. Full setup:
+[`docs/mcp-oauth-setup.md`](./mcp-oauth-setup.md).
+
 ## Related docs
 
+- [`docs/mcp-oauth-setup.md`](./mcp-oauth-setup.md) — MCP-native OAuth (RFC 9728
+  discovery + pre-registered PKCE client); this is step (a).
+- [`docs/phase5-mcp-oauth.md`](./phase5-mcp-oauth.md) — the full Phase 5 MCP
+  OAuth design (step a resource-server + step b proxy).
 - [`docs/github-app-setup.md`](./github-app-setup.md) — connect a repo (the step
   that puts a repo into the `repos` claim).
 - [`docs/serverless-multiuser-plan.md`](./serverless-multiuser-plan.md) — the

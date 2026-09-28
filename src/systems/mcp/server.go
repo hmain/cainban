@@ -110,6 +110,35 @@ func (s *Server) HandlerWithAuth(resolver *auth.Resolver) http.Handler {
 	return AuthMiddleware(resolver, s.Handler())
 }
 
+// HandlerWithAuthChallenge is HandlerWithAuth that additionally advertises the
+// RFC 9728 protected-resource metadata URL in the 401 `WWW-Authenticate`
+// challenge (the MCP-OAuth discovery pointer, spec 2026-07-28). Pass the
+// absolute URL of the metadata document
+// (<McpApiUrl>/.well-known/oauth-protected-resource); an empty string falls
+// back to the legacy realm challenge (== HandlerWithAuth).
+//
+// # RFC 8707 resource indicator / audience note
+//
+// Under MCP OAuth a client requests a token scoped to THIS resource server by
+// sending `resource=<canonical MCP URL>` (RFC 8707) to the authorization
+// server; the URL it uses is exactly the `resource` value published in the
+// protected-resource metadata document (ResourceMetadataConfig.Resource). Some
+// authorization servers reflect that resource indicator into the token's `aud`.
+//
+// cainban's validator (src/systems/auth) accepts a token whose `aud` contains
+// any CONFIGURED app-client id (CAINBAN_AUTH_AUDIENCE). This step (a) does NOT
+// weaken that check: it deliberately does NOT add the canonical MCP URL as an
+// accepted audience, because with Cognito the tokens in play (the SPA PKCE
+// client and the machine client) carry an app-client-id `aud`, and widening the
+// accepted-audience set to a URL with no corresponding validation gain would be
+// a change to the load-bearing audience binding for no benefit today. If a
+// future authorization server (the step (b) proxy) issues tokens whose `aud` is
+// the canonical MCP URL, add that URL to CAINBAN_AUTH_AUDIENCE at that point —
+// the validator already accepts a LIST — rather than special-casing it here.
+func (s *Server) HandlerWithAuthChallenge(resolver *auth.Resolver, resourceMetadataURL string) http.Handler {
+	return AuthMiddlewareWithChallenge(resolver, resourceMetadataURL, s.Handler())
+}
+
 // ServeHTTP serves the stateless Streamable HTTP transport on addr, bound to
 // loopback only. addr may be ":8080" or "127.0.0.1:8080"; a bare-port or
 // wildcard host is rewritten to 127.0.0.1 so the server never binds a public

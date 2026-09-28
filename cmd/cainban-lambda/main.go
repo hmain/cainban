@@ -56,7 +56,19 @@ func main() {
 	}
 
 	server := mcp.NewStateless()
-	adapter := httpadapter.NewV2(server.HandlerWithAuth(resolver))
+
+	// Top-level handler: the RFC 9728 protected-resource metadata document is
+	// served PUBLICLY at /.well-known/oauth-protected-resource (MCP OAuth
+	// discovery must work before a client has any token), while EVERY other
+	// route goes through signature-first JWT auth + repo-scoped tenant
+	// resolution. On a 401, the authed path advertises the metadata URL in the
+	// WWW-Authenticate challenge so a spec-compliant MCP client can discover the
+	// authorization server. Both the metadata document and the challenge pointer
+	// are DERIVED from env (CAINBAN_MCP_RESOURCE + CAINBAN_AUTH_ISSUER), never
+	// hardcoded.
+	authed := server.HandlerWithAuthChallenge(resolver, resourceMetadataURL())
+	handler := mcp.PublicMux(resourceMetadataConfig(), authed)
+	adapter := httpadapter.NewV2(handler)
 
 	// This Lambda is fronted by an API Gateway v2 HTTP API (payload format 2.0),
 	// NOT a Function URL. The managed Cognito JWT authorizer validates the token
