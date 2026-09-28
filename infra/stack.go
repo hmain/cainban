@@ -2,6 +2,9 @@ package main
 
 import (
 	"github.com/aws/aws-cdk-go/awscdk/v2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigatewayv2"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigatewayv2authorizers"
+	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigatewayv2integrations"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscognito"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
@@ -296,38 +299,81 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// NOT granted this (it never touches GitHub).
 	githubAppSecret.GrantRead(fn.Role(), nil)
 
-	// --- Function URL (AUTHENTICATED — Phase 3) --------------------------
+	// --- API Gateway v2 HTTP API + Cognito JWT authorizer (MCP) ----------
 	//
-	// Phase 3 REPLACES the Phase 2 AuthType NONE. Two layers now gate the
-	// endpoint:
-	//   1. EDGE: AuthType AWS_IAM — the Function URL rejects any request that is
-	//      not SigV4-signed by an allowed principal, so there is no anonymous
-	//      reachability (the "no open endpoint remains" requirement).
-	//   2. APPLICATION: the Lambda validates a Cognito JWT signature-first and
-	//      resolves the repo-scoped tenant before any store access (identity +
-	//      authorization). Bearer JWT is carried in the Authorization header.
+	// REPLACES the Phase 3 Function URL (AuthType AWS_IAM). A live smoke-test
+	// found a HEADER COLLISION: with an AWS_IAM Function URL the caller's SigV4
+	// signature occupies the Authorization header, but the in-Lambda validator
+	// ALSO reads the Cognito JWT from Authorization — one request cannot carry
+	// both, so a correctly-signed request with a valid ID token still 401s.
 	//
-	// Alternative considered: an API Gateway HTTP API with a Cognito JWT
-	// authorizer offloads signature validation to the managed authorizer. It was
-	// NOT chosen because (a) the signature-first ordering is the security core
-	// of this phase and must be unit-testable locally with a mock JWKS — an
-	// in-Lambda validator is; a managed authorizer is not — and (b) it adds an
-	// API Gateway surface + stage for no functional gain over the Function URL
-	// the Phase 2 transport already targets. The in-Lambda validator keeps the
-	// IdP swappable via env vars alone.
-	fnURL := fn.AddFunctionUrl(&awslambda.FunctionUrlOptions{
-		AuthType: awslambda.FunctionUrlAuthType_AWS_IAM,
-		Cors: &awslambda.FunctionUrlCorsOptions{
-			AllowedOrigins: jsii.Strings("*"),
-			AllowedMethods: &[]awslambda.HttpMethod{awslambda.HttpMethod_ALL},
-			// Authorization carries the bearer JWT; the SigV4 headers are needed
-			// for the AWS_IAM edge; X-Cainban-Repo names the target repo.
-			AllowedHeaders: jsii.Strings(
+	// The fix is an HTTP API (apigatewayv2 — cheaper than REST, native JWT
+	// authorizer, no VPC/NAT) fronted by a MANAGED Cognito JWT authorizer. The
+	// client now sends ONLY `Authorization: Bearer <jwt>` (no SigV4), so:
+	//   1. EDGE: the JWT authorizer validates the token's signature/iss/aud/exp
+	//      against the Cognito pool's JWKS before the request reaches the Lambda.
+	//   2. APPLICATION: the in-Lambda validator (HandlerWithAuth) re-validates
+	//      signature-first from the SAME header and resolves the repo-scoped
+	//      tenant. It stays unit-testable with a mock JWKS (the reason the Phase
+	//      3 comment gave for rejecting API GW), so it is kept as defense in
+	//      depth AND to carry the repo/tenant resolution the authorizer does not.
+	//
+	// This updates the Phase 3 decision (recorded above) that rejected API GW:
+	// the header collision makes AWS_IAM + in-Lambda JWT unworkable on one
+	// header, so signature validation moves to the managed authorizer while the
+	// in-Lambda validator continues to authorize the tenant.
+	//
+	// Issuer + audience are DERIVED from the stack's own Cognito constructs
+	// (userPool / userPoolClient) — never a hardcoded foreign pool. Identity
+	// source is the standard Authorization header.
+	mcpAuthorizer := awsapigatewayv2authorizers.NewHttpJwtAuthorizer(
+		jsii.String("McpJwtAuthorizer"),
+		issuer,
+		&awsapigatewayv2authorizers.HttpJwtAuthorizerProps{
+			AuthorizerName: jsii.String("cainban-mcp-jwt"),
+			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId()},
+			IdentitySource: jsii.Strings("$request.header.Authorization"),
+		},
+	)
+
+	mcpIntegration := awsapigatewayv2integrations.NewHttpLambdaIntegration(
+		jsii.String("McpIntegration"),
+		fn,
+		// Payload format 2.0 is the HTTP API default and is exactly what the
+		// Lambda's httpadapter.NewV2 consumes (events.APIGatewayV2HTTPRequest).
+		&awsapigatewayv2integrations.HttpLambdaIntegrationProps{
+			PayloadFormatVersion: awsapigatewayv2.PayloadFormatVersion_VERSION_2_0(),
+		},
+	)
+
+	mcpAPI := awsapigatewayv2.NewHttpApi(stack, jsii.String("McpHttpApi"), &awsapigatewayv2.HttpApiProps{
+		ApiName:           jsii.String("cainban-mcp"),
+		Description:       jsii.String("MCP Streamable-HTTP endpoint — HTTP API + managed Cognito JWT authorizer (Authorization: Bearer <jwt>, no SigV4)"),
+		DefaultAuthorizer: mcpAuthorizer,
+		CorsPreflight: &awsapigatewayv2.CorsPreflightOptions{
+			AllowOrigins: jsii.Strings("*"),
+			AllowMethods: &[]awsapigatewayv2.CorsHttpMethod{awsapigatewayv2.CorsHttpMethod_ANY},
+			// Authorization carries the bearer JWT; X-Cainban-Repo names the
+			// target repo; the MCP session/protocol headers are used by the
+			// Streamable-HTTP transport. No SigV4 headers are needed any more.
+			AllowHeaders: jsii.Strings(
 				"content-type", "mcp-session-id", "mcp-protocol-version",
 				"authorization", "x-cainban-repo",
-				"x-amz-date", "x-amz-security-token", "x-amz-content-sha256",
 			),
 		},
+	})
+
+	// Route every MCP request (root + any sub-path) to the MCP Lambda under the
+	// default JWT authorizer. The MCP client POSTs to the API root.
+	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_ANY},
+		Integration: mcpIntegration,
+	})
+	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/{proxy+}"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_ANY},
+		Integration: mcpIntegration,
 	})
 
 	// --- Explicit CloudWatch log group -----------------------------------
@@ -402,31 +448,80 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// at runtime to mint App JWTs, exchange OAuth codes, and call the GitHub API.
 	githubAppSecret.GrantRead(connectFn.Role(), nil)
 
-	// --- Connect Function URL (AUTHENTICATED) ----------------------------
+	// --- API Gateway v2 HTTP API + Cognito JWT authorizer (Connect) ------
 	//
-	// A Function URL is chosen (over an API Gateway HTTP API) for the same
-	// reasons as the MCP endpoint: the security core is the IN-LAMBDA
-	// signature-first Cognito JWT validation (unit-testable with a mock JWKS),
-	// and a Function URL adds no extra managed surface. AuthType AWS_IAM at the
-	// edge means no anonymous reachability; the in-Lambda validator then
-	// authenticates every /connect route.
+	// REPLACES the connect Function URL (AuthType AWS_IAM) for the same reason
+	// as the MCP endpoint: the SigV4 signature and the Cognito JWT both want the
+	// Authorization header. The connect API now sits behind an HTTP API with a
+	// managed Cognito JWT authorizer as the DEFAULT — every /connect route
+	// requires `Authorization: Bearer <jwt>` (no SigV4) — with ONE exception:
 	//
-	// UX note: the GitHub OAuth browser redirect (GET /connect/github/start ->
-	// GitHub -> GET /connect/github/callback) targets THIS URL. Because the edge
-	// is AWS_IAM, the browser-facing calls are SigV4-signed (issued by an
-	// authenticated client / a small signing front-end), exactly like the MCP
-	// endpoint — there is no anonymous browser hop. The callback URL an operator
-	// registers on the GitHub App is <connect-function-url>connect/github/callback.
-	connectURL := connectFn.AddFunctionUrl(&awslambda.FunctionUrlOptions{
-		AuthType: awslambda.FunctionUrlAuthType_AWS_IAM,
-		Cors: &awslambda.FunctionUrlCorsOptions{
-			AllowedOrigins: jsii.Strings("*"),
-			AllowedMethods: &[]awslambda.HttpMethod{awslambda.HttpMethod_ALL},
-			AllowedHeaders: jsii.Strings(
-				"content-type", "authorization",
-				"x-amz-date", "x-amz-security-token", "x-amz-content-sha256",
-			),
+	//   GET /connect/github/callback is AUTHORIZER-EXEMPT. It is a browser
+	//   redirect from GitHub's OAuth (GitHub -> this callback URL) and CANNOT
+	//   carry a Cognito JWT. Its authenticity comes from the HMAC-signed,
+	//   sub-bound, expiring `state` param (see src/systems/connect/state.go +
+	//   handler.go handleCallback): the state is verified with a key derived
+	//   from the App's OAuth client secret and is bound to the sub that started
+	//   the flow. Putting the JWT authorizer on the callback would break the
+	//   browser redirect (GitHub sends no bearer token), so that one route uses
+	//   HttpNoneAuthorizer while every other route inherits the JWT authorizer.
+	//
+	// Issuer + audience are derived from the SAME Cognito constructs as the MCP
+	// authorizer (userPool / userPoolClient) — never hardcoded.
+	connectAuthorizer := awsapigatewayv2authorizers.NewHttpJwtAuthorizer(
+		jsii.String("ConnectJwtAuthorizer"),
+		issuer,
+		&awsapigatewayv2authorizers.HttpJwtAuthorizerProps{
+			AuthorizerName: jsii.String("cainban-connect-jwt"),
+			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId()},
+			IdentitySource: jsii.Strings("$request.header.Authorization"),
 		},
+	)
+
+	connectIntegration := awsapigatewayv2integrations.NewHttpLambdaIntegration(
+		jsii.String("ConnectIntegration"),
+		connectFn,
+		&awsapigatewayv2integrations.HttpLambdaIntegrationProps{
+			PayloadFormatVersion: awsapigatewayv2.PayloadFormatVersion_VERSION_2_0(),
+		},
+	)
+
+	connectAPI := awsapigatewayv2.NewHttpApi(stack, jsii.String("ConnectHttpApi"), &awsapigatewayv2.HttpApiProps{
+		ApiName:           jsii.String("cainban-connect"),
+		Description:       jsii.String("Connect API (Phase 4 P4.3) — HTTP API + Cognito JWT authorizer; /connect/github/callback is authorizer-exempt (HMAC state auth)"),
+		DefaultAuthorizer: connectAuthorizer,
+		CorsPreflight: &awsapigatewayv2.CorsPreflightOptions{
+			AllowOrigins: jsii.Strings("*"),
+			AllowMethods: &[]awsapigatewayv2.CorsHttpMethod{awsapigatewayv2.CorsHttpMethod_ANY},
+			AllowHeaders: jsii.Strings("content-type", "authorization"),
+		},
+	})
+
+	// Authenticated /connect routes — inherit the default JWT authorizer.
+	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/connect/github/start"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: connectIntegration,
+	})
+	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/connect/repo"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_POST, awsapigatewayv2.HttpMethod_DELETE},
+		Integration: connectIntegration,
+	})
+	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/connect/repos"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: connectIntegration,
+	})
+
+	// The GitHub OAuth callback — EXEMPT from the JWT authorizer. HttpNoneAuthorizer
+	// explicitly removes the default authorizer for this one route. Auth here is
+	// the HMAC-signed sub-bound state param verified inside handleCallback.
+	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/connect/github/callback"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: connectIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
 	})
 
 	awslogs.NewLogGroup(stack, jsii.String("ConnectLogGroup"), &awslogs.LogGroupProps{
@@ -436,13 +531,13 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	})
 
 	// --- Outputs ----------------------------------------------------------
-	awscdk.NewCfnOutput(stack, jsii.String("FunctionUrl"), &awscdk.CfnOutputProps{
-		Value:       fnURL.Url(),
-		Description: jsii.String("MCP Streamable-HTTP endpoint — AWS_IAM edge auth + in-Lambda Cognito JWT (Phase 3, authenticated)"),
+	awscdk.NewCfnOutput(stack, jsii.String("McpApiUrl"), &awscdk.CfnOutputProps{
+		Value:       mcpAPI.Url(),
+		Description: jsii.String("MCP Streamable-HTTP endpoint — API Gateway v2 HTTP API + managed Cognito JWT authorizer. Client sends Authorization: Bearer <jwt> (no SigV4)."),
 	})
-	awscdk.NewCfnOutput(stack, jsii.String("ConnectFunctionUrl"), &awscdk.CfnOutputProps{
-		Value:       connectURL.Url(),
-		Description: jsii.String("Connect API endpoint (Phase 4 P4.3) — /connect/* routes; AWS_IAM edge + in-Lambda Cognito JWT. The GitHub App Callback URL is <this>connect/github/callback"),
+	awscdk.NewCfnOutput(stack, jsii.String("ConnectApiUrl"), &awscdk.CfnOutputProps{
+		Value:       connectAPI.Url(),
+		Description: jsii.String("Connect API endpoint (Phase 4 P4.3) — HTTP API + Cognito JWT authorizer; /connect/* require Authorization: Bearer <jwt>. The GitHub App Callback URL is <this>connect/github/callback (authorizer-exempt; HMAC state auth)."),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("TableName"), &awscdk.CfnOutputProps{
 		Value:       table.TableName(),

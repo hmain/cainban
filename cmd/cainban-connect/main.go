@@ -50,12 +50,19 @@ func main() {
 
 	adapter := httpadapter.NewV2(handler)
 
-	lambda.Start(func(ctx context.Context, req events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
-		v2 := functionURLToAPIGatewayV2(req)
-		resp, err := adapter.ProxyWithContext(ctx, v2)
+	// Fronted by an API Gateway v2 HTTP API (payload format 2.0), NOT a Function
+	// URL. Every /connect route is protected by the managed Cognito JWT
+	// authorizer EXCEPT GET /connect/github/callback, which is authorizer-exempt
+	// (a browser redirect from GitHub cannot carry a Cognito JWT; it is
+	// authenticated by the HMAC-signed, sub-bound state param). An HTTP API event
+	// is already an events.APIGatewayV2HTTPRequest, so the httpadapter consumes
+	// it directly — no Function URL conversion. RawPath carries the full route
+	// path (e.g. /connect/github/callback), which the handler routes on.
+	lambda.Start(func(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+		resp, err := adapter.ProxyWithContext(ctx, req)
 		if err != nil {
-			return events.LambdaFunctionURLResponse{StatusCode: 502}, err
+			return events.APIGatewayV2HTTPResponse{StatusCode: 502}, err
 		}
-		return apiGatewayV2ToFunctionURL(resp), nil
+		return resp, nil
 	})
 }

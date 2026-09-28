@@ -2,10 +2,11 @@
 //
 // It provisions the DynamoDB task table and grants table, three ARM64
 // provided.al2023 Lambdas (the stateless MCP handler, the connect API, and the
-// Cognito pre-token trigger), their AWS_IAM Function URLs (edge auth + in-Lambda
-// Cognito JWT verification), a Cognito user pool, a placeholder GitHub App
-// secret, least-privilege IAM per function, reserved-concurrency caps, and
-// explicit CloudWatch log groups.
+// Cognito pre-token trigger), two API Gateway v2 HTTP APIs (MCP + connect) each
+// fronted by a managed Cognito JWT authorizer (Authorization: Bearer <jwt>, no
+// SigV4) — the connect callback route is authorizer-exempt (HMAC state auth) —
+// a Cognito user pool, a placeholder GitHub App secret, least-privilege IAM per
+// function, reserved-concurrency caps, and explicit CloudWatch log groups.
 //
 // Deploy target: AWS profile aws-test-hamin, account 528757808822, region
 // eu-north-1. See infra/README.md for the exact commands.
@@ -34,7 +35,7 @@ func main() {
 				Account: jsii.String("528757808822"),
 				Region:  jsii.String("eu-north-1"),
 			},
-			Description: jsii.String("cainban: DynamoDB + grants table + arm64 Lambdas (MCP/connect/pre-token) + Cognito auth + GitHub App connect; Function URLs are AWS_IAM + in-Lambda JWT (authenticated)"),
+			Description: jsii.String("cainban: DynamoDB + grants table + arm64 Lambdas (MCP/connect/pre-token) + Cognito auth + GitHub App connect; HTTP APIs fronted by a managed Cognito JWT authorizer (Bearer JWT, no SigV4); connect callback authorizer-exempt (HMAC state)"),
 		},
 	})
 
