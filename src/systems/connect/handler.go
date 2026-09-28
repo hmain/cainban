@@ -160,14 +160,27 @@ func (h *Handler) authenticate(w http.ResponseWriter, r *http.Request) (*auth.Id
 }
 
 // handleStart (GET /connect/github/start) issues a sub-bound anti-CSRF state
-// and redirects the browser to GitHub's authorize URL.
+// and hands back GitHub's authorize URL.
+//
+// A browser SPA cannot set the Authorization header on a plain navigation, so
+// it calls this endpoint with fetch()+bearer — but it then CANNOT follow a 302
+// into github.com (a cross-origin auth page has no CORS headers, and a manual
+// redirect hides the Location). So when the client asks for JSON
+// (Accept: application/json), we return {"authorize_url": "..."} and let the SPA
+// navigate the top-level window there itself. For a non-JSON client (a direct
+// browser hit) we keep the plain 302 redirect.
 func (h *Handler) handleStart(w http.ResponseWriter, r *http.Request, id *auth.Identity) {
 	state, err := h.state.Issue(id.Subject)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not start connect flow")
 		return
 	}
-	http.Redirect(w, r, h.oauth.AuthorizeURL(state), http.StatusFound)
+	authorizeURL := h.oauth.AuthorizeURL(state)
+	if strings.Contains(r.Header.Get("Accept"), "application/json") {
+		writeJSON(w, http.StatusOK, map[string]any{"authorize_url": authorizeURL})
+		return
+	}
+	http.Redirect(w, r, authorizeURL, http.StatusFound)
 }
 
 // handleCallback (GET /connect/github/callback?code&state) is the GitHub OAuth

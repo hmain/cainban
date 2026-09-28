@@ -74,41 +74,23 @@ export async function listRepos(): Promise<ReposList> {
 
 /**
  * Start the GitHub OAuth link. A plain browser navigation cannot set the
- * Authorization header, so we fetch /connect/github/start WITH the bearer,
- * DON'T follow the redirect (redirect: "manual"), read the 302 Location the
- * handler returns (handleStart -> http.Redirect to the GitHub authorize URL),
- * and then navigate the browser there ourselves.
+ * Authorization header, and a fetch() cannot follow a 302 into github.com
+ * (cross-origin auth page has no CORS headers). So we fetch
+ * /connect/github/start WITH the bearer AND Accept: application/json; the
+ * endpoint returns {"authorize_url": "..."} instead of redirecting, and we
+ * navigate the top-level window there ourselves.
  */
 export async function linkGitHubIdentity(): Promise<void> {
   const res = await fetch(`${CONNECT_API}/connect/github/start`, {
     method: "GET",
-    headers: await authHeader(),
-    redirect: "manual",
+    headers: { ...(await authHeader()), Accept: "application/json" },
   });
-
-  // With redirect:"manual" a 302 surfaces as an opaqueredirect (status 0) and
-  // the Location header is not readable cross-origin. To read Location we ask
-  // the server not to be followed by the browser; API Gateway returns the 302
-  // with the Location header on a normal (non-opaque) response when the fetch
-  // is same-spec. Handle both: prefer a readable Location, else fall back to a
-  // full-page navigation that lets the browser follow the redirect chain.
-  const location = res.headers.get("Location");
-  if (location) {
-    window.location.assign(location);
-    return;
+  if (!res.ok) {
+    throw new Error(`connect/github/start failed: ${res.status}`);
   }
-
-  // Fallback: some environments hide the Location on a manual redirect. Re-issue
-  // as a normal fetch and follow it in JS via the final response URL.
-  const followed = await fetch(`${CONNECT_API}/connect/github/start`, {
-    method: "GET",
-    headers: await authHeader(),
-  });
-  if (followed.url && followed.url !== `${CONNECT_API}/connect/github/start`) {
-    window.location.assign(followed.url);
-    return;
+  const body = (await res.json()) as { authorize_url?: string };
+  if (!body.authorize_url) {
+    throw new Error("connect/github/start did not return an authorize_url");
   }
-  throw new Error(
-    "could not read the GitHub authorize URL from /connect/github/start",
-  );
+  window.location.assign(body.authorize_url);
 }

@@ -326,6 +326,16 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		spaClient.Node().AddDependency(p)
 	}
 
+	// Both app clients issue tokens against this pool: the machine/CLI MCP
+	// client AND the browser SPA client. The JWT authorizers and the in-Lambda
+	// validators must accept EITHER `aud`, so the accepted-audience value is the
+	// comma-separated pair. (CAINBAN_AUTH_AUDIENCE is parsed as a CSV by the
+	// Lambdas; the API GW authorizers take the two ids as a list directly.)
+	authAudiencesCsv := awscdk.Fn_Join(jsii.String(","), &[]*string{
+		userPoolClient.UserPoolClientId(),
+		spaClient.UserPoolClientId(),
+	})
+
 	// --- Pre-token-generation trigger -----------------------------------
 	//
 	// Cognito stores a user's repo grants in the custom:repos / custom:default_repo
@@ -428,7 +438,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			// Cognito user pool. The JWKS URL is derived from the issuer in the
 			// handler when unset; audience is the app client id.
 			"CAINBAN_AUTH_ISSUER":   issuer,
-			"CAINBAN_AUTH_AUDIENCE": userPoolClient.UserPoolClientId(),
+			"CAINBAN_AUTH_AUDIENCE": authAudiencesCsv,
 			// Phase 4 (P4.2): the name of the placeholder GitHub App creds
 			// secret. The connect/verify flow (P4.3) loads the App credentials
 			// from this secret at runtime via src/systems/secrets — never from
@@ -502,7 +512,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		issuer,
 		&awsapigatewayv2authorizers.HttpJwtAuthorizerProps{
 			AuthorizerName: jsii.String("cainban-mcp-jwt"),
-			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId()},
+			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId(), spaClient.UserPoolClientId()},
 			IdentitySource: jsii.Strings("$request.header.Authorization"),
 		},
 	)
@@ -584,7 +594,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			// Same Cognito pool as the MCP Lambda — the connect API validates
 			// the SAME signature-first JWT before any GitHub/secret/grant action.
 			"CAINBAN_AUTH_ISSUER":   issuer,
-			"CAINBAN_AUTH_AUDIENCE": userPoolClient.UserPoolClientId(),
+			"CAINBAN_AUTH_AUDIENCE": authAudiencesCsv,
 			// GitHub App credentials (App id, OAuth client id/secret, private
 			// key) are loaded at runtime from this Secrets Manager secret —
 			// never from code or env.
@@ -644,7 +654,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		issuer,
 		&awsapigatewayv2authorizers.HttpJwtAuthorizerProps{
 			AuthorizerName: jsii.String("cainban-connect-jwt"),
-			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId()},
+			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId(), spaClient.UserPoolClientId()},
 			IdentitySource: jsii.Strings("$request.header.Authorization"),
 		},
 	)

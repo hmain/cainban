@@ -38,8 +38,8 @@ const (
 func buildHandler(ctx context.Context) (http.Handler, error) {
 	// --- signature-first auth validator (same Cognito pool as the MCP Lambda) ---
 	issuer := strings.TrimSpace(os.Getenv(envAuthIssuer))
-	audience := strings.TrimSpace(os.Getenv(envAuthAudience))
-	if issuer == "" || audience == "" {
+	audiences := splitAudiences(os.Getenv(envAuthAudience))
+	if issuer == "" || len(audiences) == 0 {
 		return nil, fmt.Errorf("both %s and %s must be set (no unauthenticated endpoint)", envAuthIssuer, envAuthAudience)
 	}
 	jwksURL := strings.TrimSpace(os.Getenv(envAuthJWKSURL))
@@ -47,9 +47,9 @@ func buildHandler(ctx context.Context) (http.Handler, error) {
 		jwksURL = strings.TrimRight(issuer, "/") + "/.well-known/jwks.json"
 	}
 	validator, err := auth.NewValidator(auth.Config{
-		Issuer:   issuer,
-		Audience: audience,
-		Keys:     auth.NewJWKSCache(jwksURL),
+		Issuer:    issuer,
+		Audiences: audiences,
+		Keys:      auth.NewJWKSCache(jwksURL),
 	})
 	if err != nil {
 		return nil, err
@@ -119,4 +119,19 @@ func buildHandler(ctx context.Context) (http.Handler, error) {
 		State:           stateSigner,
 		SuccessRedirect: strings.TrimSpace(os.Getenv(envSuccessURL)),
 	})
+}
+
+// splitAudiences parses a comma-separated CAINBAN_AUTH_AUDIENCE into a list of
+// accepted app-client-id audiences (trimmed, non-empty). This lets one Cognito
+// pool that issues tokens to several app clients — the machine client AND the
+// browser SPA client — be validated by one authorizer/Lambda. A single value
+// (no commas) yields a one-element list, preserving the prior behaviour.
+func splitAudiences(raw string) []string {
+	out := []string{}
+	for _, p := range strings.Split(raw, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

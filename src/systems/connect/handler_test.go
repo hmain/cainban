@@ -240,6 +240,33 @@ func TestStart_RedirectsWithState(t *testing.T) {
 	}
 }
 
+// start with Accept: application/json -> 200 JSON {authorize_url}, no redirect
+// (the SPA path: a fetch()+bearer that then navigates the window itself).
+func TestStart_JSON_ReturnsAuthorizeURL(t *testing.T) {
+	e := newEnv(t)
+	r := httptest.NewRequest("GET", "/connect/github/start", nil)
+	r.Header.Set("Authorization", "Bearer "+e.token(t, subA))
+	r.Header.Set("Accept", "application/json")
+	w := httptest.NewRecorder()
+	e.handler.ServeHTTP(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("start(JSON) status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var body struct {
+		AuthorizeURL string `json:"authorize_url"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("start(JSON) body not JSON: %v (%s)", err, w.Body.String())
+	}
+	if !strings.Contains(body.AuthorizeURL, "state=") {
+		t.Fatalf("authorize_url has no state: %s", body.AuthorizeURL)
+	}
+	if w.Header().Get("Location") != "" {
+		t.Errorf("start(JSON) must not set a Location redirect header")
+	}
+}
+
 // callback with a bad/forged state -> rejected, no exchange, no identity write.
 // No JWT is sent: the callback does not use one.
 func TestCallback_BadState_Rejected(t *testing.T) {
