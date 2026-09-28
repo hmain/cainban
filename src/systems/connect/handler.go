@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/hmain/cainban/src/systems/auth"
@@ -162,9 +163,45 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.methodGuard(w, r, http.MethodGet, h.handleReposList)
 	case "/connect/available-repos":
 		h.methodGuard(w, r, http.MethodGet, h.handleAvailableRepos)
+	case "/connect/app-info":
+		h.methodGuard(w, r, http.MethodGet, h.handleAppInfo)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+// handleAppInfo (GET /connect/app-info) returns metadata the SPA needs to guide
+// the user through installing the GitHub App: the App's install URL. When the
+// available-repos list is empty (App not installed on any account the user can
+// access), the SPA sends the user here to install, then back.
+//
+// The install URL is github.com/apps/<slug>/installations/new with a signed,
+// sub-bound `state` so the post-install return can be tied back to this user
+// (GitHub echoes state to the App's Setup URL). The App slug is public (it is
+// in the App's own URL), so this carries no secret. It needs only a valid JWT,
+// NOT a linked GitHub identity — the user installs the App precisely because
+// they have nothing linked/available yet.
+func (h *Handler) handleAppInfo(w http.ResponseWriter, r *http.Request, id *auth.Identity) {
+	if strings.TrimSpace(h.appSlug) == "" {
+		// No slug configured: cannot build an install URL. Report it plainly so
+		// the SPA falls back to manual entry rather than a broken link.
+		writeJSON(w, http.StatusOK, map[string]any{
+			"install_url": "",
+			"app_slug":    "",
+		})
+		return
+	}
+	state, err := h.state.Issue(id.Subject)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not build install URL")
+		return
+	}
+	installURL := "https://github.com/apps/" + url.PathEscape(h.appSlug) +
+		"/installations/new?state=" + url.QueryEscape(state)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"install_url": installURL,
+		"app_slug":    h.appSlug,
+	})
 }
 
 // methodGuard enforces a single allowed method for a route.
