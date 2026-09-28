@@ -54,7 +54,7 @@ func ensureDynamoBackend() string {
 // accepted app-client-id audiences (trimmed, non-empty). This lets one Cognito
 // pool that issues tokens to several app clients — the machine client AND the
 // browser SPA client — be validated by one authorizer/Lambda. A single value
-// (no commas) yields a one-element list, preserving the prior behaviour.
+// (no commas) yields a one-element list, preserving the prior behavior.
 func splitAudiences(raw string) []string {
 	out := []string{}
 	for _, p := range strings.Split(raw, ",") {
