@@ -7,7 +7,13 @@ import {
 } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { ENTRA_PROVIDER_NAME, MCP_API } from "./amplify";
-import { connectRepo, listRepos, linkGitHubIdentity } from "./connectApi";
+import {
+  connectRepo,
+  listRepos,
+  linkGitHubIdentity,
+  listAvailableRepos,
+  type AvailableRepo,
+} from "./connectApi";
 
 type AuthState = "loading" | "signed-out" | "signed-in";
 
@@ -111,6 +117,7 @@ function SignedIn({ email }: { email: string }) {
       </section>
 
       <LinkIdentity />
+      <ChooseRepo />
       <ConnectRepo />
       <MyRepos />
       <McpConfig />
@@ -143,6 +150,164 @@ function LinkIdentity() {
         {busy ? "Redirecting…" : "Link GitHub identity"}
       </button>
       {error && <p role="alert" className="error">{error}</p>}
+    </section>
+  );
+}
+
+function ChooseRepo() {
+  const [repos, setRepos] = useState<AvailableRepo[]>([]);
+  const [login, setLogin] = useState<string | null>(null);
+  const [state, setState] = useState<"loading" | "list" | "manual-only">(
+    "loading",
+  );
+  const [notice, setNotice] = useState("");
+  const [busyRepo, setBusyRepo] = useState<string | null>(null);
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(
+    null,
+  );
+
+  const load = useCallback(async () => {
+    setState("loading");
+    setNotice("");
+    setMsg(null);
+    const r = await listAvailableRepos();
+    setLogin(r.githubLogin);
+    if (!r.ok) {
+      // FAIL CLOSED: never show an empty list as "no repos". Fall back to the
+      // manual entry below with the reason.
+      setState("manual-only");
+      setNotice(
+        r.needsLink
+          ? "Link your GitHub identity first, then reload to list your repos."
+          : `Couldn't load your repos (${r.error ?? "unknown error"}) — enter one manually below.`,
+      );
+      return;
+    }
+    if (r.noInstallation) {
+      setState("manual-only");
+      setNotice(
+        "The cainban GitHub App isn't installed on any account you can access yet — enter a repo manually below.",
+      );
+      return;
+    }
+    setRepos(r.repos);
+    setState("list");
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const onPick = async (fullName: string) => {
+    const slash = fullName.indexOf("/");
+    if (slash <= 0 || slash === fullName.length - 1) {
+      setMsg({ kind: "err", text: `Unexpected repo name: ${fullName}` });
+      return;
+    }
+    const owner = fullName.slice(0, slash);
+    const repo = fullName.slice(slash + 1);
+    setBusyRepo(fullName);
+    setMsg(null);
+    try {
+      const res = await connectRepo(owner, repo);
+      if (res.status === 200) {
+        setMsg({ kind: "ok", text: `Connected ${res.granted}.` });
+        // Reflect the new granted state in the list.
+        setRepos((prev) =>
+          prev.map((p) =>
+            p.full_name === fullName ? { ...p, already_granted: true } : p,
+          ),
+        );
+      } else if (res.status === 403) {
+        setMsg({
+          kind: "err",
+          text: `GitHub access to ${fullName} was not verified for your account.`,
+        });
+      } else if (res.status === 409) {
+        setMsg({
+          kind: "err",
+          text: "No linked GitHub identity yet — use “Link GitHub identity” first.",
+        });
+      } else {
+        setMsg({
+          kind: "err",
+          text: res.error || `Request failed (${res.status}).`,
+        });
+      }
+    } catch (err) {
+      setMsg({ kind: "err", text: String(err) });
+    } finally {
+      setBusyRepo(null);
+    }
+  };
+
+  return (
+    <section className="card" aria-labelledby="choose-heading">
+      <div className="account-row">
+        <h2 id="choose-heading">Choose a repo</h2>
+        <button
+          className="link"
+          disabled={state === "loading"}
+          onClick={() => void load()}
+        >
+          {state === "loading" ? "Loading…" : "Reload"}
+        </button>
+      </div>
+      <p className="hint">
+        Repos the cainban GitHub App can access for
+        {login ? (
+          <>
+            {" "}
+            <strong>{login}</strong>
+          </>
+        ) : (
+          " your account"
+        )}
+        . Pick one to connect it.
+      </p>
+
+      {state === "loading" && <p className="hint">Loading your repos…</p>}
+
+      {notice && (
+        <p role="status" className="hint">
+          {notice}
+        </p>
+      )}
+
+      {state === "list" &&
+        (repos.length === 0 ? (
+          <p className="hint">
+            No repos found for this installation — enter one manually below.
+          </p>
+        ) : (
+          <ul className="repo-list">
+            {repos.map((r) => (
+              <li key={r.full_name} className="account-row">
+                <code>{r.full_name}</code>
+                {r.already_granted ? (
+                  <span className="hint">Connected</span>
+                ) : (
+                  <button
+                    className="primary"
+                    disabled={busyRepo !== null}
+                    onClick={() => void onPick(r.full_name)}
+                  >
+                    {busyRepo === r.full_name ? "Connecting…" : "Connect"}
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        ))}
+
+      {msg && (
+        <p
+          role={msg.kind === "err" ? "alert" : "status"}
+          className={msg.kind === "err" ? "error" : "ok"}
+        >
+          {msg.text}
+        </p>
+      )}
     </section>
   );
 }
@@ -185,7 +350,11 @@ function ConnectRepo() {
 
   return (
     <section className="card" aria-labelledby="connect-heading">
-      <h2 id="connect-heading">Connect a GitHub repo</h2>
+      <h2 id="connect-heading">Or enter a repo manually</h2>
+      <p className="hint">
+        For a repo the App isn’t installed on yet, or if the list above didn’t
+        load. Access is still verified before it’s connected.
+      </p>
       <form onSubmit={(e) => void onSubmit(e)} className="repo-form">
         <label>
           Owner

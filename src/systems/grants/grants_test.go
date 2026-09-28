@@ -309,3 +309,113 @@ func TestIdentityErrorsUnmasked(t *testing.T) {
 		t.Fatal("PutIdentity swallowed a DynamoDB error")
 	}
 }
+
+// testCrypter is a reversible in-memory Crypter that prefixes a marker and
+// includes the encryption context so a test can assert (a) the ciphertext is
+// not the plaintext and (b) a mismatched context fails to decrypt.
+type testCrypter struct {
+	encErr error
+	decErr error
+}
+
+func (c *testCrypter) ctxKey(ec map[string]string) string { return "|" + ec["subject"] }
+
+func (c *testCrypter) Encrypt(_ context.Context, plaintext []byte, ec map[string]string) ([]byte, error) {
+	if c.encErr != nil {
+		return nil, c.encErr
+	}
+	return append([]byte("enc"+c.ctxKey(ec)+":"), plaintext...), nil
+}
+func (c *testCrypter) Decrypt(_ context.Context, ciphertext []byte, ec map[string]string) ([]byte, error) {
+	if c.decErr != nil {
+		return nil, c.decErr
+	}
+	prefix := "enc" + c.ctxKey(ec) + ":"
+	s := string(ciphertext)
+	if len(s) < len(prefix) || s[:len(prefix)] != prefix {
+		return nil, errors.New("testCrypter: encryption context mismatch")
+	}
+	return []byte(s[len(prefix):]), nil
+}
+
+func TestPutIdentityWithRefresh_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeDDB()
+	s := New(f, "cainban-grants")
+	cr := &testCrypter{}
+
+	if err := s.PutIdentityWithRefresh(ctx, cr, testSubject, "octocat", "refresh-123"); err != nil {
+		t.Fatalf("PutIdentityWithRefresh: %v", err)
+	}
+	// The login is readable via GetIdentity.
+	login, err := s.GetIdentity(ctx, testSubject)
+	if err != nil || login != "octocat" {
+		t.Fatalf("GetIdentity = (%q,%v), want (octocat,nil)", login, err)
+	}
+	// The stored attribute is BINARY ciphertext, NOT the plaintext token.
+	item := f.items[subjectPK(testSubject)+"\x00"+identitySKGH]
+	bv, ok := item[refreshTokenAttr].(*ddbtypes.AttributeValueMemberB)
+	if !ok {
+		t.Fatalf("refresh token attr is not binary: %T", item[refreshTokenAttr])
+	}
+	if string(bv.Value) == "refresh-123" || len(bv.Value) == 0 {
+		t.Fatal("refresh token stored in plaintext (or empty)")
+	}
+	// And it decrypts back.
+	got, err := s.GetRefreshToken(ctx, cr, testSubject)
+	if err != nil || got != "refresh-123" {
+		t.Fatalf("GetRefreshToken = (%q,%v), want (refresh-123,nil)", got, err)
+	}
+}
+
+func TestGetRefreshToken_NoIdentity_Empty(t *testing.T) {
+	ctx := context.Background()
+	s := New(newFakeDDB(), "cainban-grants")
+	got, err := s.GetRefreshToken(ctx, &testCrypter{}, testSubject)
+	if err != nil || got != "" {
+		t.Fatalf("no identity: got (%q,%v), want (\"\",nil)", got, err)
+	}
+}
+
+func TestGetRefreshToken_LinkedNoToken_Empty(t *testing.T) {
+	ctx := context.Background()
+	s := New(newFakeDDB(), "cainban-grants")
+	// Link WITHOUT a refresh token (the older PutIdentity path).
+	if err := s.PutIdentity(ctx, testSubject, "octocat"); err != nil {
+		t.Fatalf("PutIdentity: %v", err)
+	}
+	got, err := s.GetRefreshToken(ctx, &testCrypter{}, testSubject)
+	if err != nil || got != "" {
+		t.Fatalf("linked-no-token: got (%q,%v), want (\"\",nil)", got, err)
+	}
+}
+
+func TestGetRefreshToken_DecryptError_Surfaced(t *testing.T) {
+	ctx := context.Background()
+	s := New(newFakeDDB(), "cainban-grants")
+	if err := s.PutIdentityWithRefresh(ctx, &testCrypter{}, testSubject, "octocat", "refresh-123"); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	got, err := s.GetRefreshToken(ctx, &testCrypter{decErr: errors.New("kms denied")}, testSubject)
+	if err == nil || got != "" {
+		t.Fatalf("decrypt error must surface; got (%q,%v)", got, err)
+	}
+}
+
+func TestPutIdentityWithRefresh_Rejections(t *testing.T) {
+	ctx := context.Background()
+	s := New(newFakeDDB(), "cainban-grants")
+	cr := &testCrypter{}
+	if err := s.PutIdentityWithRefresh(ctx, cr, "", "octocat", "r"); err == nil {
+		t.Error("empty subject must error")
+	}
+	if err := s.PutIdentityWithRefresh(ctx, cr, testSubject, "", "r"); err == nil {
+		t.Error("empty login must error")
+	}
+	if err := s.PutIdentityWithRefresh(ctx, cr, testSubject, "octocat", ""); err == nil {
+		t.Error("empty refresh token must error")
+	}
+	if err := s.PutIdentityWithRefresh(ctx, nil, testSubject, "octocat", "r"); err == nil {
+		t.Error("nil crypter must error (no plaintext fallback)")
+	}
+}

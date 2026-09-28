@@ -141,3 +141,83 @@ func TestExchangeCode_MissingClientCreds(t *testing.T) {
 		t.Fatal("missing client id/secret must error")
 	}
 }
+
+// ExchangeCodeTokens returns the login AND the token set (access + refresh +
+// lifetimes) so the callback can persist the refresh token.
+func TestExchangeCodeTokens_ReturnsRefresh(t *testing.T) {
+	rt := &oauthRoute{responses: map[string]*http.Response{
+		"login/oauth/access_token": oresp(200, `{"access_token":"usr-tok","refresh_token":"ref-tok","expires_in":28800,"refresh_token_expires_in":15897600}`),
+		"/user":                    oresp(200, `{"login":"octocat","id":1}`),
+	}}
+	login, tokens, err := testOAuth(rt).ExchangeCodeTokens(context.Background(), "code123")
+	if err != nil {
+		t.Fatalf("ExchangeCodeTokens: %v", err)
+	}
+	if login != "octocat" {
+		t.Fatalf("login = %q, want octocat", login)
+	}
+	if tokens.AccessToken != "usr-tok" || tokens.RefreshToken != "ref-tok" {
+		t.Fatalf("tokens = %+v, want access=usr-tok refresh=ref-tok", tokens)
+	}
+	if tokens.ExpiresIn != 28800 || tokens.RefreshTokenExpiresIn != 15897600 {
+		t.Errorf("lifetimes = (%d,%d), want (28800,15897600)", tokens.ExpiresIn, tokens.RefreshTokenExpiresIn)
+	}
+}
+
+// RefreshUserToken mints a fresh access token AND returns the rotated refresh
+// token from grant_type=refresh_token.
+func TestRefreshUserToken_Rotates(t *testing.T) {
+	rt := &oauthRoute{responses: map[string]*http.Response{
+		"login/oauth/access_token": oresp(200, `{"access_token":"new-access","refresh_token":"rotated-refresh"}`),
+	}}
+	tokens, err := testOAuth(rt).RefreshUserToken(context.Background(), "old-refresh")
+	if err != nil {
+		t.Fatalf("RefreshUserToken: %v", err)
+	}
+	if tokens.AccessToken != "new-access" || tokens.RefreshToken != "rotated-refresh" {
+		t.Fatalf("tokens = %+v, want access=new-access refresh=rotated-refresh", tokens)
+	}
+	// The refresh request must be a POST carrying grant_type=refresh_token.
+	var sawRefresh bool
+	for _, r := range rt.seen {
+		if strings.Contains(r.URL.String(), "access_token") {
+			sawRefresh = true
+			if r.Method != http.MethodPost {
+				t.Errorf("refresh method = %s, want POST", r.Method)
+			}
+		}
+	}
+	if !sawRefresh {
+		t.Error("refresh never called the token endpoint")
+	}
+}
+
+func TestRefreshUserToken_EmptyRefresh(t *testing.T) {
+	rt := &oauthRoute{}
+	if _, err := testOAuth(rt).RefreshUserToken(context.Background(), "  "); err == nil {
+		t.Fatal("empty refresh token must error before any call")
+	}
+	if len(rt.seen) != 0 {
+		t.Errorf("empty refresh made %d calls, want 0", len(rt.seen))
+	}
+}
+
+func TestRefreshUserToken_GitHubError_FailsClosed(t *testing.T) {
+	rt := &oauthRoute{responses: map[string]*http.Response{
+		"login/oauth/access_token": oresp(200, `{"error":"bad_refresh_token","error_description":"expired"}`),
+	}}
+	tokens, err := testOAuth(rt).RefreshUserToken(context.Background(), "old-refresh")
+	if err == nil || tokens.AccessToken != "" {
+		t.Fatalf("a GitHub refresh error must fail closed; got (%+v,%v)", tokens, err)
+	}
+}
+
+func TestRefreshUserToken_Non2xx_FailsClosed(t *testing.T) {
+	rt := &oauthRoute{responses: map[string]*http.Response{
+		"login/oauth/access_token": oresp(401, `unauthorized`),
+	}}
+	tokens, err := testOAuth(rt).RefreshUserToken(context.Background(), "old-refresh")
+	if err == nil || tokens.AccessToken != "" {
+		t.Fatalf("a non-2xx refresh must fail closed; got (%+v,%v)", tokens, err)
+	}
+}

@@ -11,9 +11,11 @@ import (
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/kms"
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/connect"
+	"github.com/hmain/cainban/src/systems/crypter"
 	"github.com/hmain/cainban/src/systems/github"
 	"github.com/hmain/cainban/src/systems/grants"
 	"github.com/hmain/cainban/src/systems/secrets"
@@ -31,6 +33,16 @@ const (
 
 	envRedirectURI = "CAINBAN_CONNECT_REDIRECT_URI"
 	envSuccessURL  = "CAINBAN_CONNECT_SUCCESS_URL"
+
+	// envKMSKeyID names the KMS key the connect Lambda uses to encrypt/decrypt
+	// the stored GitHub refresh token (Option A). Required — there is no
+	// plaintext-fallback path.
+	envKMSKeyID = "CAINBAN_CONNECT_KMS_KEY_ID"
+	// envAppSlug optionally names THIS GitHub App's slug so available-repos can
+	// pick the user's installation of OUR App when the user sees several. The
+	// App id (from the secret) is the primary discriminator; the slug is a
+	// secondary hint.
+	envAppSlug = "CAINBAN_GITHUB_APP_SLUG"
 )
 
 // buildHandler constructs the fully-wired connect handler from env + Secrets
@@ -100,6 +112,20 @@ func buildHandler(ctx context.Context) (http.Handler, error) {
 	}
 	grantStore := grants.New(dynamodb.NewFromConfig(awsCfg), grantsTable)
 
+	// --- KMS crypter: encrypts the stored GitHub refresh token (Option A) ---
+	// Required — the connect flow refuses to store the refresh token in
+	// plaintext, so a missing key id is a cold-start failure, not a fail-open
+	// path. The key is a stack-owned CMK; the Lambda's IAM grants only
+	// kms:Encrypt/kms:Decrypt on it.
+	kmsKeyID := strings.TrimSpace(os.Getenv(envKMSKeyID))
+	if kmsKeyID == "" {
+		return nil, fmt.Errorf("%s must be set (refresh-token encryption)", envKMSKeyID)
+	}
+	refreshCrypter, err := crypter.NewKMS(kms.NewFromConfig(awsCfg), kmsKeyID)
+	if err != nil {
+		return nil, err
+	}
+
 	// --- anti-CSRF state signer: key derived from the OAuth client secret ---
 	// The client secret lives only in Secrets Manager; deriving the HMAC key
 	// from it via SHA-256 keeps the state key out of code/env and rotates with
@@ -115,8 +141,12 @@ func buildHandler(ctx context.Context) (http.Handler, error) {
 		Auth:            validator,
 		OAuth:           oauth,
 		Verify:          verifier,
+		Lister:          ghClient,
 		Grants:          grantStore,
+		Crypter:         refreshCrypter,
 		State:           stateSigner,
+		AppID:           appCfg.AppID,
+		AppSlug:         strings.TrimSpace(os.Getenv(envAppSlug)),
 		SuccessRedirect: strings.TrimSpace(os.Getenv(envSuccessURL)),
 	})
 }

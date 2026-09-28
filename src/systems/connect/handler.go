@@ -10,6 +10,7 @@ import (
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/github"
+	"github.com/hmain/cainban/src/systems/grants"
 )
 
 // Authenticator validates a bearer JWT signature-first and returns the caller
@@ -23,11 +24,25 @@ type Authenticator interface {
 }
 
 // OAuthLeg is the GitHub user-OAuth surface the handler needs: build the
-// authorize URL, and exchange a code for the connecting user's GitHub login.
+// authorize URL, exchange a code for the connecting user's GitHub login (plus,
+// for Option A, the user tokens including the refresh token), and refresh a
+// stored refresh token into a fresh short-lived access token at list time.
 // Satisfied by *github.OAuth; a fake implements it in tests.
 type OAuthLeg interface {
 	AuthorizeURL(state string) string
 	ExchangeCode(ctx context.Context, code string) (login string, err error)
+	ExchangeCodeTokens(ctx context.Context, code string) (login string, tokens github.UserTokens, err error)
+	RefreshUserToken(ctx context.Context, refreshToken string) (github.UserTokens, error)
+}
+
+// InstallationLister is the GitHub App surface used to list the repos the
+// signed-in user can access through the App installation (Option A). Both calls
+// use the USER's short-lived access token (minted from the stored refresh
+// token), so the result is scoped to what THIS user can see. Satisfied by
+// *github.Client; a fake implements it in tests.
+type InstallationLister interface {
+	UserInstallations(ctx context.Context, userToken string) ([]github.Installation, error)
+	InstallationRepositories(ctx context.Context, userToken string, installationID int64) ([]string, error)
 }
 
 // Verifier answers "does this GitHub login genuinely have access to
@@ -47,29 +62,45 @@ type GrantStore interface {
 	ListReposForSubject(ctx context.Context, subject string) ([]string, error)
 	PutIdentity(ctx context.Context, subject, githubLogin string) error
 	GetIdentity(ctx context.Context, subject string) (string, error)
+	// PutIdentityWithRefresh persists the login AND the encrypted refresh token
+	// (Option A). GetRefreshToken reads + decrypts it (returns "" when none).
+	PutIdentityWithRefresh(ctx context.Context, crypter grants.Crypter, subject, githubLogin, refreshToken string) error
+	GetRefreshToken(ctx context.Context, crypter grants.Crypter, subject string) (string, error)
 }
 
 // Handler serves the /connect/* routes. It holds only interfaces, so it is
 // fully unit-testable with fakes and never touches the network or AWS in tests.
 type Handler struct {
-	auth   Authenticator
-	oauth  OAuthLeg
-	verify Verifier
-	grants GrantStore
-	state  *StateSigner
+	auth    Authenticator
+	oauth   OAuthLeg
+	verify  Verifier
+	lister  InstallationLister
+	grants  GrantStore
+	crypter grants.Crypter
+	state   *StateSigner
+	// appSlug / appID identify THIS GitHub App so available-repos picks the
+	// user's installation of OUR App when the user can see several installations.
+	// Either may be empty/zero; when both are unset and the user has exactly one
+	// installation, that one is used.
+	appSlug string
+	appID   int64
 	// successRedirect is where the callback sends the browser after a
 	// successful identity link (optional; empty => a 200 confirmation instead).
 	successRedirect string
 }
 
 // Config wires a Handler's dependencies. All are required except
-// SuccessRedirect.
+// SuccessRedirect, AppSlug and AppID.
 type Config struct {
 	Auth            Authenticator
 	OAuth           OAuthLeg
 	Verify          Verifier
+	Lister          InstallationLister
 	Grants          GrantStore
+	Crypter         grants.Crypter
 	State           *StateSigner
+	AppSlug         string
+	AppID           int64
 	SuccessRedirect string
 }
 
@@ -79,12 +110,22 @@ func NewHandler(cfg Config) (*Handler, error) {
 	if cfg.Auth == nil || cfg.OAuth == nil || cfg.Verify == nil || cfg.Grants == nil || cfg.State == nil {
 		return nil, errors.New("connect: Auth, OAuth, Verify, Grants and State are all required")
 	}
+	if cfg.Lister == nil {
+		return nil, errors.New("connect: Lister is required (available-repos listing)")
+	}
+	if cfg.Crypter == nil {
+		return nil, errors.New("connect: Crypter is required (encrypted refresh-token storage)")
+	}
 	return &Handler{
 		auth:            cfg.Auth,
 		oauth:           cfg.OAuth,
 		verify:          cfg.Verify,
+		lister:          cfg.Lister,
 		grants:          cfg.Grants,
+		crypter:         cfg.Crypter,
 		state:           cfg.State,
+		appSlug:         cfg.AppSlug,
+		appID:           cfg.AppID,
 		successRedirect: cfg.SuccessRedirect,
 	}, nil
 }
@@ -119,6 +160,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	case "/connect/repos":
 		h.methodGuard(w, r, http.MethodGet, h.handleReposList)
+	case "/connect/available-repos":
+		h.methodGuard(w, r, http.MethodGet, h.handleAvailableRepos)
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
@@ -212,15 +255,25 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
-	// Exchange the code for the user's GitHub login (server-side, via GitHub).
-	login, err := h.oauth.ExchangeCode(r.Context(), code)
+	// Exchange the code for the user's GitHub login AND user tokens (server-side,
+	// via GitHub). Option A needs the REFRESH token persisted so a fresh access
+	// token can be minted at list time.
+	login, tokens, err := h.oauth.ExchangeCodeTokens(r.Context(), code)
 	if err != nil || strings.TrimSpace(login) == "" {
 		// Fail closed: no identity learned => nothing persisted.
 		writeError(w, http.StatusBadGateway, "could not complete GitHub authorization")
 		return
 	}
-	// Persist the linked identity for the state-bound sub only.
-	if err := h.grants.PutIdentity(r.Context(), subject, login); err != nil {
+	// Persist the linked identity for the state-bound sub only. When GitHub
+	// returned a refresh token (App has "Expire user authorization tokens"
+	// enabled), store it ENCRYPTED alongside the login; otherwise persist the
+	// login alone. The plaintext refresh token never touches DynamoDB.
+	if strings.TrimSpace(tokens.RefreshToken) != "" {
+		err = h.grants.PutIdentityWithRefresh(r.Context(), h.crypter, subject, login, tokens.RefreshToken)
+	} else {
+		err = h.grants.PutIdentity(r.Context(), subject, login)
+	}
+	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not persist GitHub identity")
 		return
 	}
@@ -321,7 +374,156 @@ func (h *Handler) handleReposList(w http.ResponseWriter, r *http.Request, id *au
 	})
 }
 
-// decodeRepo reads {owner,repo} from the request body and normalizes it to a
+// availableRepo is one repo the signed-in user can access through the App
+// installation, with whether they have already granted it.
+type availableRepo struct {
+	FullName       string `json:"full_name"`
+	AlreadyGranted bool   `json:"already_granted"`
+}
+
+// handleAvailableRepos (GET /connect/available-repos) lists the repos the
+// SIGNED-IN USER can access through the GitHub App installation (Option A),
+// each flagged with whether it is already granted. It is Cognito-JWT-authed
+// (behind the same authorizer as the other /connect routes — see methodGuard).
+//
+// Flow (all scoped to the validated sub):
+//
+//  1. Require a linked GitHub identity (IDENTITY#github). None => 409 so the SPA
+//     prompts "Link GitHub first" (same contract as the repo-post path).
+//  2. Read + decrypt the stored refresh token. None stored (an older link made
+//     before Option A) => 409 asking the user to re-link.
+//  3. Refresh it into a short-lived user access token, and persist the ROTATED
+//     refresh token ATOMICALLY before using the access token (GitHub rotates
+//     the refresh token on every refresh; single-use).
+//  4. With the user token, list the user's installations, pick THIS App's
+//     installation, and list its repositories (paginated).
+//  5. Subtract/flag the repos already granted to this sub.
+//
+// FAIL CLOSED: any token/refresh/list error returns a NON-200 with a clear
+// message the SPA renders as "couldn't load your repos — enter one manually".
+// It NEVER returns an empty list that could be mistaken for "no repos", and
+// NEVER fabricates a repo.
+func (h *Handler) handleAvailableRepos(w http.ResponseWriter, r *http.Request, id *auth.Identity) {
+	ctx := r.Context()
+
+	// (1) Linked identity required.
+	login, err := h.grants.GetIdentity(ctx, id.Subject)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read linked identity")
+		return
+	}
+	if strings.TrimSpace(login) == "" {
+		writeError(w, http.StatusConflict, "no linked GitHub identity: start /connect/github/start first")
+		return
+	}
+
+	// (2) Stored (encrypted) refresh token required.
+	refreshToken, err := h.grants.GetRefreshToken(ctx, h.crypter, id.Subject)
+	if err != nil {
+		// Decrypt/DynamoDB error — fail closed.
+		writeError(w, http.StatusBadGateway, "could not load your GitHub authorization; enter a repo manually")
+		return
+	}
+	if strings.TrimSpace(refreshToken) == "" {
+		// Linked, but no refresh token on file (older link). Ask to re-link.
+		writeError(w, http.StatusConflict, "GitHub authorization is incomplete: re-link your GitHub identity to list repos")
+		return
+	}
+
+	// (3) Refresh -> fresh access token, and PERSIST the rotated refresh token
+	// atomically BEFORE using the access token (single-use rotation).
+	tokens, err := h.oauth.RefreshUserToken(ctx, refreshToken)
+	if err != nil || strings.TrimSpace(tokens.AccessToken) == "" {
+		writeError(w, http.StatusBadGateway, "could not refresh your GitHub authorization; enter a repo manually")
+		return
+	}
+	if strings.TrimSpace(tokens.RefreshToken) != "" {
+		// Store the new refresh token before we rely on the access token, so a
+		// crash after this point never leaves a spent refresh token on file.
+		if err := h.grants.PutIdentityWithRefresh(ctx, h.crypter, id.Subject, login, tokens.RefreshToken); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not persist rotated GitHub authorization")
+			return
+		}
+	}
+
+	// (4) List the user's installations and pick THIS App's installation.
+	installs, err := h.lister.UserInstallations(ctx, tokens.AccessToken)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not list your GitHub installations; enter a repo manually")
+		return
+	}
+	inst, ok := h.pickInstallation(installs)
+	if !ok {
+		// No installation of this App the user can see: nothing to list, but a
+		// definitive "no installation" (not an error). Return an empty list with
+		// a flag so the SPA shows manual entry with a clear reason rather than
+		// mistaking it for "no repos".
+		writeJSON(w, http.StatusOK, map[string]any{
+			"repos":           []availableRepo{},
+			"github_login":    login,
+			"no_installation": true,
+		})
+		return
+	}
+
+	// (5) List the installation's repositories (paginated), scoped to the user.
+	fullNames, err := h.lister.InstallationRepositories(ctx, tokens.AccessToken, inst.ID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not list your accessible repos; enter a repo manually")
+		return
+	}
+
+	// Flag already-granted repos for this sub.
+	granted, err := h.grants.ListReposForSubject(ctx, id.Subject)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not read your grants")
+		return
+	}
+	grantedSet := make(map[string]bool, len(granted))
+	for _, g := range granted {
+		grantedSet[g] = true
+	}
+	repos := make([]availableRepo, 0, len(fullNames))
+	for _, fn := range fullNames {
+		repos = append(repos, availableRepo{FullName: fn, AlreadyGranted: grantedSet[fn]})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"repos":        repos,
+		"github_login": login,
+	})
+}
+
+// pickInstallation chooses THIS App's installation from the user's visible
+// installations. It prefers a match on the configured app id, then app slug;
+// failing both, if the user has exactly one installation it uses that one
+// (single-App deployments). It returns ok=false when no installation can be
+// chosen.
+func (h *Handler) pickInstallation(installs []github.Installation) (github.Installation, bool) {
+	if len(installs) == 0 {
+		return github.Installation{}, false
+	}
+	if h.appID > 0 {
+		for _, in := range installs {
+			if in.AppID == h.appID {
+				return in, true
+			}
+		}
+	}
+	if slug := strings.TrimSpace(h.appSlug); slug != "" {
+		for _, in := range installs {
+			if strings.EqualFold(in.AppSlug, slug) {
+				return in, true
+			}
+		}
+	}
+	if len(installs) == 1 {
+		return installs[0], true
+	}
+	// Ambiguous: several installations and no way to identify ours. Fail closed
+	// (do not guess) — the SPA falls back to manual entry.
+	return github.Installation{}, false
+}
+
 // canonical owner/repo. It returns the raw owner, raw repo, canonical string,
 // and ok=false (having written a 400) on a malformed body/repo.
 func decodeRepo(w http.ResponseWriter, r *http.Request) (owner, repo, canon string, ok bool) {

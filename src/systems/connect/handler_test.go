@@ -17,6 +17,7 @@ import (
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/github"
+	"github.com/hmain/cainban/src/systems/grants"
 )
 
 // --- self-signed Cognito JWT (mirrors the auth package test key) -----------
@@ -33,6 +34,8 @@ type testEnv struct {
 	handler   *Handler
 	oauth     *fakeOAuth
 	verify    *fakeVerifier
+	lister    *fakeLister
+	crypter   *fakeCrypter
 	store     *fakeStore
 	state     *StateSigner
 }
@@ -57,18 +60,22 @@ func newEnv(t *testing.T) *testEnv {
 	state := newTestSigner(t)
 	oauth := &fakeOAuth{login: "octocat"}
 	verify := &fakeVerifier{}
+	lister := &fakeLister{}
+	cr := &fakeCrypter{}
 	store := newFakeStore()
 	h, err := NewHandler(Config{
-		Auth:   validator,
-		OAuth:  oauth,
-		Verify: verify,
-		Grants: store,
-		State:  state,
+		Auth:    validator,
+		OAuth:   oauth,
+		Verify:  verify,
+		Lister:  lister,
+		Grants:  store,
+		Crypter: cr,
+		State:   state,
 	})
 	if err != nil {
 		t.Fatalf("NewHandler: %v", err)
 	}
-	return &testEnv{signer: key, validator: validator, handler: h, oauth: oauth, verify: verify, store: store, state: state}
+	return &testEnv{signer: key, validator: validator, handler: h, oauth: oauth, verify: verify, lister: lister, crypter: cr, store: store, state: state}
 }
 
 // token mints a signed JWT for sub, valid now.
@@ -118,6 +125,13 @@ type fakeOAuth struct {
 	exchangeErr error
 	authorized  int
 	exchanged   int
+	// tokens returned by ExchangeCodeTokens (refresh persisted by the callback).
+	exchangeRefresh string
+	// refresh behavior for RefreshUserToken.
+	refreshAccess  string
+	refreshRefresh string
+	refreshErr     error
+	refreshed      int
 }
 
 func (f *fakeOAuth) AuthorizeURL(state string) string {
@@ -130,6 +144,72 @@ func (f *fakeOAuth) ExchangeCode(_ context.Context, _ string) (string, error) {
 		return "", f.exchangeErr
 	}
 	return f.login, nil
+}
+func (f *fakeOAuth) ExchangeCodeTokens(_ context.Context, _ string) (string, github.UserTokens, error) {
+	f.exchanged++
+	if f.exchangeErr != nil {
+		return "", github.UserTokens{}, f.exchangeErr
+	}
+	return f.login, github.UserTokens{AccessToken: "usr-access", RefreshToken: f.exchangeRefresh}, nil
+}
+func (f *fakeOAuth) RefreshUserToken(_ context.Context, _ string) (github.UserTokens, error) {
+	f.refreshed++
+	if f.refreshErr != nil {
+		return github.UserTokens{}, f.refreshErr
+	}
+	return github.UserTokens{AccessToken: f.refreshAccess, RefreshToken: f.refreshRefresh}, nil
+}
+
+// fakeLister is an in-memory InstallationLister.
+type fakeLister struct {
+	installs    []github.Installation
+	installsErr error
+	repos       []string
+	reposErr    error
+	instCalls   int
+	repoCalls   int
+}
+
+func (f *fakeLister) UserInstallations(_ context.Context, _ string) ([]github.Installation, error) {
+	f.instCalls++
+	return f.installs, f.installsErr
+}
+func (f *fakeLister) InstallationRepositories(_ context.Context, _ string, _ int64) ([]string, error) {
+	f.repoCalls++
+	return f.repos, f.reposErr
+}
+
+// fakeCrypter is a reversible crypter that XOR-obfuscates the bytes (with a
+// marker prefix) so the ciphertext does NOT contain the plaintext as a
+// substring — matching the leak-proofing a real crypter guarantees — and
+// round-trips deterministically.
+type fakeCrypter struct {
+	encErr error
+	decErr error
+}
+
+const fakeCryptKey = 0x5a
+
+func (c *fakeCrypter) Encrypt(_ context.Context, plaintext []byte, _ map[string]string) ([]byte, error) {
+	if c.encErr != nil {
+		return nil, c.encErr
+	}
+	out := append([]byte("enc:"), make([]byte, len(plaintext))...)
+	for i, b := range plaintext {
+		out[len("enc:")+i] = b ^ fakeCryptKey
+	}
+	return out, nil
+}
+func (c *fakeCrypter) Decrypt(_ context.Context, ciphertext []byte, _ map[string]string) ([]byte, error) {
+	if c.decErr != nil {
+		return nil, c.decErr
+	}
+	body := ciphertext[len("enc:"):]
+	out := make([]byte, len(body))
+	for i, b := range body {
+		out[i] = b ^ fakeCryptKey
+	}
+	return out, nil
 }
 
 type fakeVerifier struct {
@@ -147,12 +227,14 @@ func (f *fakeVerifier) VerifyRepoAccess(_ context.Context, _, _ string, _ github
 type fakeStore struct {
 	grants     map[string]map[string]bool // subject -> repo -> present
 	identities map[string]string          // subject -> github login
+	refresh    map[string][]byte          // subject -> encrypted refresh token
 	putErr     error
 	getIDErr   error
+	listErr    error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{grants: map[string]map[string]bool{}, identities: map[string]string{}}
+	return &fakeStore{grants: map[string]map[string]bool{}, identities: map[string]string{}, refresh: map[string][]byte{}}
 }
 
 func (s *fakeStore) PutGrant(_ context.Context, subject, repo string) error {
@@ -172,6 +254,9 @@ func (s *fakeStore) DeleteGrant(_ context.Context, subject, repo string) error {
 	return nil
 }
 func (s *fakeStore) ListReposForSubject(_ context.Context, subject string) ([]string, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
 	var out []string
 	for r, ok := range s.grants[subject] {
 		if ok {
@@ -189,6 +274,29 @@ func (s *fakeStore) GetIdentity(_ context.Context, subject string) (string, erro
 		return "", s.getIDErr
 	}
 	return s.identities[subject], nil
+}
+func (s *fakeStore) PutIdentityWithRefresh(ctx context.Context, crypter grants.Crypter, subject, login, refreshToken string) error {
+	if s.putErr != nil {
+		return s.putErr
+	}
+	ct, err := crypter.Encrypt(ctx, []byte(refreshToken), map[string]string{"subject": subject})
+	if err != nil {
+		return err
+	}
+	s.identities[subject] = login
+	s.refresh[subject] = ct
+	return nil
+}
+func (s *fakeStore) GetRefreshToken(ctx context.Context, crypter grants.Crypter, subject string) (string, error) {
+	ct, ok := s.refresh[subject]
+	if !ok || len(ct) == 0 {
+		return "", nil
+	}
+	pt, err := crypter.Decrypt(ctx, ct, map[string]string{"subject": subject})
+	if err != nil {
+		return "", err
+	}
+	return string(pt), nil
 }
 
 // --- tests -----------------------------------------------------------------
@@ -471,5 +579,211 @@ func TestRoutingGuards(t *testing.T) {
 	}
 	if w := e.do(t, "POST", "/connect/github/start", e.token(t, subA), ""); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("wrong method status = %d, want 405", w.Code)
+	}
+}
+
+// --- Option A: /connect/available-repos ------------------------------------
+
+// availableReposResp mirrors the endpoint's JSON so tests can assert on it.
+type availableReposResp struct {
+	Repos []struct {
+		FullName       string `json:"full_name"`
+		AlreadyGranted bool   `json:"already_granted"`
+	} `json:"repos"`
+	GitHubLogin    string `json:"github_login"`
+	NoInstallation bool   `json:"no_installation"`
+}
+
+// linkWithRefresh links subA with a stored (encrypted) refresh token, the state
+// the endpoint requires, so a happy-path test starts from a realistic item.
+func (e *testEnv) linkWithRefresh(t *testing.T, sub, login, refresh string) {
+	t.Helper()
+	if err := e.store.PutIdentityWithRefresh(context.Background(), e.crypter, sub, login, refresh); err != nil {
+		t.Fatalf("seed refresh: %v", err)
+	}
+}
+
+// Happy path: a linked user with a stored refresh token gets the paginated
+// installation repos, with already-granted flags. The refresh is rotated and
+// the NEW refresh token persisted; the OLD one is gone.
+func TestAvailableRepos_Happy_PaginatedAndFlagged(t *testing.T) {
+	e := newEnv(t)
+	e.linkWithRefresh(t, subA, "octocat", "refresh-old")
+	e.oauth.refreshAccess = "fresh-access"
+	e.oauth.refreshRefresh = "refresh-new"
+	e.lister.installs = []github.Installation{{ID: 42, Account: "acme", AppID: 0}}
+	// Simulate a paginated result already merged by the lister (the lister owns
+	// pagination; the handler consumes the merged slice).
+	e.lister.repos = []string{"acme/a", "acme/b", "acme/c"}
+	e.store.grants[subA] = map[string]bool{"acme/b": true} // already granted
+
+	w := e.do(t, "GET", "/connect/available-repos", e.token(t, subA), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var out availableReposResp
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Repos) != 3 {
+		t.Fatalf("repos = %d, want 3 (%v)", len(out.Repos), out.Repos)
+	}
+	if out.GitHubLogin != "octocat" {
+		t.Errorf("github_login = %q, want octocat", out.GitHubLogin)
+	}
+	granted := map[string]bool{}
+	for _, r := range out.Repos {
+		granted[r.FullName] = r.AlreadyGranted
+	}
+	if !granted["acme/b"] {
+		t.Error("acme/b should be flagged already_granted")
+	}
+	if granted["acme/a"] || granted["acme/c"] {
+		t.Error("acme/a and acme/c must not be flagged already_granted")
+	}
+	// Rotated refresh token persisted: the stored token now decrypts to the NEW
+	// value, not the old one.
+	got, err := e.store.GetRefreshToken(context.Background(), e.crypter, subA)
+	if err != nil {
+		t.Fatalf("read rotated refresh: %v", err)
+	}
+	if got != "refresh-new" {
+		t.Errorf("stored refresh = %q, want refresh-new (rotation not persisted)", got)
+	}
+}
+
+// No linked identity -> 409, and no refresh/list/verify work is attempted.
+func TestAvailableRepos_NoIdentity_409(t *testing.T) {
+	e := newEnv(t)
+	w := e.do(t, "GET", "/connect/available-repos", e.token(t, subA), "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+	if e.oauth.refreshed != 0 || e.lister.instCalls != 0 {
+		t.Error("no refresh/installation call may run without a linked identity")
+	}
+}
+
+// Linked identity but NO stored refresh token (an older link) -> 409 re-link,
+// no refresh attempted.
+func TestAvailableRepos_LinkedButNoRefresh_409(t *testing.T) {
+	e := newEnv(t)
+	e.store.identities[subA] = "octocat" // linked, but no refresh token stored
+	w := e.do(t, "GET", "/connect/available-repos", e.token(t, subA), "")
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body=%s)", w.Code, w.Body.String())
+	}
+	if e.oauth.refreshed != 0 {
+		t.Error("no refresh may run without a stored refresh token")
+	}
+}
+
+// Refresh failure -> fail closed (non-200), NEVER an empty list, no repo listed.
+func TestAvailableRepos_RefreshFailure_FailsClosed(t *testing.T) {
+	e := newEnv(t)
+	e.linkWithRefresh(t, subA, "octocat", "refresh-old")
+	e.oauth.refreshErr = errors.New("invalid_grant")
+	w := e.do(t, "GET", "/connect/available-repos", e.token(t, subA), "")
+	if w.Code == http.StatusOK {
+		t.Fatalf("a refresh failure must not return 200 (body=%s)", w.Body.String())
+	}
+	if e.lister.instCalls != 0 {
+		t.Error("installations must not be listed after a refresh failure")
+	}
+	// The body must not be an empty repo list masquerading as success.
+	if strings.Contains(w.Body.String(), `"repos"`) {
+		t.Error("a failed refresh must not return a repos list")
+	}
+}
+
+// A decrypt error on the stored refresh token fails closed (never lists).
+func TestAvailableRepos_DecryptError_FailsClosed(t *testing.T) {
+	e := newEnv(t)
+	e.linkWithRefresh(t, subA, "octocat", "refresh-old")
+	e.crypter.decErr = errors.New("kms denied")
+	w := e.do(t, "GET", "/connect/available-repos", e.token(t, subA), "")
+	if w.Code == http.StatusOK {
+		t.Fatalf("a decrypt error must not return 200 (body=%s)", w.Body.String())
+	}
+	if e.oauth.refreshed != 0 {
+		t.Error("no refresh may run when the stored token cannot be decrypted")
+	}
+}
+
+// The plaintext refresh/access token must NEVER appear in the response body
+// (token-never-logged / never-leaked invariant, checked at the HTTP boundary).
+func TestAvailableRepos_TokenNeverLeaksToResponse(t *testing.T) {
+	e := newEnv(t)
+	e.linkWithRefresh(t, subA, "octocat", "refresh-old")
+	e.oauth.refreshAccess = "fresh-access-SECRET"
+	e.oauth.refreshRefresh = "refresh-new-SECRET"
+	e.lister.installs = []github.Installation{{ID: 42, Account: "acme"}}
+	e.lister.repos = []string{"acme/a"}
+	w := e.do(t, "GET", "/connect/available-repos", e.token(t, subA), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+	for _, secret := range []string{"fresh-access-SECRET", "refresh-new-SECRET", "refresh-old"} {
+		if strings.Contains(body, secret) {
+			t.Fatalf("token material leaked into response body: %q", secret)
+		}
+	}
+	// And the stored ciphertext is not the plaintext.
+	if raw, ok := e.store.refresh[subA]; ok && strings.Contains(string(raw), "refresh-new-SECRET") {
+		t.Fatal("stored refresh token is not encrypted (plaintext present)")
+	}
+}
+
+// Ambiguous installations (several, none identifiable) -> fail closed to
+// no_installation rather than guessing.
+func TestAvailableRepos_AmbiguousInstallations_NoGuess(t *testing.T) {
+	e := newEnv(t)
+	e.linkWithRefresh(t, subA, "octocat", "refresh-old")
+	e.oauth.refreshAccess = "fresh-access"
+	e.oauth.refreshRefresh = "refresh-new"
+	e.lister.installs = []github.Installation{{ID: 1, AppID: 111}, {ID: 2, AppID: 222}}
+	w := e.do(t, "GET", "/connect/available-repos", e.token(t, subA), "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	var out availableReposResp
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !out.NoInstallation || len(out.Repos) != 0 {
+		t.Fatalf("ambiguous installs must yield no_installation + empty list, got %+v", out)
+	}
+	if e.lister.repoCalls != 0 {
+		t.Error("must not list repos when the installation cannot be identified")
+	}
+}
+
+// The callback persists the ENCRYPTED refresh token when GitHub returns one.
+func TestCallback_PersistsEncryptedRefresh(t *testing.T) {
+	e := newEnv(t)
+	e.oauth.exchangeRefresh = "refresh-from-callback"
+	stateForA, _ := e.state.Issue(subA)
+	w := e.do(t, "GET", "/connect/github/callback?code=c&state="+stateForA, "", "")
+	if w.Code != http.StatusOK {
+		t.Fatalf("callback status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if e.store.identities[subA] != "octocat" {
+		t.Errorf("identity = %q, want octocat", e.store.identities[subA])
+	}
+	// A ciphertext is stored, and it is not the plaintext.
+	raw, ok := e.store.refresh[subA]
+	if !ok || len(raw) == 0 {
+		t.Fatal("no encrypted refresh token persisted on callback")
+	}
+	if strings.Contains(string(raw), "refresh-from-callback") {
+		t.Fatal("refresh token stored in plaintext")
+	}
+	got, err := e.store.GetRefreshToken(context.Background(), e.crypter, subA)
+	if err != nil {
+		t.Fatalf("read back refresh: %v", err)
+	}
+	if got != "refresh-from-callback" {
+		t.Errorf("decrypted refresh = %q, want refresh-from-callback", got)
 	}
 }

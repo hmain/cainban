@@ -231,3 +231,128 @@ func TestCollaboratorPermission(t *testing.T) {
 		}
 	})
 }
+
+// UserInstallations decodes the {installations:[...]} envelope, uses the USER
+// token as the bearer (not an App JWT), and returns id/account/app metadata.
+func TestUserInstallations(t *testing.T) {
+	doer := &fakeDoer{
+		respond: func(req *http.Request) (*http.Response, error) {
+			if req.Method != http.MethodGet {
+				t.Errorf("method = %s, want GET", req.Method)
+			}
+			if !strings.HasSuffix(req.URL.Path, "/user/installations") {
+				t.Errorf("unexpected path %q", req.URL.Path)
+			}
+			if auth := req.Header.Get("Authorization"); auth != "Bearer usr-token" {
+				t.Errorf("bearer = %q, want the USER token", auth)
+			}
+			return jsonResp(http.StatusOK, `{"total_count":1,"installations":[{"id":42,"app_id":7,"app_slug":"cainban","account":{"login":"acme"}}]}`), nil
+		},
+	}
+	c := newTestClient(t, doer)
+	installs, err := c.UserInstallations(context.Background(), "usr-token")
+	if err != nil {
+		t.Fatalf("UserInstallations: %v", err)
+	}
+	if len(installs) != 1 {
+		t.Fatalf("installs = %d, want 1", len(installs))
+	}
+	got := installs[0]
+	if got.ID != 42 || got.AppID != 7 || got.AppSlug != "cainban" || got.Account != "acme" {
+		t.Fatalf("installation = %+v, want {42,acme,7,cainban}", got)
+	}
+}
+
+func TestUserInstallations_Non2xx_FailsClosed(t *testing.T) {
+	doer := &fakeDoer{respond: func(_ *http.Request) (*http.Response, error) {
+		return jsonResp(http.StatusForbidden, `forbidden`), nil
+	}}
+	c := newTestClient(t, doer)
+	if _, err := c.UserInstallations(context.Background(), "usr-token"); err == nil {
+		t.Fatal("a non-2xx must fail closed")
+	}
+}
+
+func TestUserInstallations_EmptyToken(t *testing.T) {
+	c := newTestClient(t, &fakeDoer{respond: func(_ *http.Request) (*http.Response, error) {
+		t.Fatal("must not call GitHub with an empty user token")
+		return nil, nil
+	}})
+	if _, err := c.UserInstallations(context.Background(), "  "); err == nil {
+		t.Fatal("empty user token must error before any call")
+	}
+}
+
+// InstallationRepositories follows pagination: a full first page (per_page=100)
+// then a short page terminates. All full_names across pages are returned.
+func TestInstallationRepositories_Paginated(t *testing.T) {
+	// Build a full page of 100 repos, then a 2-repo page.
+	var page1 strings.Builder
+	page1.WriteString(`{"total_count":102,"repositories":[`)
+	for i := 0; i < 100; i++ {
+		if i > 0 {
+			page1.WriteString(",")
+		}
+		page1.WriteString(`{"full_name":"acme/repo`)
+		page1.WriteString(itoa(i))
+		page1.WriteString(`"}`)
+	}
+	page1.WriteString(`]}`)
+	page2 := `{"total_count":102,"repositories":[{"full_name":"acme/repo100"},{"full_name":"acme/repo101"}]}`
+
+	var pagesSeen []string
+	doer := &fakeDoer{respond: func(req *http.Request) (*http.Response, error) {
+		if !strings.Contains(req.URL.Path, "/user/installations/42/repositories") {
+			t.Errorf("unexpected path %q", req.URL.Path)
+		}
+		if req.Header.Get("Authorization") != "Bearer usr-token" {
+			t.Errorf("bearer = %q, want the USER token", req.Header.Get("Authorization"))
+		}
+		p := req.URL.Query().Get("page")
+		pagesSeen = append(pagesSeen, p)
+		if p == "1" {
+			return jsonResp(http.StatusOK, page1.String()), nil
+		}
+		return jsonResp(http.StatusOK, page2), nil
+	}}
+	c := newTestClient(t, doer)
+	repos, err := c.InstallationRepositories(context.Background(), "usr-token", 42)
+	if err != nil {
+		t.Fatalf("InstallationRepositories: %v", err)
+	}
+	if len(repos) != 102 {
+		t.Fatalf("repos = %d, want 102 (pagination not followed)", len(repos))
+	}
+	if repos[0] != "acme/repo0" || repos[101] != "acme/repo101" {
+		t.Errorf("boundary repos = %q..%q", repos[0], repos[101])
+	}
+	if len(pagesSeen) < 2 {
+		t.Errorf("expected at least 2 page requests, saw %v", pagesSeen)
+	}
+}
+
+func TestInstallationRepositories_Non2xx_FailsClosed(t *testing.T) {
+	doer := &fakeDoer{respond: func(_ *http.Request) (*http.Response, error) {
+		return jsonResp(http.StatusInternalServerError, `boom`), nil
+	}}
+	c := newTestClient(t, doer)
+	if _, err := c.InstallationRepositories(context.Background(), "usr-token", 42); err == nil {
+		t.Fatal("a non-2xx must fail closed")
+	}
+}
+
+// itoa is a tiny local int->string to avoid importing strconv in the test for
+// one call site.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(b[i:])
+}

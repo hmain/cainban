@@ -34,6 +34,12 @@
 //	PK = USER#<subject>          SK = META                   -> default_repo marker
 //	PK = USER#<subject>          SK = IDENTITY#github        -> linked GitHub identity/install (P4.2/P4.3 populate; minimal now)
 //
+// The IDENTITY#github item carries the linked github_login and, for Option A
+// (available-repos listing), an ENCRYPTED user OAuth refresh token in a binary
+// attribute (refresh_token_enc). The token is encrypted via a Crypter (KMS
+// envelope in production) with the subject bound in as encryption context; the
+// PLAINTEXT refresh token NEVER lands in DynamoDB and is NEVER logged.
+//
 // <subject> is the Cognito sub (human) or, in a later phase, an agent
 // principal's client-id — keyed identically. owner/repo is normalized EXACTLY
 // as the auth resolver normalizes it (auth.NormalizeRepo: trim, validate
@@ -81,7 +87,24 @@ const (
 	// githubLoginAttr holds the GitHub login the subject authorized via the
 	// P4.3 OAuth leg on the IDENTITY#github item.
 	githubLoginAttr = "github_login"
+	// refreshTokenAttr holds the user's GitHub OAuth REFRESH token, ENCRYPTED
+	// (never plaintext). Option A refreshes it at list time to mint a
+	// short-lived user access token. The ciphertext is opaque bytes from the
+	// Crypter (KMS envelope in production); the plaintext token never touches
+	// DynamoDB and is never logged.
+	refreshTokenAttr = "refresh_token_enc"
 )
+
+// Crypter encrypts and decrypts small secrets (the user's GitHub refresh token)
+// so the plaintext never lands in DynamoDB. It is satisfied in production by a
+// KMS-backed encrypter (see cmd/cainban-connect) and by an in-memory fake in
+// tests. encryptionContext is passed through as AAD (KMS EncryptionContext) so
+// a ciphertext is bound to the subject it was written for — a ciphertext copied
+// to another subject's item fails to decrypt.
+type Crypter interface {
+	Encrypt(ctx context.Context, plaintext []byte, encryptionContext map[string]string) ([]byte, error)
+	Decrypt(ctx context.Context, ciphertext []byte, encryptionContext map[string]string) ([]byte, error)
+}
 
 // API is the subset of the DynamoDB client this package uses. Declaring it as
 // an interface (mirroring src/systems/dynamo.API) lets tests inject an
@@ -361,4 +384,103 @@ func (s *Store) PutIdentity(ctx context.Context, subject, githubLogin string) er
 		return fmt.Errorf("grants: put identity: %w", err)
 	}
 	return nil
+}
+
+// refreshEncryptionContext binds a refresh-token ciphertext to the subject it
+// was written for (KMS EncryptionContext / AAD). Decrypting with a different
+// subject fails, so a ciphertext lifted onto another subject's item is useless.
+func refreshEncryptionContext(subject string) map[string]string {
+	return map[string]string{
+		"purpose": "cainban-github-refresh-token",
+		"subject": subject,
+	}
+}
+
+// PutIdentityWithRefresh records the GitHub login AND the user's OAuth refresh
+// token (ENCRYPTED via the Crypter) on the IDENTITY#github item, in a single
+// item put. Like PutIdentity it is written ONLY by the connect flow after a
+// real code<->token exchange (or a refresh rotation), never from a
+// client-supplied value.
+//
+// The refresh token is encrypted with the subject bound in as encryption
+// context; the resulting ciphertext is stored as opaque BINARY. The PLAINTEXT
+// refresh token NEVER touches DynamoDB and is NEVER logged. An empty refresh
+// token is rejected (use PutIdentity when there is no token to store). A nil
+// Crypter is a programming error and is rejected before any write — there is no
+// plaintext-fallback path.
+func (s *Store) PutIdentityWithRefresh(ctx context.Context, crypter Crypter, subject, githubLogin, refreshToken string) error {
+	if subject == "" {
+		return errors.New("grants: put identity with refresh: empty subject")
+	}
+	login := strings.TrimSpace(githubLogin)
+	if login == "" {
+		return errors.New("grants: put identity with refresh: empty github login")
+	}
+	token := strings.TrimSpace(refreshToken)
+	if token == "" {
+		return errors.New("grants: put identity with refresh: empty refresh token")
+	}
+	if crypter == nil {
+		return errors.New("grants: put identity with refresh: nil crypter (refusing to store plaintext)")
+	}
+	ciphertext, err := crypter.Encrypt(ctx, []byte(token), refreshEncryptionContext(subject))
+	if err != nil {
+		return fmt.Errorf("grants: put identity with refresh: encrypt: %w", err)
+	}
+	if len(ciphertext) == 0 {
+		return errors.New("grants: put identity with refresh: crypter returned empty ciphertext")
+	}
+	_, err = s.client.PutItem(ctx, &dynamodb.PutItemInput{
+		TableName: aws.String(s.table),
+		Item: map[string]ddbtypes.AttributeValue{
+			"PK":             &ddbtypes.AttributeValueMemberS{Value: subjectPK(subject)},
+			"SK":             &ddbtypes.AttributeValueMemberS{Value: identitySKGH},
+			githubLoginAttr:  &ddbtypes.AttributeValueMemberS{Value: login},
+			refreshTokenAttr: &ddbtypes.AttributeValueMemberB{Value: ciphertext},
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("grants: put identity with refresh: %w", err)
+	}
+	return nil
+}
+
+// GetRefreshToken reads and DECRYPTS the subject's stored GitHub refresh token
+// from the IDENTITY#github item. It returns ("", nil) when the subject has no
+// linked identity OR has a linked identity with no stored refresh token (an
+// older link, or a link made before Option A) — the caller treats "" as "no
+// token, fall back to manual entry", not as an error.
+//
+// A DynamoDB error or a DECRYPT error is returned UNMASKED so the caller can
+// fail closed. A nil Crypter is rejected. The plaintext is never logged.
+func (s *Store) GetRefreshToken(ctx context.Context, crypter Crypter, subject string) (string, error) {
+	if subject == "" {
+		return "", nil
+	}
+	if crypter == nil {
+		return "", errors.New("grants: get refresh token: nil crypter")
+	}
+	out, err := s.client.GetItem(ctx, &dynamodb.GetItemInput{
+		TableName: aws.String(s.table),
+		Key: map[string]ddbtypes.AttributeValue{
+			"PK": &ddbtypes.AttributeValueMemberS{Value: subjectPK(subject)},
+			"SK": &ddbtypes.AttributeValueMemberS{Value: identitySKGH},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("grants: get refresh token: %w", err)
+	}
+	if len(out.Item) == 0 {
+		return "", nil
+	}
+	av, ok := out.Item[refreshTokenAttr].(*ddbtypes.AttributeValueMemberB)
+	if !ok || len(av.Value) == 0 {
+		// Linked identity but no stored refresh token.
+		return "", nil
+	}
+	plaintext, err := crypter.Decrypt(ctx, av.Value, refreshEncryptionContext(subject))
+	if err != nil {
+		return "", fmt.Errorf("grants: get refresh token: decrypt: %w", err)
+	}
+	return string(plaintext), nil
 }

@@ -85,6 +85,27 @@ func (o *OAuth) AuthorizeURL(state string) string {
 	return oauthAuthorizeBase + "?" + q.Encode()
 }
 
+// UserTokens is the full result of a user-OAuth token exchange (or refresh).
+// GitHub Apps with "Expire user authorization tokens" enabled return a
+// short-lived AccessToken PLUS a longer-lived, single-use RefreshToken (and
+// their lifetimes in seconds). Option A persists the RefreshToken (encrypted)
+// so a fresh AccessToken can be minted at list time; it NEVER persists the
+// AccessToken. RefreshToken may be empty for an App that does NOT expire user
+// tokens — the caller decides whether that is acceptable for its flow.
+type UserTokens struct {
+	// AccessToken is the short-lived user access token. Use it immediately and
+	// discard it — never persist it.
+	AccessToken string
+	// RefreshToken is the (single-use, rotated) refresh token. Persist it
+	// ENCRYPTED; on every refresh GitHub returns a NEW one that must replace the
+	// old atomically.
+	RefreshToken string
+	// ExpiresIn / RefreshTokenExpiresIn are the token lifetimes in seconds as
+	// reported by GitHub (0 when the App does not expire user tokens).
+	ExpiresIn             int
+	RefreshTokenExpiresIn int
+}
+
 // ExchangeCode swaps an OAuth authorization code for the connecting user's
 // GitHub login. It performs two server-side calls, both through the Doer seam:
 //
@@ -96,24 +117,69 @@ func (o *OAuth) AuthorizeURL(state string) string {
 // empty login returns ("", err). An empty/blank code is rejected before any
 // call. The caller treats a non-nil error / empty login as "no verified
 // identity" and must NOT persist or grant anything.
+//
+// It is a thin wrapper over ExchangeCodeTokens that keeps the login-only
+// contract for callers that do not need the token (existing behavior).
 func (o *OAuth) ExchangeCode(ctx context.Context, code string) (string, error) {
-	code = strings.TrimSpace(code)
-	if code == "" {
-		return "", errors.New("github: oauth: empty authorization code")
-	}
-	if strings.TrimSpace(o.cfg.ClientID) == "" || strings.TrimSpace(o.cfg.ClientSecret) == "" {
-		return "", errors.New("github: oauth: client id/secret not configured")
-	}
-
-	token, err := o.exchangeToken(ctx, code)
-	if err != nil {
-		return "", err
-	}
-	return o.fetchLogin(ctx, token)
+	login, _, err := o.ExchangeCodeTokens(ctx, code)
+	return login, err
 }
 
-// exchangeToken performs the code->user-token POST.
-func (o *OAuth) exchangeToken(ctx context.Context, code string) (string, error) {
+// ExchangeCodeTokens swaps an OAuth authorization code for BOTH the connecting
+// user's GitHub login AND the user tokens (access + refresh). It performs the
+// same two server-side calls as ExchangeCode plus returns the token set so the
+// caller (the connect callback) can persist the refresh token encrypted for
+// Option A. FAIL CLOSED identically: any error returns ("", UserTokens{}, err),
+// and the caller must NOT persist or grant anything on a non-nil error.
+func (o *OAuth) ExchangeCodeTokens(ctx context.Context, code string) (string, UserTokens, error) {
+	code = strings.TrimSpace(code)
+	if code == "" {
+		return "", UserTokens{}, errors.New("github: oauth: empty authorization code")
+	}
+	if strings.TrimSpace(o.cfg.ClientID) == "" || strings.TrimSpace(o.cfg.ClientSecret) == "" {
+		return "", UserTokens{}, errors.New("github: oauth: client id/secret not configured")
+	}
+
+	tokens, err := o.exchangeToken(ctx, code)
+	if err != nil {
+		return "", UserTokens{}, err
+	}
+	login, err := o.fetchLogin(ctx, tokens.AccessToken)
+	if err != nil {
+		return "", UserTokens{}, err
+	}
+	return login, tokens, nil
+}
+
+// RefreshUserToken mints a fresh user access token (and a rotated refresh
+// token) from a stored refresh token via
+// POST /login/oauth/access_token?grant_type=refresh_token. GitHub returns a NEW
+// refresh token on every refresh (single-use rotation), so the caller MUST
+// persist tokens.RefreshToken atomically BEFORE relying on the access token.
+//
+// FAIL CLOSED: an empty refresh token, missing client creds, transport error,
+// non-2xx, GitHub OAuth error, or empty access_token returns (UserTokens{},
+// err). The caller treats any error as "cannot list — enter a repo manually"
+// and MUST NOT fabricate a repo list.
+func (o *OAuth) RefreshUserToken(ctx context.Context, refreshToken string) (UserTokens, error) {
+	refreshToken = strings.TrimSpace(refreshToken)
+	if refreshToken == "" {
+		return UserTokens{}, errors.New("github: oauth: empty refresh token")
+	}
+	if strings.TrimSpace(o.cfg.ClientID) == "" || strings.TrimSpace(o.cfg.ClientSecret) == "" {
+		return UserTokens{}, errors.New("github: oauth: client id/secret not configured")
+	}
+	form := url.Values{}
+	form.Set("client_id", o.cfg.ClientID)
+	form.Set("client_secret", o.cfg.ClientSecret)
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+	return o.postToken(ctx, form)
+}
+
+// exchangeToken performs the code->user-token POST and returns the full token
+// set (access + refresh + lifetimes).
+func (o *OAuth) exchangeToken(ctx context.Context, code string) (UserTokens, error) {
 	form := url.Values{}
 	form.Set("client_id", o.cfg.ClientID)
 	form.Set("client_secret", o.cfg.ClientSecret)
@@ -121,39 +187,56 @@ func (o *OAuth) exchangeToken(ctx context.Context, code string) (string, error) 
 	if strings.TrimSpace(o.cfg.RedirectURI) != "" {
 		form.Set("redirect_uri", o.cfg.RedirectURI)
 	}
+	return o.postToken(ctx, form)
+}
+
+// postToken performs a POST to the token endpoint with the given form and
+// decodes the token response. Shared by the code exchange and the refresh flow.
+// It never logs the token values.
+func (o *OAuth) postToken(ctx context.Context, form url.Values) (UserTokens, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, oauthTokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
-		return "", fmt.Errorf("github: oauth: build token request: %w", err)
+		return UserTokens{}, fmt.Errorf("github: oauth: build token request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := o.doer.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("github: oauth: token exchange: %w", err)
+		return UserTokens{}, fmt.Errorf("github: oauth: token exchange: %w", err)
 	}
 	body := drain(resp)
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("github: oauth: token exchange: unexpected status %d: %s", resp.StatusCode, snippet(body))
+		return UserTokens{}, fmt.Errorf("github: oauth: token exchange: unexpected status %d: %s", resp.StatusCode, snippet(body))
 	}
 	// The JSON body carries EITHER an access_token OR an error (GitHub returns
-	// 200 with an `error` field for a bad/expired code).
+	// 200 with an `error` field for a bad/expired code or refresh token).
 	var out struct {
-		AccessToken      string `json:"access_token"`
-		TokenType        string `json:"token_type"`
-		Error            string `json:"error"`
-		ErrorDescription string `json:"error_description"`
+		AccessToken           string `json:"access_token"`
+		TokenType             string `json:"token_type"`
+		RefreshToken          string `json:"refresh_token"`
+		ExpiresIn             int    `json:"expires_in"`
+		RefreshTokenExpiresIn int    `json:"refresh_token_expires_in"`
+		Error                 string `json:"error"`
+		ErrorDescription      string `json:"error_description"`
 	}
 	if err := json.Unmarshal(body, &out); err != nil {
-		return "", fmt.Errorf("github: oauth: decode token response: %w", err)
+		return UserTokens{}, fmt.Errorf("github: oauth: decode token response: %w", err)
 	}
 	if out.Error != "" {
-		return "", fmt.Errorf("github: oauth: token exchange error %q: %s", out.Error, out.ErrorDescription)
+		// Do NOT include the body (it may echo token material); the GitHub error
+		// code + description is sufficient and safe to surface.
+		return UserTokens{}, fmt.Errorf("github: oauth: token exchange error %q: %s", out.Error, out.ErrorDescription)
 	}
 	if strings.TrimSpace(out.AccessToken) == "" {
-		return "", errors.New("github: oauth: token response had empty access_token")
+		return UserTokens{}, errors.New("github: oauth: token response had empty access_token")
 	}
-	return out.AccessToken, nil
+	return UserTokens{
+		AccessToken:           out.AccessToken,
+		RefreshToken:          out.RefreshToken,
+		ExpiresIn:             out.ExpiresIn,
+		RefreshTokenExpiresIn: out.RefreshTokenExpiresIn,
+	}, nil
 }
 
 // fetchLogin reads GET /user with the user token and returns the login.
