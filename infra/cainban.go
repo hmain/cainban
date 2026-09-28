@@ -1,13 +1,14 @@
-// Command infra is the AWS CDK (Go) app for cainban's Phase 2 serverless stack.
+// Command infra is the AWS CDK (Go) app for cainban's serverless stack.
 //
-// It provisions a single DynamoDB table, an ARM64 provided.al2023 Lambda
-// serving the stateless MCP handler (cmd/cainban-lambda), an unauthenticated
-// Lambda Function URL (TEMPORARY — Phase 3 adds auth), least-privilege IAM
-// scoped to the table, and an explicit CloudWatch log group.
+// It provisions the DynamoDB task table and grants table, three ARM64
+// provided.al2023 Lambdas (the stateless MCP handler, the connect API, and the
+// Cognito pre-token trigger), their AWS_IAM Function URLs (edge auth + in-Lambda
+// Cognito JWT verification), a Cognito user pool, a placeholder GitHub App
+// secret, least-privilege IAM per function, reserved-concurrency caps, and
+// explicit CloudWatch log groups.
 //
-// Deploy target (config only — this app is NOT deployed by the Phase 2 PR):
-// AWS profile aws-test-hamin, region eu-north-1. See infra/README.md for the
-// exact (un-run) commands.
+// Deploy target: AWS profile aws-test-hamin, account 528757808822, region
+// eu-north-1. See infra/README.md for the exact commands.
 //
 // Go CDK is used (not TypeScript) so the whole repo stays single-language: the
 // Lambda handler and the infrastructure are both Go, sharing one toolchain.
@@ -25,13 +26,15 @@ func main() {
 
 	NewCainbanStack(app, "CainbanPhase2Stack", &CainbanStackProps{
 		StackProps: awscdk.StackProps{
-			// Region is fixed to the Phase 2 dev target. Account is resolved
-			// from the CLI credentials at deploy time (CDK_DEFAULT_ACCOUNT),
-			// so `cdk synth` works with no account configured.
+			// Region is fixed to the dev target. Account is pinned to the
+			// aws-test-hamin dev account so `cdk diff`/`deploy` resolve a
+			// concrete environment from code (credentials still come from the
+			// --profile at deploy time; this is only the target identity).
 			Env: &awscdk.Environment{
-				Region: jsii.String("eu-north-1"),
+				Account: jsii.String("528757808822"),
+				Region:  jsii.String("eu-north-1"),
 			},
-			Description: jsii.String("cainban Phase 2: DynamoDB + arm64 Lambda + Function URL (unauthenticated, dev only)"),
+			Description: jsii.String("cainban: DynamoDB + grants table + arm64 Lambdas (MCP/connect/pre-token) + Cognito auth + GitHub App connect; Function URLs are AWS_IAM + in-Lambda JWT (authenticated)"),
 		},
 	})
 
