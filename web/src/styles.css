@@ -158,3 +158,26 @@ code {
   color: var(--ok);
   margin: 0.75rem 0 0;
 }
+
+.repo-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.manual-entry {
+  margin-top: 1rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.75rem;
+}
+
+.manual-entry summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.install-again {
+  margin-top: 1rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
