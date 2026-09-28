@@ -1,6 +1,8 @@
 package main
 
 import (
+	"strings"
+
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigatewayv2"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsapigatewayv2authorizers"
@@ -154,6 +156,174 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 		GenerateSecret: jsii.Bool(false),
 	})
+
+	// --- Entra ID (and future) OIDC federation --------------------------
+	//
+	// Browser users sign in through an external OIDC identity provider (the
+	// customer's Microsoft Entra ID tenant) via the Cognito Hosted UI, rather
+	// than with a Cognito-native password. This does NOT touch the machine
+	// McpClient above (USER_PASSWORD/SRP for CLI/agent callers) — federation is
+	// added purely for the browser SPA client created below.
+	//
+	// A federated user still becomes a normal Cognito user with a stable pool
+	// `sub`, and the pre-token trigger + grants table key off that SAME `sub`
+	// exactly as for a native user (see src/systems/auth: authorization is the
+	// validated `repos` claim, sourced from grants keyed by the Cognito sub).
+	// So federation changes only HOW a user authenticates, never how they are
+	// authorized — no change to the pre-token trigger, grants, or validator.
+	//
+	// SaaS-pluggability: providers are declared as a slice of specs and created
+	// in a loop. Onboarding a second customer's OIDC IdP (another Entra tenant,
+	// Okta, etc.) is ADDING an oidcProviderSpec entry + its own placeholder
+	// secret — not rewriting this block. Each spec's client secret lives in its
+	// OWN Secrets Manager secret (RETAIN, placeholder), never in code/context.
+
+	// oidcProviderSpec declares one federated OIDC identity provider. issuer and
+	// clientId are non-secret and come from CDK context (placeholder-safe so
+	// synth works before a real tenant is known); the client SECRET is read from
+	// the named Secrets Manager secret at deploy/runtime, never from code.
+	type oidcProviderSpec struct {
+		// name is the Cognito provider name browser clients reference in
+		// SupportedIdentityProviders (letters/digits/_ only; no spaces).
+		name string
+		// providerConstructID is the CDK construct id for this IdP.
+		providerConstructID string
+		// issuer is the OIDC issuer URL, e.g.
+		// https://login.microsoftonline.com/<tenant>/v2.0 — from context.
+		issuer string
+		// clientId is the app (client) id registered in the external IdP — from
+		// context, non-secret.
+		clientId string
+		// secret is the Secrets Manager secret holding {"client_id","client_secret"}
+		// for this provider (placeholder, RETAIN). Its client_secret is passed to
+		// the OIDC provider as the ClientSecret.
+		secret awssecretsmanager.ISecret
+	}
+
+	// Placeholder-safe context reader: returns the -c value if present, else the
+	// supplied placeholder default so `cdk synth` runs before the real tenant is
+	// known. NEVER used for secrets — those live in Secrets Manager.
+	ctxOr := func(key, def string) string {
+		if v := stack.Node().TryGetContext(jsii.String(key)); v != nil {
+			if s, ok := v.(string); ok && s != "" {
+				return s
+			}
+		}
+		return def
+	}
+
+	// Awiant's Entra OIDC placeholder secret. Created EMPTY on purpose — no real
+	// secret in code/CDK/context. The operator fills client_id/client_secret
+	// post-deploy (the OIDC provider reads client_secret from here). RETAIN so a
+	// `cdk destroy` never drops an operator-filled secret.
+	entraOidcSecret := awssecretsmanager.NewSecret(stack, jsii.String("EntraOidcSecret"), &awssecretsmanager.SecretProps{
+		SecretName:  jsii.String("cainban/entra-oidc"),
+		Description: jsii.String("cainban Entra ID OIDC client credentials — PLACEHOLDER; operator fills client_id/client_secret post-deploy. No secret value in code/CDK."),
+		GenerateSecretString: &awssecretsmanager.SecretStringGenerator{
+			SecretStringTemplate: jsii.String(`{"client_id":"","client_secret":""}`),
+			GenerateStringKey:    jsii.String("_placeholder"),
+		},
+		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
+	})
+
+	// The SaaS-pluggable provider list. Wire Awiant's Entra as the first (only)
+	// element today; a second customer is one more append here.
+	oidcProviders := []oidcProviderSpec{
+		{
+			name:                "EntraAwiant",
+			providerConstructID: "EntraOidcProvider",
+			// Placeholder issuer/clientId keep synth working pre-tenant. Supply
+			// real values at deploy: -c entraIssuer=https://login.microsoftonline.com/<tenant>/v2.0 -c entraClientId=<appId>
+			issuer:   ctxOr("entraIssuer", "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"),
+			clientId: ctxOr("entraClientId", "PLACEHOLDER_ENTRA_CLIENT_ID"),
+			secret:   entraOidcSecret,
+		},
+	}
+
+	// Create each provider and collect them so the SPA client can list them as
+	// supported identity providers (and depend on them for correct ordering).
+	oidcSupported := []awscognito.UserPoolClientIdentityProvider{}
+	createdOidcProviders := []awscognito.IUserPoolIdentityProvider{}
+	for _, spec := range oidcProviders {
+		provider := awscognito.NewUserPoolIdentityProviderOidc(stack, jsii.String(spec.providerConstructID), &awscognito.UserPoolIdentityProviderOidcProps{
+			UserPool:  userPool,
+			Name:      jsii.String(spec.name),
+			IssuerUrl: jsii.String(spec.issuer),
+			ClientId:  jsii.String(spec.clientId),
+			// The provider reads the client secret from the placeholder Secrets
+			// Manager secret; the operator fills it post-deploy. Never inline.
+			ClientSecret: spec.secret.SecretValueFromJson(jsii.String("client_secret")).UnsafeUnwrap(),
+			Scopes:       jsii.Strings("openid", "email", "profile"),
+			// GET keeps the userinfo request simple and is what Entra expects.
+			AttributeRequestMethod: awscognito.OidcAttributeRequestMethod_GET,
+			AttributeMapping: &awscognito.AttributeMapping{
+				Email: awscognito.ProviderAttribute_Other(jsii.String("email")),
+			},
+		})
+		createdOidcProviders = append(createdOidcProviders, provider)
+		oidcSupported = append(oidcSupported, awscognito.UserPoolClientIdentityProvider_Custom(jsii.String(spec.name)))
+	}
+
+	// --- Hosted UI domain (free Cognito prefix domain) ------------------
+	//
+	// A free Cognito-hosted prefix domain (no custom-domain cost, no ACM cert).
+	// The prefix must be globally unique across the region; a deterministic
+	// account-derived suffix avoids collisions without needing a real tenant.
+	// The Hosted UI is where signInWithRedirect sends the browser: it presents
+	// the Entra IdP button and, on return, exchanges the code for tokens.
+	hostedDomain := userPool.AddDomain(jsii.String("HostedUiDomain"), &awscognito.UserPoolDomainOptions{
+		CognitoDomain: &awscognito.CognitoDomainOptions{
+			// Deterministic, globally-unique-per-region prefix derived from the
+			// account id so it does not collide with another AWS account's pool.
+			DomainPrefix: awscdk.Fn_Join(jsii.String("-"), &[]*string{
+				jsii.String("cainban-emawiant"),
+				stack.Account(),
+			}),
+		},
+	})
+
+	// The Hosted UI base URL and the exact Entra redirect (reply) URI the
+	// operator must register in the Entra app registration.
+	hostedUiBaseURL := hostedDomain.BaseUrl(nil)
+	entraRedirectURI := awscdk.Fn_Join(jsii.String(""), &[]*string{hostedUiBaseURL, jsii.String("/oauth2/idpresponse")})
+
+	// --- SPA app client (public, PKCE) ----------------------------------
+	//
+	// A SEPARATE public client for the browser SPA — the machine McpClient is
+	// left untouched. No secret is generated (public PKCE client). It uses the
+	// authorization-code grant with openid/email/profile and lists the federated
+	// OIDC provider(s) as supported identity providers, so the Hosted UI offers
+	// the Entra sign-in. Callback/logout URLs come from context with a localhost
+	// dev default + a placeholder for the Amplify URL (filled after first
+	// Amplify deploy — see web/README.md).
+	spaCallbacks := splitCsv(ctxOr("spaCallbackUrls", "http://localhost:5173/,https://localhost/"))
+	spaLogouts := splitCsv(ctxOr("spaLogoutUrls", "http://localhost:5173/,https://localhost/"))
+
+	spaClient := userPool.AddClient(jsii.String("SpaClient"), &awscognito.UserPoolClientOptions{
+		UserPoolClientName: jsii.String("cainban-spa-client"),
+		// Public SPA client: PKCE, no secret.
+		GenerateSecret: jsii.Bool(false),
+		OAuth: &awscognito.OAuthSettings{
+			Flows: &awscognito.OAuthFlows{
+				AuthorizationCodeGrant: jsii.Bool(true),
+			},
+			Scopes: &[]awscognito.OAuthScope{
+				awscognito.OAuthScope_OPENID(),
+				awscognito.OAuthScope_EMAIL(),
+				awscognito.OAuthScope_PROFILE(),
+			},
+			CallbackUrls: &spaCallbacks,
+			LogoutUrls:   &spaLogouts,
+		},
+		SupportedIdentityProviders: &oidcSupported,
+	})
+
+	// The SPA client references the OIDC provider(s) by name in
+	// SupportedIdentityProviders, so the providers must exist first. Add an
+	// explicit construct dependency so synth/deploy order is correct.
+	for _, p := range createdOidcProviders {
+		spaClient.Node().AddDependency(p)
+	}
 
 	// --- Pre-token-generation trigger -----------------------------------
 	//
@@ -560,5 +730,42 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Description: jsii.String("Cognito app client id (JWT audience)"),
 	})
 
+	// --- Federation / SPA outputs ----------------------------------------
+	awscdk.NewCfnOutput(stack, jsii.String("HostedUiDomain"), &awscdk.CfnOutputProps{
+		Value:       hostedUiBaseURL,
+		Description: jsii.String("Cognito Hosted UI base URL (free prefix domain). The SPA's signInWithRedirect targets this; also the OAuth base for the SPA client."),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("EntraRedirectUri"), &awscdk.CfnOutputProps{
+		Value:       entraRedirectURI,
+		Description: jsii.String("EXACT redirect (reply) URI to register in the Entra app registration: <HostedUiDomain>/oauth2/idpresponse"),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("SpaClientId"), &awscdk.CfnOutputProps{
+		Value:       spaClient.UserPoolClientId(),
+		Description: jsii.String("Cognito app client id for the browser SPA (public, PKCE, authorization-code grant, Entra federated). Use as VITE_USER_POOL_CLIENT_ID."),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("SpaOauthScopes"), &awscdk.CfnOutputProps{
+		Value:       jsii.String("openid email profile"),
+		Description: jsii.String("OAuth scopes granted to the SPA client."),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("EntraOidcSecretName"), &awscdk.CfnOutputProps{
+		Value:       entraOidcSecret.SecretName(),
+		Description: jsii.String("Secrets Manager secret holding the Entra OIDC client credentials — PLACEHOLDER; operator fills client_id/client_secret post-deploy."),
+	})
+
 	return stack
+}
+
+// splitCsv turns a comma-separated context string into a []*string suitable for
+// Cognito callback/logout URL lists. Empty entries are dropped and surrounding
+// whitespace trimmed, so "a, b ,," yields ["a","b"].
+func splitCsv(csv string) []*string {
+	out := []*string{}
+	for _, part := range strings.Split(csv, ",") {
+		p := strings.TrimSpace(part)
+		if p == "" {
+			continue
+		}
+		out = append(out, jsii.String(p))
+	}
+	return out
 }

@@ -1,0 +1,26 @@
+version: 1
+# Amplify Hosting build spec for the cainban connect-page SPA (web/).
+#
+# This app uses ONLY the aws-amplify client libraries against the EXISTING
+# CDK-managed Cognito pool + SPA client — there is no Amplify backend
+# (no `amplify` / backend phase, no defineAuth). So this is a pure frontend
+# (Vite) build. Node 22.
+#
+# Configuration (VITE_* env vars) is supplied via the Amplify console
+# "Environment variables" (from the CDK stack outputs) — see web/README.md.
+frontend:
+  phases:
+    preBuild:
+      commands:
+        - cd web
+        - npm ci
+    build:
+      commands:
+        - npm run build
+  artifacts:
+    baseDirectory: web/dist
+    files:
+      - "**/*"
+  cache:
+    paths:
+      - web/node_modules/**/*
