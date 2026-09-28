@@ -107,36 +107,15 @@ func (s *StateSigner) Issue(sub string) (string, error) {
 // bound to expectSub (the caller's validated Cognito sub). It returns an error
 // on ANY failure (bad format, bad signature, expired, sub mismatch) — the
 // callback treats any error as "reject the callback".
+//
+// Use this on a route that ALSO has a validated JWT to cross-check against
+// (defense in depth). On the OAuth callback — a browser redirect that carries
+// no JWT — use VerifyAndExtractSub instead: the signed state IS the proof of
+// which authenticated sub started the flow.
 func (s *StateSigner) Verify(token, expectSub string) error {
-	parts := strings.SplitN(strings.TrimSpace(token), ".", 2)
-	if len(parts) != 2 {
-		return errors.New("connect: malformed state")
-	}
-	payloadBytes, err := b64.DecodeString(parts[0])
+	sub, err := s.VerifyAndExtractSub(token)
 	if err != nil {
-		return errors.New("connect: malformed state payload")
-	}
-	gotMAC, err := b64.DecodeString(parts[1])
-	if err != nil {
-		return errors.New("connect: malformed state signature")
-	}
-	// Recompute the MAC over the exact payload bytes and constant-time compare
-	// BEFORE trusting any field inside the payload.
-	wantMAC := s.sign(string(payloadBytes))
-	if !hmac.Equal(gotMAC, wantMAC) {
-		return errors.New("connect: state signature mismatch")
-	}
-	fields := strings.Split(string(payloadBytes), "|")
-	if len(fields) != 3 {
-		return errors.New("connect: malformed state fields")
-	}
-	sub, expStr := fields[0], fields[1]
-	exp, err := strconv.ParseInt(expStr, 10, 64)
-	if err != nil {
-		return errors.New("connect: malformed state expiry")
-	}
-	if s.now().After(time.Unix(exp, 0)) {
-		return errors.New("connect: state expired")
+		return err
 	}
 	if sub != strings.TrimSpace(expectSub) {
 		// The state was minted for a DIFFERENT subject than the caller now
@@ -144,6 +123,53 @@ func (s *StateSigner) Verify(token, expectSub string) error {
 		return errors.New("connect: state subject mismatch")
 	}
 	return nil
+}
+
+// VerifyAndExtractSub verifies a state token's HMAC and expiry and returns the
+// Cognito sub it is bound to. It is the callback's authentication mechanism:
+// the OAuth callback is a browser redirect from GitHub that CANNOT carry the
+// Cognito JWT, so identity on that route derives ENTIRELY from this signed,
+// unexpired, sub-bound state — which could only have been minted by
+// handleStart, and only after that start request presented a valid JWT for the
+// same sub. The HMAC (verified with the per-deployment key before any field is
+// trusted) makes the state unforgeable, and the expiry bounds replay. It
+// returns an error on ANY failure (bad format, bad signature, expired), and the
+// caller MUST treat any error as "reject the callback".
+func (s *StateSigner) VerifyAndExtractSub(token string) (string, error) {
+	parts := strings.SplitN(strings.TrimSpace(token), ".", 2)
+	if len(parts) != 2 {
+		return "", errors.New("connect: malformed state")
+	}
+	payloadBytes, err := b64.DecodeString(parts[0])
+	if err != nil {
+		return "", errors.New("connect: malformed state payload")
+	}
+	gotMAC, err := b64.DecodeString(parts[1])
+	if err != nil {
+		return "", errors.New("connect: malformed state signature")
+	}
+	// Recompute the MAC over the exact payload bytes and constant-time compare
+	// BEFORE trusting any field inside the payload.
+	wantMAC := s.sign(string(payloadBytes))
+	if !hmac.Equal(gotMAC, wantMAC) {
+		return "", errors.New("connect: state signature mismatch")
+	}
+	fields := strings.Split(string(payloadBytes), "|")
+	if len(fields) != 3 {
+		return "", errors.New("connect: malformed state fields")
+	}
+	sub, expStr := fields[0], fields[1]
+	exp, err := strconv.ParseInt(expStr, 10, 64)
+	if err != nil {
+		return "", errors.New("connect: malformed state expiry")
+	}
+	if s.now().After(time.Unix(exp, 0)) {
+		return "", errors.New("connect: state expired")
+	}
+	if strings.TrimSpace(sub) == "" {
+		return "", errors.New("connect: state has empty subject")
+	}
+	return sub, nil
 }
 
 // sign computes the HMAC-SHA256 of payload with the signer's key.

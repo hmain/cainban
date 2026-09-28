@@ -198,14 +198,16 @@ const (
 	subB = "sub-bob"
 )
 
-// Every route rejects an unauthenticated request with 401.
+// Every JWT-GUARDED route rejects an unauthenticated request with 401. The
+// OAuth callback is deliberately NOT in this set: it is a browser redirect that
+// carries no JWT and authenticates from the signed state instead (see
+// TestCallback_* below), so it is exempt from the JWT choke point.
 func TestUnauth_401_EveryRoute(t *testing.T) {
 	e := newEnv(t)
 	cases := []struct {
 		method, path, body string
 	}{
 		{"GET", "/connect/github/start", ""},
-		{"GET", "/connect/github/callback?code=c&state=s", ""},
 		{"POST", "/connect/repo", `{"owner":"acme","repo":"widgets"}`},
 		{"DELETE", "/connect/repo", `{"owner":"acme","repo":"widgets"}`},
 		{"GET", "/connect/repos", ""},
@@ -239,9 +241,10 @@ func TestStart_RedirectsWithState(t *testing.T) {
 }
 
 // callback with a bad/forged state -> rejected, no exchange, no identity write.
+// No JWT is sent: the callback does not use one.
 func TestCallback_BadState_Rejected(t *testing.T) {
 	e := newEnv(t)
-	w := e.do(t, "GET", "/connect/github/callback?code=c&state=forged", e.token(t, subA), "")
+	w := e.do(t, "GET", "/connect/github/callback?code=c&state=forged", "", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("bad-state callback status = %d, want 400", w.Code)
 	}
@@ -253,24 +256,39 @@ func TestCallback_BadState_Rejected(t *testing.T) {
 	}
 }
 
-// A state minted for subA cannot be completed by subB (anti-CSRF sub binding).
-func TestCallback_StateSubMismatch_Rejected(t *testing.T) {
+// A TAMPERED state (valid structure, broken HMAC) is rejected: the callback
+// authenticates from the state's signature alone, so forging the bound sub by
+// editing the payload must fail the HMAC check. No exchange, no write.
+func TestCallback_TamperedState_Rejected(t *testing.T) {
 	e := newEnv(t)
-	stateForA, _ := e.state.Issue(subA)
-	w := e.do(t, "GET", "/connect/github/callback?code=c&state="+stateForA, e.token(t, subB), "")
+	good, _ := e.state.Issue(subA)
+	// Flip the last character of the signature segment to break the HMAC while
+	// keeping the token structurally valid (payload.sig).
+	tampered := good[:len(good)-1]
+	if good[len(good)-1] == 'A' {
+		tampered += "B"
+	} else {
+		tampered += "A"
+	}
+	w := e.do(t, "GET", "/connect/github/callback?code=c&state="+tampered, "", "")
 	if w.Code != http.StatusBadRequest {
-		t.Fatalf("cross-sub callback status = %d, want 400", w.Code)
+		t.Fatalf("tampered-state callback status = %d, want 400", w.Code)
 	}
 	if e.oauth.exchanged != 0 {
-		t.Error("code must not be exchanged when state sub != caller sub")
+		t.Error("code must not be exchanged on a tampered state")
+	}
+	if _, ok := e.store.identities[subA]; ok {
+		t.Error("no identity must be persisted on a tampered state")
 	}
 }
 
-// callback ok -> identity persisted for the validated sub.
-func TestCallback_OK_PersistsIdentity(t *testing.T) {
+// callback ok with a valid signed state and NO JWT -> identity persisted for
+// the sub the state is bound to. This is the core of the browser-redirect fix:
+// the callback carries no Cognito token, only the signed state.
+func TestCallback_OK_NoJWT_PersistsIdentity(t *testing.T) {
 	e := newEnv(t)
 	stateForA, _ := e.state.Issue(subA)
-	w := e.do(t, "GET", "/connect/github/callback?code=c&state="+stateForA, e.token(t, subA), "")
+	w := e.do(t, "GET", "/connect/github/callback?code=c&state="+stateForA, "", "")
 	if w.Code != http.StatusOK {
 		t.Fatalf("ok callback status = %d, want 200 (body=%s)", w.Code, w.Body.String())
 	}
