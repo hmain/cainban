@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Vite / TS build cache
+*.tsbuildinfo
+
+# Local env overrides (never commit real config; .env.example is the template)
+.env
+.env.local
+.env.*.local
+
+# Editor / OS
+.DS_Store
+*.log
