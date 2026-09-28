@@ -98,7 +98,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/connect/github/start":
 		h.methodGuard(w, r, http.MethodGet, h.handleStart)
 	case "/connect/github/callback":
-		h.methodGuard(w, r, http.MethodGet, h.handleCallback)
+		// The callback is a browser redirect from GitHub and CANNOT carry the
+		// Cognito JWT, so it is NOT behind methodGuard/authenticate. It
+		// authenticates from the HMAC-signed, sub-bound state instead (see
+		// handleCallback). This matches the API Gateway route, which exempts
+		// this one path from the JWT authorizer.
+		if r.Method != http.MethodGet {
+			writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		h.handleCallback(w, r)
 	case "/connect/repo":
 		switch r.Method {
 		case http.MethodPost:
@@ -161,11 +170,21 @@ func (h *Handler) handleStart(w http.ResponseWriter, r *http.Request, id *auth.I
 	http.Redirect(w, r, h.oauth.AuthorizeURL(state), http.StatusFound)
 }
 
-// handleCallback (GET /connect/github/callback?code&state) validates the state
-// (anti-CSRF + sub binding), exchanges the code for the user's GitHub login,
-// and persists that login for the validated sub. It never trusts a
-// client-supplied login.
-func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request, id *auth.Identity) {
+// handleCallback (GET /connect/github/callback?code&state) is the GitHub OAuth
+// redirect target. It is a plain browser navigation and carries NO Cognito JWT,
+// so — unlike every other /connect route — it does not call authenticate().
+// Instead it authenticates ENTIRELY from the state param:
+//
+//   - the state is HMAC-verified and unexpired (VerifyAndExtractSub), so it is
+//     unforgeable and could only have been minted by handleStart;
+//   - handleStart required a valid Cognito JWT and bound the state to that
+//     validated sub, so the sub extracted here traces back to a real
+//     authenticated user — the signed state IS the proof of identity.
+//
+// It then exchanges the code for the user's GitHub login and persists that
+// login for the state-bound sub. It never trusts a client-supplied login or
+// subject.
+func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	code := strings.TrimSpace(q.Get("code"))
 	state := strings.TrimSpace(q.Get("state"))
@@ -173,8 +192,10 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request, id *aut
 		writeError(w, http.StatusBadRequest, "missing code or state")
 		return
 	}
-	// Anti-CSRF: the state must verify AND be bound to THIS caller's sub.
-	if err := h.state.Verify(state, id.Subject); err != nil {
+	// Authenticate from the signed state: verify HMAC + expiry and extract the
+	// sub it is bound to. Any failure rejects the callback.
+	subject, err := h.state.VerifyAndExtractSub(state)
+	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid state")
 		return
 	}
@@ -185,8 +206,8 @@ func (h *Handler) handleCallback(w http.ResponseWriter, r *http.Request, id *aut
 		writeError(w, http.StatusBadGateway, "could not complete GitHub authorization")
 		return
 	}
-	// Persist the linked identity for the VALIDATED sub only.
-	if err := h.grants.PutIdentity(r.Context(), id.Subject, login); err != nil {
+	// Persist the linked identity for the state-bound sub only.
+	if err := h.grants.PutIdentity(r.Context(), subject, login); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not persist GitHub identity")
 		return
 	}
