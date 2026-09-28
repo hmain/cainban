@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/github"
@@ -44,6 +45,9 @@ type OAuthLeg interface {
 type InstallationLister interface {
 	UserInstallations(ctx context.Context, userToken string) ([]github.Installation, error)
 	InstallationRepositories(ctx context.Context, userToken string, installationID int64) ([]string, error)
+	// AppSlug returns THIS App's slug (GET /app, App-JWT auth) so the connect
+	// API can build the install URL with no operator-supplied slug env var.
+	AppSlug(ctx context.Context) (string, error)
 }
 
 // Verifier answers "does this GitHub login genuinely have access to
@@ -85,6 +89,10 @@ type Handler struct {
 	// installation, that one is used.
 	appSlug string
 	appID   int64
+	// cachedSlug memoizes the slug resolved from GET /app (an App's slug never
+	// changes); slugMu guards it across concurrent requests.
+	cachedSlug string
+	slugMu     sync.Mutex
 	// successRedirect is where the callback sends the browser after a
 	// successful identity link (optional; empty => a 200 confirmation instead).
 	successRedirect string
@@ -182,13 +190,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // NOT a linked GitHub identity — the user installs the App precisely because
 // they have nothing linked/available yet.
 func (h *Handler) handleAppInfo(w http.ResponseWriter, r *http.Request, id *auth.Identity) {
-	if strings.TrimSpace(h.appSlug) == "" {
-		// No slug configured: cannot build an install URL. Report it plainly so
-		// the SPA falls back to manual entry rather than a broken link.
-		writeJSON(w, http.StatusOK, map[string]any{
-			"install_url": "",
-			"app_slug":    "",
-		})
+	// Resolve the App slug: prefer a runtime GET /app (self-configuring, no env
+	// var needed), fall back to a configured slug, so a GitHub blip still yields
+	// a usable button when the operator set one. A resolved slug is cached (it
+	// never changes for an App).
+	slug := h.resolveAppSlug(r.Context())
+	if slug == "" {
+		// Cannot build an install URL. Report empty so the SPA keeps the manual
+		// fallback rather than a broken link.
+		writeJSON(w, http.StatusOK, map[string]any{"install_url": "", "app_slug": ""})
 		return
 	}
 	state, err := h.state.Issue(id.Subject)
@@ -196,12 +206,33 @@ func (h *Handler) handleAppInfo(w http.ResponseWriter, r *http.Request, id *auth
 		writeError(w, http.StatusInternalServerError, "could not build install URL")
 		return
 	}
-	installURL := "https://github.com/apps/" + url.PathEscape(h.appSlug) +
+	installURL := "https://github.com/apps/" + url.PathEscape(slug) +
 		"/installations/new?state=" + url.QueryEscape(state)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"install_url": installURL,
-		"app_slug":    h.appSlug,
+		"app_slug":    slug,
 	})
+}
+
+// resolveAppSlug returns THIS App's slug, preferring a live GET /app (cached
+// after first success) and falling back to the configured appSlug. Empty only
+// when both the fetch fails AND no slug was configured.
+func (h *Handler) resolveAppSlug(ctx context.Context) string {
+	h.slugMu.Lock()
+	cached := h.cachedSlug
+	h.slugMu.Unlock()
+	if cached != "" {
+		return cached
+	}
+	if h.lister != nil {
+		if s, err := h.lister.AppSlug(ctx); err == nil && strings.TrimSpace(s) != "" {
+			h.slugMu.Lock()
+			h.cachedSlug = s
+			h.slugMu.Unlock()
+			return s
+		}
+	}
+	return strings.TrimSpace(h.appSlug)
 }
 
 // methodGuard enforces a single allowed method for a route.

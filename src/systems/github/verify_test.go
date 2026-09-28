@@ -56,6 +56,9 @@ func (m *mockClient) UserInstallations(_ context.Context, _ string) ([]Installat
 func (m *mockClient) InstallationRepositories(_ context.Context, _ string, _ int64) ([]string, error) {
 	return nil, nil
 }
+func (m *mockClient) AppSlug(_ context.Context) (string, error) {
+	return "cainban-connect", nil
+}
 
 const (
 	testOwner = "acme"

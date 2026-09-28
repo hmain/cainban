@@ -60,7 +60,7 @@ func newEnv(t *testing.T) *testEnv {
 	state := newTestSigner(t)
 	oauth := &fakeOAuth{login: "octocat"}
 	verify := &fakeVerifier{}
-	lister := &fakeLister{}
+	lister := &fakeLister{slug: "cainban-connect"}
 	cr := &fakeCrypter{}
 	store := newFakeStore()
 	h, err := NewHandler(Config{
@@ -205,6 +205,8 @@ type fakeLister struct {
 	reposErr    error
 	instCalls   int
 	repoCalls   int
+	slug        string
+	slugErr     error
 }
 
 func (f *fakeLister) UserInstallations(_ context.Context, _ string) ([]github.Installation, error) {
@@ -214,6 +216,9 @@ func (f *fakeLister) UserInstallations(_ context.Context, _ string) ([]github.In
 func (f *fakeLister) InstallationRepositories(_ context.Context, _ string, _ int64) ([]string, error) {
 	f.repoCalls++
 	return f.repos, f.reposErr
+}
+func (f *fakeLister) AppSlug(_ context.Context) (string, error) {
+	return f.slug, f.slugErr
 }
 
 // fakeCrypter is a reversible crypter that XOR-obfuscates the bytes (with a
