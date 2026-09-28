@@ -439,14 +439,18 @@ func TestCallback_BadState_Rejected(t *testing.T) {
 func TestCallback_TamperedState_Rejected(t *testing.T) {
 	e := newEnv(t)
 	good, _ := e.state.Issue(subA)
-	// Flip the last character of the signature segment to break the HMAC while
-	// keeping the token structurally valid (payload.sig).
-	tampered := good[:len(good)-1]
-	if good[len(good)-1] == 'A' {
-		tampered += "B"
-	} else {
-		tampered += "A"
+	// Tamper the PAYLOAD segment (before the ".") — the signature was computed
+	// over the original payload bytes, so any change to the payload makes the
+	// HMAC recomputed at verify time not match the presented signature. This is
+	// deterministic, unlike flipping a trailing base64 char of the signature
+	// (whose non-canonical low bits can decode to the same MAC bytes).
+	dot := strings.IndexByte(good, '.')
+	if dot <= 0 {
+		t.Fatalf("state has no payload.sig form: %q", good)
 	}
+	// Insert a base64url-safe char into the payload; the decoded payload bytes
+	// change, so the recomputed HMAC over them cannot equal the original sig.
+	tampered := good[:dot] + "A" + good[dot:]
 	w := e.do(t, "GET", "/connect/github/callback?code=c&state="+tampered, "", "")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("tampered-state callback status = %d, want 400", w.Code)
