@@ -2,11 +2,12 @@
 //
 // It serves the SAME stateless Streamable-HTTP handler the local `cainban mcp
 // --http` command serves, wrapped in Phase 3 with signature-first JWT auth +
-// repo-scoped tenancy (mcp.Server.HandlerWithAuth), adapted to Lambda via a
-// Function URL. A Function URL delivers a payload-format-2.0 event, which the
-// aws-lambda-go-api-proxy httpadapter (NewV2) turns into a net/http request the
-// handler already understands. One *mcp.Server is built per request inside the
-// handler (via getServer), so the function is safe for concurrent invocations.
+// repo-scoped tenancy (mcp.Server.HandlerWithAuth), adapted to Lambda behind an
+// API Gateway v2 HTTP API. The HTTP API delivers a payload-format-2.0 event
+// (events.APIGatewayV2HTTPRequest), which the aws-lambda-go-api-proxy
+// httpadapter (NewV2) turns into a net/http request the handler already
+// understands. One *mcp.Server is built per request inside the handler (via
+// getServer), so the function is safe for concurrent invocations.
 //
 // Storage: this binary forces the DynamoDB backend (CAINBAN_BACKEND=dynamodb is
 // set at process start regardless of the environment) because Lambda has no
@@ -19,11 +20,15 @@
 //	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -tags lambda.norpc \
 //	    -o bootstrap ./cmd/cainban-lambda
 //
-// NOTE: Phase 3 replaces the Phase 2 unauthenticated Function URL. The Lambda
-// now performs signature-first JWT validation (Cognito JWKS) and repo-scoped
-// tenant resolution on EVERY request via mcp.HandlerWithAuth; the Function URL
-// AuthType is AWS_IAM at the edge (no anonymous reachability). Issuer, audience
-// and JWKS URL come from env vars the CDK stack sets from the Cognito user pool.
+// NOTE: The transport is an API Gateway v2 HTTP API fronted by a managed
+// Cognito JWT authorizer (issuer/audience from the stack's own Cognito user
+// pool + app client). The authorizer validates the token at the edge; the
+// Lambda still performs signature-first JWT validation (Cognito JWKS) and
+// repo-scoped tenant resolution on EVERY request via mcp.HandlerWithAuth
+// (defense in depth). The client now sends `Authorization: Bearer <jwt>` with
+// NO SigV4, so the token reaches the header the in-Lambda validator always
+// expected (the Function URL AWS_IAM SigV4 header collision is gone). Issuer,
+// audience and JWKS URL come from env vars the CDK stack sets from the pool.
 package main
 
 import (
@@ -53,14 +58,18 @@ func main() {
 	server := mcp.NewStateless()
 	adapter := httpadapter.NewV2(server.HandlerWithAuth(resolver))
 
-	lambda.Start(func(ctx context.Context, req events.LambdaFunctionURLRequest) (events.LambdaFunctionURLResponse, error) {
-		// A Function URL request is payload format 2.0, structurally the same as
-		// an API Gateway HTTP API v2 request the adapter consumes.
-		v2 := functionURLToAPIGatewayV2(req)
-		resp, err := adapter.ProxyWithContext(ctx, v2)
+	// This Lambda is fronted by an API Gateway v2 HTTP API (payload format 2.0),
+	// NOT a Function URL. The managed Cognito JWT authorizer validates the token
+	// signature at the edge; the in-Lambda validator (HandlerWithAuth) then
+	// re-validates signature-first AND resolves the repo-scoped tenant from the
+	// same `Authorization: Bearer <jwt>` header (no SigV4 now, so no header
+	// collision). An HTTP API event is already an events.APIGatewayV2HTTPRequest,
+	// so the httpadapter consumes it directly — no Function URL conversion.
+	lambda.Start(func(ctx context.Context, req events.APIGatewayV2HTTPRequest) (events.APIGatewayV2HTTPResponse, error) {
+		resp, err := adapter.ProxyWithContext(ctx, req)
 		if err != nil {
-			return events.LambdaFunctionURLResponse{StatusCode: 502}, err
+			return events.APIGatewayV2HTTPResponse{StatusCode: 502}, err
 		}
-		return apiGatewayV2ToFunctionURL(resp), nil
+		return resp, nil
 	})
 }

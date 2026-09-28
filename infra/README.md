@@ -37,10 +37,17 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
   `GET /connect/repos`) behind the SAME signature-first Cognito JWT check. It
   identifies the connecting user via the App's user-OAuth leg, verifies repo
   access server-side (`github.VerifyRepoAccess`), and writes/revokes grants in
-  the `cainban-grants` table. Own Function URL (`AWS_IAM` edge). See
+  the `cainban-grants` table. Fronted by its own API Gateway v2 HTTP API + a
+  managed Cognito JWT authorizer; `GET /connect/github/callback` is
+  authorizer-exempt (a browser OAuth redirect authenticated by the HMAC-signed
+  state param). See
   [Connect API (Phase 4, P4.3)](#connect-api-phase-4-p43).
-- **Lambda Function URL** — **`AuthType: AWS_IAM`** (edge auth; no anonymous
-  reachability)
+- **API Gateway v2 HTTP APIs** (MCP + connect) — each fronted by a **managed
+  Cognito JWT authorizer** (issuer/audience derived from the stack's own Cognito
+  pool + app client). The client sends `Authorization: Bearer <jwt>` with **no
+  SigV4** (fixing the header collision where SigV4 and the JWT both wanted the
+  Authorization header). Every route requires the authorizer EXCEPT
+  `GET /connect/github/callback`, which is exempt
 - **IAM** least-privilege: the MCP Lambda gets only `GetItem`, `PutItem`,
   `UpdateItem`, `DeleteItem`, `Query` on the `cainban` table ARN, plus
   `secretsmanager:GetSecretValue` (+ `DescribeSecret`) on the
@@ -55,10 +62,12 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
 - **CloudWatch** log groups `/aws/lambda/cainban-mcp`,
   `/aws/lambda/cainban-pretoken`, `/aws/lambda/cainban-connect` (30-day retention)
 
-> **The endpoint is authenticated (Phase 3).** Two layers gate it: the Function
-> URL `AWS_IAM` edge (SigV4) and, in the Lambda, a **signature-first** Cognito
-> **JWT** check (JWKS signature → issuer/audience/expiry → claims) that resolves
-> the caller to exactly one authorized repo before any DynamoDB access. A
+> **The endpoint is authenticated.** It sits behind an API Gateway v2 HTTP API
+> with a **managed Cognito JWT authorizer** (JWKS signature → issuer/audience/
+> expiry) at the edge, and, in the Lambda, a **signature-first** Cognito **JWT**
+> check that resolves the caller to exactly one authorized repo before any
+> DynamoDB access (defense in depth + repo/tenant resolution the authorizer does
+> not do). The client sends `Authorization: Bearer <jwt>` with **no SigV4**. A
 > missing/invalid token is **401**; a valid token without access to the target
 > repo is **403**. See [`docs/serverless-multiuser-plan.md`](../docs/serverless-multiuser-plan.md)
 > (Phase 3) for the auth design and the isolation proof.
@@ -121,16 +130,15 @@ cdk diff
 cdk deploy CainbanPhase2Stack
 ```
 
-After deploy, the stack outputs `FunctionUrl` (the MCP endpoint),
-`ConnectFunctionUrl` (the Phase 4 connect API endpoint — its
+After deploy, the stack outputs `McpApiUrl` (the MCP HTTP API endpoint),
+`ConnectApiUrl` (the Phase 4 connect API endpoint — its
 `connect/github/callback` path is what the operator sets as the GitHub App
 Callback URL, see [`docs/github-app-setup.md`](../docs/github-app-setup.md)),
 `TableName`, `GrantsTableName`, `GitHubAppSecretName` (the placeholder GitHub App
 secret to fill), `UserPoolId` and `UserPoolClientId`. Smoke test with a
-`tools/list` call and one
-tool call (SigV4-sign the request for the `AWS_IAM` edge, and send a Cognito
-`Authorization: Bearer <JWT>` for the app layer), then verify the Lambda
-`LastModified` advanced.
+`tools/list` call and one tool call — send a Cognito
+`Authorization: Bearer <JWT>` (the managed JWT authorizer validates it at the
+edge; **no SigV4**) — then verify the Lambda `LastModified` advanced.
 
 ## Authentication (Phase 3)
 
