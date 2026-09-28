@@ -753,6 +753,33 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Description: jsii.String("Secrets Manager secret holding the Entra OIDC client credentials — PLACEHOLDER; operator fills client_id/client_secret post-deploy."),
 	})
 
+	// --- Amplify Hosting service role ------------------------------------
+	//
+	// The IAM role AWS Amplify Hosting assumes to run builds for the connect-page
+	// SPA (web/): write CloudWatch build logs, manage the app's build/deploy
+	// artifacts. It is defined here (rather than auto-created in the console) so
+	// the role is IaC — versioned, reviewable, and consistent with the rest of
+	// the stack. It does NOT connect the GitHub repo (that is a one-time console
+	// OAuth) and grants nothing to the SPA itself; it is only the build-time
+	// service identity. Uses the AWS-managed AdministratorAccess-Amplify policy,
+	// the documented managed policy for the Amplify service role.
+	//
+	// Attach it to the Amplify app after deploy (console: App settings → General
+	// → Service role → select cainban-amplify-service-role; or
+	// `aws amplify update-app --app-id <id> --iam-service-role-arn <this output>`).
+	amplifyServiceRole := awsiam.NewRole(stack, jsii.String("AmplifyServiceRole"), &awsiam.RoleProps{
+		RoleName:    jsii.String("cainban-amplify-service-role"),
+		AssumedBy:   awsiam.NewServicePrincipal(jsii.String("amplify.amazonaws.com"), nil),
+		Description: jsii.String("Service role AWS Amplify Hosting assumes to build/deploy the cainban connect-page SPA."),
+		ManagedPolicies: &[]awsiam.IManagedPolicy{
+			awsiam.ManagedPolicy_FromAwsManagedPolicyName(jsii.String("AdministratorAccess-Amplify")),
+		},
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("AmplifyServiceRoleArn"), &awscdk.CfnOutputProps{
+		Value:       amplifyServiceRole.RoleArn(),
+		Description: jsii.String("IAM service role ARN for AWS Amplify Hosting — attach to the Amplify app (App settings → General → Service role, or aws amplify update-app --iam-service-role-arn)."),
+	})
+
 	return stack
 }
 
