@@ -215,16 +215,17 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// Awiant's Entra OIDC placeholder secret. Created EMPTY on purpose — no real
 	// secret in code/CDK/context. The operator fills client_id/client_secret
 	// post-deploy (the OIDC provider reads client_secret from here). RETAIN so a
-	// `cdk destroy` never drops an operator-filled secret.
-	entraOidcSecret := awssecretsmanager.NewSecret(stack, jsii.String("EntraOidcSecret"), &awssecretsmanager.SecretProps{
-		SecretName:  jsii.String("cainban/entra-oidc"),
-		Description: jsii.String("cainban Entra ID OIDC client credentials — PLACEHOLDER; operator fills client_id/client_secret post-deploy. No secret value in code/CDK."),
-		GenerateSecretString: &awssecretsmanager.SecretStringGenerator{
-			SecretStringTemplate: jsii.String(`{"client_id":"","client_secret":""}`),
-			GenerateStringKey:    jsii.String("_placeholder"),
-		},
-		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
-	})
+	// The Entra OIDC client credentials live in a Secrets Manager secret the
+	// operator fills out of band (never in code/CDK). Because a Cognito OIDC
+	// provider is REJECTED at create time if its client_secret resolves empty,
+	// the secret must already hold a real value when this stack creates the
+	// provider — so the stack REFERENCES an existing secret (created + filled by
+	// the operator) rather than creating an empty placeholder it would then fail
+	// to use on the first deploy. Create it once out of band:
+	//   aws secretsmanager create-secret --name cainban/entra-oidc \
+	//     --secret-string '{"client_id":"<id>","client_secret":"<secret>"}'
+	// then deploy. `cdk destroy` never touches it (not stack-owned).
+	entraOidcSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("EntraOidcSecret"), jsii.String("cainban/entra-oidc"))
 
 	// The SaaS-pluggable provider list. Wire Awiant's Entra as the first (only)
 	// element today; a second customer is one more append here.
