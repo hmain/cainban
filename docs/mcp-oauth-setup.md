@@ -1,141 +1,233 @@
-# cainban MCP OAuth — pre-registered client setup (step a)
+# cainban MCP OAuth — client setup (Kiro & Claude Code)
 
-> **Status:** step (a) of the Phase 5 MCP-native OAuth plan
-> ([docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md)) — cainban is now a
-> spec-compliant OAuth 2.1 **resource server** (MCP authorization spec
-> **2026-07-28**, RFC 9728 + RFC 8707). This works today with any MCP client
-> that supports **pre-registration** (a configured `client_id`).
+> **Status:** MCP-native OAuth step (a) of the Phase 5 plan
+> ([docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md)) — cainban is a spec-compliant
+> OAuth 2.1 **resource server** (MCP authorization spec **2026-07-28**, RFC 9728
+> + RFC 8707) and now also serves a small **RFC 8414 authorization-server
+> metadata shim** so a PKCE-strict MCP client (Claude Code) can complete the
+> flow against Cognito.
 >
-> **Not yet supported (step b):** the OAuth-proxy façade that lets a client
-> with **no prior relationship** register itself. DCR (RFC 7591) is deprecated
-> per the 2026-07-28 spec, and CIMD (Client ID Metadata Documents) is the
-> forward path — **neither works against raw Cognito**, so both wait for the
-> step-(b) proxy. See [docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md) §3–§4.
+> **Not built (step b), on purpose:** the DCR/CIMD OAuth-proxy façade. DCR
+> (RFC 7591) is deprecated per the 2026-07-28 spec and CIMD is the forward path,
+> but **neither works against raw Cognito**, so both wait for the step-(b) proxy.
+> The two clients below (Kiro via a header token, Claude Code via pre-registered
+> PKCE) need no proxy. See [docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md) §3–§4.
 
-## What step (a) adds
+## The PKCE-advertisement gap (why the shim exists)
 
-1. **RFC 9728 Protected Resource Metadata** — a **public** discovery endpoint:
+Cognito supports S256 PKCE, but its OIDC discovery document
+(`<issuer>/.well-known/openid-configuration`) reports:
 
-   ```
-   GET <McpApiUrl>/.well-known/oauth-protected-resource
-   ```
+```json
+"code_challenge_methods_supported": null
+```
 
-   It requires **no authentication** (a client must be able to discover auth
-   *before* it holds a token) and returns:
+Per the MCP spec a spec-compliant client **MUST refuse to proceed** when that
+field is absent. So Claude Code will not run the flow against Cognito's own
+metadata — even though the PKCE it needs is fully supported.
 
-   ```json
-   {
-     "resource": "<McpApiUrl without trailing slash>",
-     "authorization_servers": ["https://cognito-idp.<region>.amazonaws.com/<poolId>"],
-     "scopes_supported": ["cainban:tasks"],
-     "bearer_methods_supported": ["header"]
-   }
-   ```
+**Fix (this change):** cainban serves a **public** RFC 8414 Authorization Server
+Metadata document that **mirrors Cognito's real endpoints** but **adds the PKCE
+advertisement**:
 
-   - `resource` is cainban's **canonical MCP URL** (the `McpApiUrl` stack output,
-     trailing slash trimmed) — this is the value a client sends as the RFC 8707
-     `resource` indicator.
-   - `authorization_servers[0]` is the **Cognito issuer**, derived at runtime
-     from the Lambda's `CAINBAN_AUTH_ISSUER` env (never hardcoded).
+```
+GET <McpApiOrigin>/.well-known/oauth-authorization-server        (AuthorizationType: NONE)
+```
 
-   In the API Gateway this one route is `AuthorizationType: NONE`
-   (`HttpNoneAuthorizer`); **every other MCP route stays behind the managed
-   Cognito JWT authorizer** — the same exemption pattern the connect
-   `GET /connect/github/callback` route uses.
+```json
+{
+  "issuer": "<McpApiOrigin>",
+  "authorization_endpoint": "<HostedUiDomain>/oauth2/authorize",
+  "token_endpoint": "<HostedUiDomain>/oauth2/token",
+  "jwks_uri": "<CognitoIssuer>/.well-known/jwks.json",
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "code_challenge_methods_supported": ["S256"],
+  "scopes_supported": ["openid", "email", "profile"],
+  "token_endpoint_auth_methods_supported": ["none"]
+}
+```
 
-2. **`WWW-Authenticate` challenge on 401** — a request to a protected MCP route
-   without a valid token now returns:
+- `authorization_endpoint` / `token_endpoint` come from the **Hosted UI domain**
+  (`CAINBAN_HOSTED_UI_DOMAIN`, set in CDK from the `HostedUiDomain` output — not
+  hardcoded). `jwks_uri` stays **Cognito's** (`CAINBAN_AUTH_ISSUER`) because the
+  tokens are Cognito-signed.
+- This is **not an OAuth proxy**: cainban mints no tokens, holds no secret, and
+  terminates no flow. The client still runs PKCE + the code exchange + refresh
+  **directly against Cognito's Hosted UI**. The shim only lets the client *see*
+  that PKCE (S256) is available.
 
-   ```
-   HTTP/1.1 401 Unauthorized
-   WWW-Authenticate: Bearer resource_metadata="<McpApiUrl>/.well-known/oauth-protected-resource", scope="cainban:tasks"
-   ```
+### Discovery-URL math (RFC 8414) — the resolved URL
 
-   A spec-compliant MCP client reads `resource_metadata` to find the discovery
-   document above, and from it the authorization server.
+RFC 8414 §3 builds the metadata URL from the issuer by **inserting**
+`/.well-known/oauth-authorization-server` **after the host and before any
+path**:
 
-3. **RFC 8707 resource-indicator awareness (documented, no behavior change).**
-   Under MCP OAuth the client requests a token *for cainban* by sending
-   `resource=<canonical MCP URL>` to the authorization server. cainban's
-   in-Lambda validator still authorizes on the **existing `aud` check** (the
-   token's `aud` must contain a configured Cognito app-client id) plus the
-   validated `repos` claim — step (a) deliberately does **not** widen the
-   accepted audiences, so the load-bearing audience binding is unchanged. If a
-   future authorization server (the step-(b) proxy) mints tokens whose `aud` is
-   the canonical MCP URL, add that URL to `CAINBAN_AUTH_AUDIENCE` (the validator
-   already accepts a comma-separated list) at that time.
+| Issuer the client discovers on | RFC 8414 metadata URL |
+| --- | --- |
+| `https://h` (no path) | `https://h/.well-known/oauth-authorization-server` ✅ |
+| `https://cognito-idp.<r>.amazonaws.com/<poolId>` (Cognito, has a path) | `https://cognito-idp.<r>.amazonaws.com/.well-known/oauth-authorization-server/<poolId>` ❌ (Cognito serves no such doc, and its OIDC doc omits PKCE) |
 
-## Pre-registered client flow (what an MCP client does today)
+So the RFC 9728 **protected-resource** document advertises the **MCP API
+origin** (a path-less issuer) as its `authorization_servers[0]`, and the shim
+sets its own `issuer` to that same origin. A client then resolves discovery to:
 
-cainban does **not** implement PKCE, the authorization-code exchange, or token
-refresh — the **MCP client** does all of that against **Cognito** directly.
-cainban only validates the resulting bearer token. To configure a client:
+```
+<McpApiOrigin>/.well-known/oauth-authorization-server
+```
 
-1. **Discover** (optional but spec-correct): `GET <McpApiUrl>/.well-known/oauth-protected-resource`
-   and read `authorization_servers[0]` (the Cognito issuer). Fetch that issuer's
-   OIDC discovery — `<issuer>/.well-known/openid-configuration` — for the
-   `authorization_endpoint` and `token_endpoint`. (Cognito's authorize/token
-   live under the **Hosted UI domain**, surfaced as the `HostedUiDomain` stack
-   output, not under the issuer host.)
+**Concrete resolved URL** (for the deployed API-Gateway HTTP API
+`https://<apiId>.execute-api.<region>.amazonaws.com/`):
 
-2. **Client id (pre-registration):** use the existing **SPA app client id**
-   (`SpaClientId` stack output) — a public PKCE client, no secret — or register
-   a dedicated Cognito app client for the MCP client. Cognito has **no**
-   `registration_endpoint`, so the client id must be configured out of band
-   (this is exactly the "pre-registration" the MCP spec allows, and the reason
-   step (b) exists for clients that cannot be pre-configured).
+```
+https://<apiId>.execute-api.<region>.amazonaws.com/.well-known/oauth-authorization-server
+```
 
-3. **Authorize (PKCE authorization-code grant)** against the Cognito **Hosted
-   UI** (`HostedUiDomain` output):
-
-   ```
-   GET https://<HostedUiDomain>/oauth2/authorize
-       ?response_type=code
-       &client_id=<SpaClientId>
-       &redirect_uri=<one of the SPA client's registered callback URLs>
-       &scope=openid+email+profile
-       &code_challenge=<PKCE S256>
-       &code_challenge_method=S256
-   ```
-
-   The user signs in (Entra-federated), and Cognito redirects back to
-   `redirect_uri` with `?code=…`.
-
-4. **Token exchange** at `https://<HostedUiDomain>/oauth2/token`
-   (`grant_type=authorization_code`, the PKCE `code_verifier`, same
-   `client_id`/`redirect_uri`). The client stores the tokens and **refreshes**
-   them itself.
-
-5. **Call cainban** with the token in the header (the only supported bearer
-   method):
-
-   ```
-   POST <McpApiUrl>
-   Authorization: Bearer <access-or-id-token>
-   X-Cainban-Repo: <owner>/<repo>
-   ```
-
-   The token's validated `repos` claim must grant `<owner>/<repo>` or the
-   request is a 403. (The `repos`/`default_repo` claims are populated by the
-   pool's pre-token-generation trigger from the user's grants — see
-   [docs/agent-via-mcp.md](agent-via-mcp.md) and
-   [docs/phase4-github-connect-plan.md](phase4-github-connect-plan.md).)
+The `McpApiUrl` stack output ends in `/`; the **origin** is that URL with the
+path stripped (`scheme://host`), which is exactly what the Lambda advertises
+(`mcpAPIOrigin()` in `cmd/cainban-lambda/adapter.go`). The RFC 8414 `issuer` in
+the shim equals this origin, satisfying the RFC 8414 §3.3 issuer-match check.
 
 ## Stack outputs you need
 
 | Output | Use |
 | --- | --- |
-| `McpApiUrl` | Canonical MCP URL (`resource`) + base of the discovery endpoint |
-| `McpProtectedResourceMetadataUrl` | The RFC 9728 discovery endpoint (public) |
-| `UserPoolId` / issuer | `authorization_servers[0]` = `https://cognito-idp.<region>.amazonaws.com/<UserPoolId>` |
-| `HostedUiDomain` | Cognito authorize/token endpoints for the PKCE flow |
-| `SpaClientId` | Pre-registered public PKCE `client_id` |
-| `SpaOauthScopes` | `openid email profile` |
+| `McpApiUrl` | The MCP server URL (Kiro `url`; Claude Code server URL). Its **origin** is the RFC 8414 issuer. |
+| `McpProtectedResourceMetadataUrl` | RFC 9728 discovery endpoint (public) |
+| `HostedUiDomain` | Cognito authorize/token base (feeds the shim + the header-token connect page) |
+| `SpaClientId` | Public PKCE client for the browser SPA / connect page |
+| **`McpCliClientId`** | **Dedicated public PKCE client `cainban-mcp-cli` for Claude Code** (code flow, no secret, Entra IdP) |
+| `UserPoolId` / issuer | `https://cognito-idp.<region>.amazonaws.com/<UserPoolId>` (the `jwks_uri` base) |
+
+---
+
+## Setup 1 — Kiro (remote MCP, header token, NO OAuth flow)
+
+Kiro connects to a remote MCP server by **URL + custom headers**. It does **not**
+run the OAuth flow; you paste a **Cognito ID token** as a bearer header (obtain
+it from the cainban connect page). The token is ~1h-lived — re-paste when it
+expires (this is the UX the step-(b) proxy would eventually remove).
+
+`mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "url": "<McpApiUrl>",
+      "headers": {
+        "Authorization": "Bearer <Cognito ID token from the connect page>",
+        "X-Cainban-Repo": "<owner>/<repo>"
+      }
+    }
+  }
+}
+```
+
+- `url` = the `McpApiUrl` stack output (the HTTP API root; Streamable-HTTP
+  transport).
+- `X-Cainban-Repo` names the target repo; the token's validated `repos` claim
+  must grant it or the request is a 403.
+- No `client_id`, no discovery, no PKCE — Kiro just sends the header on every
+  request.
+
+## Setup 2 — Claude Code (OAuth auth-code + PKCE, browser Entra login)
+
+Claude Code speaks the MCP Streamable-HTTP transport and runs the **OAuth flow
+itself** (PKCE, code exchange, and **automatic token refresh**). Use the
+dedicated public client `McpCliClientId`.
+
+Add the server:
+
+```
+claude mcp add --transport http --client-id <McpCliClientId> cainban <McpApiUrl>
+```
+
+Then, inside Claude Code:
+
+```
+/mcp
+```
+
+and pick **cainban → Authenticate**. Claude Code:
+
+1. Fetches `<McpApiUrl>` → 401 with
+   `WWW-Authenticate: Bearer resource_metadata="…/.well-known/oauth-protected-resource"`.
+2. Reads the RFC 9728 doc → `authorization_servers[0]` = the **MCP API origin**.
+3. Runs RFC 8414 discovery at
+   `<McpApiOrigin>/.well-known/oauth-authorization-server` → **our shim**, which
+   advertises `code_challenge_methods_supported:["S256"]` (the field Cognito
+   omits) and Cognito's authorize/token endpoints.
+4. Opens the browser to Cognito's Hosted UI, you sign in via **Entra**, and
+   Cognito redirects back to Claude Code's **loopback callback** with the code.
+5. Exchanges the code (PKCE) at Cognito's token endpoint and **stores +
+   refreshes** the tokens itself. No token lives in the config.
+
+Equivalent JSON config form (e.g. `.mcp.json` / project config):
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "type": "http",
+      "url": "<McpApiUrl>",
+      "client_id": "<McpCliClientId>"
+    }
+  }
+}
+```
+
+You still send `X-Cainban-Repo` per call where the client supports custom
+headers; otherwise the token's `default_repo` claim selects the repo.
+
+### Claude Code callback (redirect URI)
+
+Claude Code uses a **loopback** callback, `http://localhost:<PORT>/callback`
+(and the `127.0.0.1` literal). It picks an **ephemeral port** at flow time, and
+Cognito requires each callback URL to be **registered exactly** — it does *not*
+honor RFC 8252 port-agnostic loopback matching. (There are open Claude Code
+issues where a ported loopback is sent while the provider expects the registered
+value — e.g. anthropics/claude-code #37747, #90370.)
+
+Because the exact port cannot be known in advance, the `cainban-mcp-cli` client
+registers the commonly-used ports plus a portless loopback, on both hostnames:
+
+```
+http://localhost:3118/callback      http://127.0.0.1:3118/callback
+http://localhost:41842/callback     http://127.0.0.1:41842/callback
+http://localhost/callback           http://127.0.0.1/callback
+```
+
+If your Claude Code build uses a different port, add it at deploy time:
+
+```
+cdk deploy -c mcpCliCallbackUrls="http://localhost:<PORT>/callback,http://127.0.0.1:<PORT>/callback"
+```
+
+(the context value **replaces** the default list). If the login browser lands on
+a page that fails to load *after* a successful Entra sign-in, it is almost
+always the port not being registered — read the address bar for the `?code=…`
+and check the port against the list above.
+
+---
+
+## What cainban does / does not implement
+
+- **Does:** validate the bearer token signature-first (Cognito JWKS), enforce
+  the repo-scoped `repos` claim (tenant isolation), serve the RFC 9728 +
+  RFC 8414 discovery documents publicly, and emit the RFC 9728
+  `WWW-Authenticate` challenge on 401.
+- **Does NOT:** run PKCE, the authorization-code exchange, or token refresh
+  (the **client** does all of that against Cognito); mint tokens; hold any
+  client secret. The RFC 8414 endpoint is a **discovery shim**, not an
+  authorization server.
+- **Intentionally NOT built (step b):** the DCR/CIMD OAuth-proxy + consent UI.
+  Neither DCR nor CIMD works against raw Cognito, and the two clients above do
+  not need it. See [docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md).
 
 ## Scope note
 
-`scopes_supported` advertises `cainban:tasks` as a **hint**. cainban's actual
-authorization decision is the validated `repos` claim (repo-scoped tenancy), not
-an OAuth scope string — the scope is there for spec-conformance and future
-read/write step-up (tracked with the authorization-hardening work), not as the
-access-control mechanism today.
+`scopes_supported` advertises `openid email profile` (the Cognito login scopes)
+in the AS-metadata shim, and the RFC 9728 doc advertises `cainban:tasks` as a
+**resource scope hint**. cainban's actual authorization decision is the
+validated `repos` claim (repo-scoped tenancy), not an OAuth scope string.

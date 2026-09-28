@@ -29,12 +29,25 @@ type ResourceMetadataConfig struct {
 	// URI guidance it carries NO trailing slash; NewResourceMetadataHandler
 	// trims one defensively.
 	Resource string
-	// AuthorizationServer is the issuer URL of cainban's authorization server
-	// (the Cognito user pool), derived from CAINBAN_AUTH_ISSUER. A spec-
-	// compliant MCP client fetches THIS issuer's own metadata
-	// (/.well-known/openid-configuration) to run the PKCE authorization-code
-	// flow — cainban itself implements none of that (it is only the resource
-	// server).
+	// AuthorizationServer is the issuer URL a spec-compliant MCP client runs
+	// RFC 8414 discovery against to find the authorization endpoints.
+	//
+	// It is DELIBERATELY the MCP API origin (McpApiUrl origin), NOT the raw
+	// Cognito issuer. RFC 8414 §3 derives the metadata URL from the issuer by
+	// INSERTING the well-known segment after the host and BEFORE any path:
+	// issuer "https://h" (no path) => "https://h/.well-known/oauth-authorization-server".
+	// The Cognito issuer carries a path ("https://cognito-idp.<r>.amazonaws.com/<poolId>"),
+	// so discovery on it would resolve to
+	// ".../.well-known/oauth-authorization-server/<poolId>" — Cognito serves no
+	// such document, and Cognito's own OIDC metadata reports
+	// code_challenge_methods_supported:null (no PKCE advertised), which a
+	// spec-compliant client refuses. By advertising the path-less MCP API origin
+	// here, discovery resolves to <origin>/.well-known/oauth-authorization-server
+	// = cainban's RFC 8414 shim (AuthServerMetadataConfig), which mirrors
+	// Cognito's endpoints AND advertises S256 PKCE. cainban is still only the
+	// resource server: the shim points at Cognito's real authorize/token/jwks;
+	// the client runs the flow against Cognito. See docs/mcp-oauth-setup.md for
+	// the resolved discovery URL.
 	AuthorizationServer string
 }
 
@@ -90,21 +103,27 @@ func NewResourceMetadataHandler(cfg ResourceMetadataConfig) http.Handler {
 }
 
 // PublicMux returns the top-level HTTP handler for the MCP Lambda: it serves the
-// RFC 9728 protected-resource metadata publicly at WellKnownProtectedResourcePath
-// and routes EVERY other request through authed (HandlerWithAuth). This is what
-// lets the well-known path BYPASS AuthMiddleware while no other route does — the
-// well-known branch is matched before, and never falls through to, the
-// authenticated handler.
+// RFC 9728 protected-resource metadata AND the RFC 8414 authorization-server
+// metadata shim publicly at their well-known paths, and routes EVERY other
+// request through authed (HandlerWithAuth). This is what lets the well-known
+// paths BYPASS AuthMiddleware while no other route does — the well-known
+// branches are matched before, and never fall through to, the authenticated
+// handler.
 //
-// resourceCfg is derived from env by the entrypoint (McpApiUrl +
-// CAINBAN_AUTH_ISSUER). authed is the fully-authenticated MCP handler
-// (Server.HandlerWithAuth).
-func PublicMux(resourceCfg ResourceMetadataConfig, authed http.Handler) http.Handler {
+// resourceCfg / authServerCfg are derived from env by the entrypoint (McpApiUrl
+// origin + CAINBAN_AUTH_ISSUER + CAINBAN_HOSTED_UI_DOMAIN). authed is the
+// fully-authenticated MCP handler (Server.HandlerWithAuth).
+func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetadataConfig, authed http.Handler) http.Handler {
 	metadata := NewResourceMetadataHandler(resourceCfg)
+	authServerMeta := NewAuthServerMetadataHandler(authServerCfg)
 	mux := http.NewServeMux()
-	// Exact-match the well-known path so it is served publicly; the metadata
-	// handler itself enforces GET/HEAD.
+	// Exact-match the well-known paths so they are served publicly; the metadata
+	// handlers themselves enforce GET/HEAD.
 	mux.Handle(WellKnownProtectedResourcePath, metadata)
+	// RFC 8414 authorization-server metadata shim — PUBLIC. This is the document
+	// that advertises code_challenge_methods_supported:["S256"] (which Cognito's
+	// own discovery omits), unblocking a spec-compliant MCP client.
+	mux.Handle(WellKnownAuthServerPath, authServerMeta)
 	// Everything else (root, /{proxy+}, tool calls) goes through the JWT auth +
 	// tenant-resolution gate. "/" is the ServeMux catch-all.
 	mux.Handle("/", authed)

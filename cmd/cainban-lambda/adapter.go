@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -23,18 +24,63 @@ const (
 	// pointer. Optional: when unset the discovery document/challenge degrade
 	// gracefully (empty resource / legacy realm challenge) rather than failing.
 	envMcpResource = "CAINBAN_MCP_RESOURCE"
+	// envHostedUIDomain is the Cognito Hosted UI base URL (HostedUiDomain stack
+	// output), e.g. https://cainban-emawiant-<acct>.auth.<region>.amazoncognito.com.
+	// The CDK stack sets it; the RFC 8414 AS-metadata shim builds the
+	// authorize/token endpoints from it (Cognito's authorize/token live under
+	// the Hosted UI domain, NOT under the issuer host). Never hardcoded.
+	envHostedUIDomain = "CAINBAN_HOSTED_UI_DOMAIN"
 )
 
 // resourceMetadataConfig builds the RFC 9728 protected-resource metadata config
 // from env: the canonical MCP URL (CAINBAN_MCP_RESOURCE, trailing slash trimmed)
-// as the resource, and the Cognito issuer (CAINBAN_AUTH_ISSUER — the SAME env
-// the validator already uses, never hardcoded) as the authorization server. The
-// metadata handler canonicalizes the resource again defensively.
+// as the resource, and the MCP API ORIGIN as the authorization server the client
+// runs RFC 8414 discovery against.
+//
+// authorization_servers is DELIBERATELY the MCP API origin (scheme://host,
+// path stripped), NOT the raw Cognito issuer. RFC 8414 inserts the well-known
+// segment after the host and before any path, so discovery on the path-less
+// origin resolves to <origin>/.well-known/oauth-authorization-server —
+// cainban's RFC 8414 shim, which advertises S256 PKCE (Cognito's own discovery
+// reports code_challenge_methods_supported:null and a spec-compliant client
+// refuses that). See mcp.ResourceMetadataConfig.AuthorizationServer and
+// docs/mcp-oauth-setup.md for the resolved discovery URL.
 func resourceMetadataConfig() mcp.ResourceMetadataConfig {
 	return mcp.ResourceMetadataConfig{
 		Resource:            strings.TrimRight(strings.TrimSpace(os.Getenv(envMcpResource)), "/"),
-		AuthorizationServer: strings.TrimSpace(os.Getenv(envAuthIssuer)),
+		AuthorizationServer: mcpAPIOrigin(),
 	}
+}
+
+// authServerMetadataConfig builds the RFC 8414 authorization-server metadata
+// shim config from env. The advertised `issuer` MUST equal the base URL the
+// client discovered on (the MCP API origin), so it is mcpAPIOrigin(); the JWKS
+// stays Cognito's (tokens are Cognito-signed) via CAINBAN_AUTH_ISSUER; the
+// authorize/token endpoints are built from CAINBAN_HOSTED_UI_DOMAIN. All env,
+// never hardcoded.
+func authServerMetadataConfig() mcp.AuthServerMetadataConfig {
+	return mcp.AuthServerMetadataConfig{
+		Issuer:         mcpAPIOrigin(),
+		CognitoIssuer:  strings.TrimSpace(os.Getenv(envAuthIssuer)),
+		HostedUIDomain: strings.TrimRight(strings.TrimSpace(os.Getenv(envHostedUIDomain)), "/"),
+	}
+}
+
+// mcpAPIOrigin returns the scheme://host origin of the MCP API (CAINBAN_MCP_RESOURCE),
+// with any path/query/trailing slash stripped. This is the path-less issuer the
+// RFC 9728 doc advertises and the RFC 8414 shim's `issuer`, so RFC 8414
+// discovery resolves to <origin>/.well-known/oauth-authorization-server. Returns
+// "" when CAINBAN_MCP_RESOURCE is unset or unparseable.
+func mcpAPIOrigin() string {
+	raw := strings.TrimSpace(os.Getenv(envMcpResource))
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // resourceMetadataURL is the absolute URL of the protected-resource metadata

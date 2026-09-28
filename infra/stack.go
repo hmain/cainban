@@ -327,6 +327,61 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		spaClient.Node().AddDependency(p)
 	}
 
+	// --- MCP CLI app client (public, PKCE) — Claude Code ----------------
+	//
+	// A DEDICATED public PKCE client for CLI MCP clients (Claude Code), separate
+	// from both the machine McpClient (USER_PASSWORD/SRP) and the browser SPA
+	// client — so the CLI's loopback callback URLs never mingle with the SPA's
+	// hosted callbacks. No secret (public PKCE client). Authorization-code grant,
+	// openid/email/profile, Entra-federated (same Hosted UI login as the SPA).
+	//
+	// Claude Code's OAuth callback is a LOOPBACK redirect the CLI opens on the
+	// user's machine: http://localhost:<PORT>/callback (and the 127.0.0.1
+	// literal). Claude Code picks an ephemeral port at flow time, so the exact
+	// port is not known in advance; there is a documented open issue where Claude
+	// Code sends a ported loopback while some providers reject anything but the
+	// registered value. Cognito requires each callback URL to be registered
+	// exactly (it does NOT honor RFC 8252 port-agnostic loopback matching), so we
+	// register the ports Claude Code commonly uses plus a portless loopback, on
+	// both localhost and 127.0.0.1. Operators can add more via
+	// -c mcpCliCallbackUrls=... (CSV) if a build uses a different port. The exact
+	// resolved behavior is documented in docs/mcp-oauth-setup.md.
+	mcpCliCallbacks := splitCsv(ctxOr("mcpCliCallbackUrls", strings.Join([]string{
+		"http://localhost:3118/callback",
+		"http://127.0.0.1:3118/callback",
+		"http://localhost:41842/callback",
+		"http://127.0.0.1:41842/callback",
+		"http://localhost/callback",
+		"http://127.0.0.1/callback",
+	}, ",")))
+	mcpCliLogouts := splitCsv(ctxOr("mcpCliLogoutUrls", strings.Join([]string{
+		"http://localhost:3118/callback",
+		"http://127.0.0.1:3118/callback",
+	}, ",")))
+
+	mcpCliClient := userPool.AddClient(jsii.String("McpCliClient"), &awscognito.UserPoolClientOptions{
+		UserPoolClientName: jsii.String("cainban-mcp-cli"),
+		// Public PKCE client: no secret. Claude Code performs PKCE + the code
+		// exchange + refresh itself; cainban only validates the resulting token.
+		GenerateSecret: jsii.Bool(false),
+		OAuth: &awscognito.OAuthSettings{
+			Flows: &awscognito.OAuthFlows{
+				AuthorizationCodeGrant: jsii.Bool(true),
+			},
+			Scopes: &[]awscognito.OAuthScope{
+				awscognito.OAuthScope_OPENID(),
+				awscognito.OAuthScope_EMAIL(),
+				awscognito.OAuthScope_PROFILE(),
+			},
+			CallbackUrls: &mcpCliCallbacks,
+			LogoutUrls:   &mcpCliLogouts,
+		},
+		SupportedIdentityProviders: &oidcSupported,
+	})
+	for _, p := range createdOidcProviders {
+		mcpCliClient.Node().AddDependency(p)
+	}
+
 	// Both app clients issue tokens against this pool: the machine/CLI MCP
 	// client AND the browser SPA client. The JWT authorizers and the in-Lambda
 	// validators must accept EITHER `aud`, so the accepted-audience value is the
@@ -576,14 +631,46 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
 	})
 
+	// --- RFC 8414 authorization-server metadata shim route (MCP OAuth a') ---
+	//
+	// GET /.well-known/oauth-authorization-server is PUBLIC — the RFC 8414
+	// discovery document a spec-compliant MCP client (Claude Code) fetches to
+	// find the authorization endpoints AND the PKCE capability. Cognito's own
+	// OIDC discovery reports code_challenge_methods_supported:null (no PKCE
+	// advertised), which makes such a client refuse the flow; this shim mirrors
+	// Cognito's real endpoints but adds code_challenge_methods_supported:["S256"].
+	// It is NOT a proxy (no token minting, no secret). Same HttpNoneAuthorizer
+	// exemption pattern as the protected-resource route above; every other MCP
+	// route stays behind the managed Cognito JWT authorizer.
+	//
+	// The RFC 9728 protected-resource doc advertises the MCP API ORIGIN as its
+	// authorization server, so RFC 8414 discovery resolves to
+	// <origin>/.well-known/oauth-authorization-server = THIS route (see
+	// docs/mcp-oauth-setup.md for the discovery math + resolved URL).
+	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/.well-known/oauth-authorization-server"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: mcpIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
+	})
+
 	// The MCP Lambda serves the RFC 9728 metadata document from its OWN canonical
 	// URL. mcpAPI is created after the function, so the URL is added as env here
 	// (a lazily-resolved CDK token) rather than at function construction. This is
 	// the `resource` field of the metadata doc, the RFC 8707 resource indicator,
 	// and the base of the WWW-Authenticate resource_metadata pointer. The
-	// authorization server in the doc is the Cognito issuer, derived by the
-	// Lambda from CAINBAN_AUTH_ISSUER (already set above) — never hardcoded.
+	// authorization server in the doc is the MCP API origin (derived by the
+	// Lambda from CAINBAN_MCP_RESOURCE), so RFC 8414 discovery resolves to the
+	// shim above. The shim's authorize/token endpoints come from the Hosted UI
+	// domain env below; its jwks_uri from CAINBAN_AUTH_ISSUER (set above) — never
+	// hardcoded.
 	fn.AddEnvironment(jsii.String("CAINBAN_MCP_RESOURCE"), mcpAPI.Url(), nil)
+
+	// The Cognito Hosted UI base URL — where Cognito's authorize/token endpoints
+	// live (NOT under the issuer host). The RFC 8414 AS-metadata shim builds its
+	// authorization_endpoint/token_endpoint from this. Sourced from the same
+	// UserPoolDomain construct the HostedUiDomain output uses — never hardcoded.
+	fn.AddEnvironment(jsii.String("CAINBAN_HOSTED_UI_DOMAIN"), hostedUiBaseURL, nil)
 
 	// --- Explicit CloudWatch log group -----------------------------------
 	//
@@ -844,6 +931,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	awscdk.NewCfnOutput(stack, jsii.String("SpaClientId"), &awscdk.CfnOutputProps{
 		Value:       spaClient.UserPoolClientId(),
 		Description: jsii.String("Cognito app client id for the browser SPA (public, PKCE, authorization-code grant, Entra federated). Use as VITE_USER_POOL_CLIENT_ID."),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("McpCliClientId"), &awscdk.CfnOutputProps{
+		Value:       mcpCliClient.UserPoolClientId(),
+		Description: jsii.String("Cognito app client id for CLI MCP clients (Claude Code): public, PKCE, authorization-code grant, no secret, Entra federated, loopback callbacks. Pass to `claude mcp add --client-id <this>` (see docs/mcp-oauth-setup.md)."),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("SpaOauthScopes"), &awscdk.CfnOutputProps{
 		Value:       jsii.String("openid email profile"),

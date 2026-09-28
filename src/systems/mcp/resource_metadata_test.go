@@ -97,7 +97,7 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	m := newMWSigner(t)
 	// A protected handler that must NEVER run unauthenticated.
 	protected := AuthMiddlewareWithChallenge(m.resolver(t), resourceMetaURLFor(testMcpResource), &spyHandler{})
-	mux := PublicMux(testResourceCfg(), protected)
+	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), protected)
 
 	// (a) well-known: public 200. The Lambda sees the bare route path (API
 	// Gateway routes by path; no stage/host prefix reaches the handler).
@@ -106,6 +106,14 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	mux.ServeHTTP(wkRec, wkReq)
 	if wkRec.Code != http.StatusOK {
 		t.Errorf("well-known status = %d, want 200", wkRec.Code)
+	}
+
+	// (a2) the RFC 8414 AS-metadata shim is ALSO public: 200, no token.
+	asReq := httptest.NewRequest(http.MethodGet, WellKnownAuthServerPath, nil)
+	asRec := httptest.NewRecorder()
+	mux.ServeHTTP(asRec, asReq)
+	if asRec.Code != http.StatusOK {
+		t.Errorf("as-metadata status = %d, want 200 (must be public, no auth)", asRec.Code)
 	}
 
 	// (b) some other route without a token: 401 (auth gate ran).
