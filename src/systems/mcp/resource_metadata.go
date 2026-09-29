@@ -12,12 +12,25 @@ import (
 // holds any token (MCP authorization spec 2026-07-28, step (a)).
 const WellKnownProtectedResourcePath = "/.well-known/oauth-protected-resource"
 
-// MCPResourceScope is the OAuth scope hint cainban advertises for its MCP
+// MCPResourceScopes are the OAuth scopes cainban advertises for its MCP
 // resource, surfaced both in the protected-resource metadata (scopes_supported)
-// and in the WWW-Authenticate challenge on a 401. It is a hint for clients; the
-// in-Lambda authorization decision is still the validated `repos` claim, not a
-// scope string.
-const MCPResourceScope = "cainban:tasks"
+// and in the WWW-Authenticate challenge on a 401.
+//
+// These MUST be scopes that actually EXIST on the Cognito authorization server
+// and are enabled on the MCP CLI app client (openid/email/profile) — because a
+// spec-compliant MCP client (Claude Code) reads scopes_supported and REQUESTS
+// them at Cognito's /oauth2/authorize. Advertising a scope Cognito does not know
+// (a custom "cainban:tasks" with no Cognito resource server behind it) makes
+// Cognito reject the ENTIRE authorize request with `invalid_scope`, blocking the
+// whole flow. The in-Lambda authorization decision is still the validated
+// `repos` claim, NOT a scope string — so these three OIDC scopes are all we need
+// to advertise, and none is a false promise.
+var MCPResourceScopes = []string{"openid", "email", "profile"}
+
+// MCPResourceChallengeScope is the single scope named in the WWW-Authenticate
+// `scope` parameter on a 401. `openid` is always valid on the Cognito clients,
+// so a client re-requesting it can never trip `invalid_scope`.
+const MCPResourceChallengeScope = "openid"
 
 // ResourceMetadataConfig carries the values the RFC 9728 document is built from.
 // Both are DERIVED from the MCP Lambda's existing environment (McpApiUrl and
@@ -76,7 +89,7 @@ func NewResourceMetadataHandler(cfg ResourceMetadataConfig) http.Handler {
 	doc := protectedResourceMetadata{
 		Resource:               resource,
 		AuthorizationServers:   []string{authServer},
-		ScopesSupported:        []string{MCPResourceScope},
+		ScopesSupported:        MCPResourceScopes,
 		BearerMethodsSupported: []string{"header"},
 	}
 	// Marshal once at construction — the document is static per process.
