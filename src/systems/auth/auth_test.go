@@ -128,6 +128,37 @@ func TestValidate_RejectsWrongAudience(t *testing.T) {
 	}
 }
 
+// TestValidate_AcceptsAccessTokenClientID: a Cognito ACCESS token carries the
+// app-client id in `client_id` and has no `aud`. The validator must accept it
+// when client_id matches an accepted audience (mirrors the API GW authorizer).
+func TestValidate_AcceptsAccessTokenClientID(t *testing.T) {
+	ts := newTestSigner(t, "kid-1")
+	v := newValidator(t, ts)
+	c := validClaims()
+	c.Audience = "" // access tokens have no aud
+	c.ClientID = "test-audience"
+	id, err := v.Validate(ts.sign(t, "RS256", c))
+	if err != nil {
+		t.Fatalf("expected access token (client_id=aud) accepted, got %v", err)
+	}
+	if id.Subject != "user-1" {
+		t.Errorf("subject = %q, want user-1", id.Subject)
+	}
+}
+
+// TestValidate_RejectsWrongClientID: no aud AND a non-matching client_id -> 401.
+func TestValidate_RejectsWrongClientID(t *testing.T) {
+	ts := newTestSigner(t, "kid-1")
+	v := newValidator(t, ts)
+	c := validClaims()
+	c.Audience = ""
+	c.ClientID = "some-other-client"
+	_, err := v.Validate(ts.sign(t, "RS256", c))
+	if err == nil || HTTPStatus(err) != 401 {
+		t.Fatalf("expected 401 for wrong client_id, got %v", err)
+	}
+}
+
 func TestValidate_RejectsMissingToken(t *testing.T) {
 	ts := newTestSigner(t, "kid-1")
 	v := newValidator(t, ts)

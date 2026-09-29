@@ -91,6 +91,7 @@ type claims struct {
 	Issuer      string        `json:"iss"`
 	Subject     string        `json:"sub"`
 	Audience    audienceClaim `json:"aud"`
+	ClientID    string        `json:"client_id"`
 	Expiry      int64         `json:"exp"`
 	NotBefore   int64         `json:"nbf"`
 	IssuedAt    int64         `json:"iat"`
@@ -262,7 +263,7 @@ func (v *Validator) Validate(rawToken string) (*Identity, error) {
 	if c.Issuer != v.cfg.Issuer {
 		return nil, unauthenticated("token issuer not trusted", nil)
 	}
-	if !v.audienceAccepted(c.Audience) {
+	if !v.audienceAccepted(c.Audience, c.ClientID) {
 		return nil, unauthenticated("token audience mismatch", nil)
 	}
 
@@ -344,11 +345,17 @@ func (c Config) acceptedAudiences() []string {
 	return out
 }
 
-// audienceAccepted reports whether the token's `aud` claim contains at least
-// one of the configured accepted audiences.
-func (v *Validator) audienceAccepted(tokenAud []string) bool {
+// audienceAccepted reports whether the token is bound to one of the configured
+// app-client ids. Cognito ID tokens carry that id in `aud`; Cognito ACCESS
+// tokens carry it in `client_id` (their `aud` is absent), so both are checked
+// against the same accepted set — mirroring what the API Gateway JWT authorizer
+// does natively for id/access tokens.
+func (v *Validator) audienceAccepted(tokenAud []string, clientID string) bool {
 	for _, want := range v.cfg.acceptedAudiences() {
 		if containsString(tokenAud, want) {
+			return true
+		}
+		if clientID != "" && clientID == want {
 			return true
 		}
 	}

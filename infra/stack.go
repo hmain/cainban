@@ -390,6 +390,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	authAudiencesCsv := awscdk.Fn_Join(jsii.String(","), &[]*string{
 		userPoolClient.UserPoolClientId(),
 		spaClient.UserPoolClientId(),
+		mcpCliClient.UserPoolClientId(),
 	})
 
 	// --- Pre-token-generation trigger -----------------------------------
@@ -568,7 +569,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		issuer,
 		&awsapigatewayv2authorizers.HttpJwtAuthorizerProps{
 			AuthorizerName: jsii.String("cainban-mcp-jwt"),
-			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId(), spaClient.UserPoolClientId()},
+			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId(), spaClient.UserPoolClientId(), mcpCliClient.UserPoolClientId()},
 			IdentitySource: jsii.Strings("$request.header.Authorization"),
 		},
 	)
@@ -812,7 +813,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		issuer,
 		&awsapigatewayv2authorizers.HttpJwtAuthorizerProps{
 			AuthorizerName: jsii.String("cainban-connect-jwt"),
-			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId(), spaClient.UserPoolClientId()},
+			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId(), spaClient.UserPoolClientId(), mcpCliClient.UserPoolClientId()},
 			IdentitySource: jsii.Strings("$request.header.Authorization"),
 		},
 	)
