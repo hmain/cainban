@@ -9,6 +9,12 @@
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/aws-iam:minimizePolicies": true,
     "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
-    "@aws-cdk/core:target-partitions": ["aws"]
+    "@aws-cdk/core:target-partitions": ["aws"],
+
+    "entraIssuer": "https://login.microsoftonline.com/10adc47f-7651-4d30-b70e-c93cc9ec44fa/v2.0",
+    "entraClientId": "65a6a7c8-d1aa-43ae-ad6d-3170b8037a41",
+    "spaCallbackUrls": "https://main.d1x7br21qa4ohy.amplifyapp.com/,http://localhost:5173/",
+    "spaLogoutUrls": "https://main.d1x7br21qa4ohy.amplifyapp.com/,http://localhost:5173/",
+    "connectSuccessUrl": "https://main.d1x7br21qa4ohy.amplifyapp.com/"
   }
 }
