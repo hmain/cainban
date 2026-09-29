@@ -47,7 +47,7 @@ func AuthMiddleware(resolver *auth.Resolver, next http.Handler) http.Handler {
 // AuthMiddlewareWithChallenge is AuthMiddleware plus the RFC 9728 discovery
 // pointer: when resourceMetadataURL is non-empty, a 401 carries
 //
-//	WWW-Authenticate: Bearer resource_metadata="<url>", scope="cainban:tasks"
+//	WWW-Authenticate: Bearer resource_metadata="<url>", scope="openid"
 //
 // which is what tells a spec-compliant MCP client (MCP authorization spec
 // 2026-07-28) WHERE to discover cainban's authorization server. resourceMetadataURL
@@ -76,7 +76,7 @@ func AuthMiddlewareWithChallenge(resolver *auth.Resolver, resourceMetadataURL st
 // On a 401 it sets the WWW-Authenticate challenge. When resourceMetadataURL is
 // non-empty it emits the RFC 9728 MCP-OAuth form
 //
-//	Bearer resource_metadata="<url>", scope="cainban:tasks"
+//	Bearer resource_metadata="<url>", scope="openid"
 //
 // so a spec-compliant MCP client can discover the authorization server; when it
 // is empty it falls back to the legacy `Bearer realm="cainban"` challenge.
@@ -108,7 +108,7 @@ func bearerChallenge(resourceMetadataURL string) string {
 		// are quoted-string auth-param values per RFC 7235. The URL is
 		// constructed from trusted env (never the request), so it needs no
 		// escaping beyond the surrounding quotes.
-		return `Bearer resource_metadata="` + u + `", scope="` + MCPResourceScope + `"`
+		return `Bearer resource_metadata="` + u + `", scope="` + MCPResourceChallengeScope + `"`
 	}
 	return `Bearer realm="cainban"`
 }

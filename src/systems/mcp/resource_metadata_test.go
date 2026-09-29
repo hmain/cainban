@@ -51,8 +51,18 @@ func TestResourceMetadata_PublicOKValidJSON(t *testing.T) {
 	if len(doc.AuthorizationServers) != 1 || doc.AuthorizationServers[0] != testAuthServer {
 		t.Errorf("authorization_servers = %v, want [%q]", doc.AuthorizationServers, testAuthServer)
 	}
-	if len(doc.ScopesSupported) == 0 || doc.ScopesSupported[0] != MCPResourceScope {
-		t.Errorf("scopes_supported = %v, want [%q]", doc.ScopesSupported, MCPResourceScope)
+	if len(doc.ScopesSupported) != 3 ||
+		doc.ScopesSupported[0] != "openid" ||
+		doc.ScopesSupported[1] != "email" ||
+		doc.ScopesSupported[2] != "profile" {
+		t.Errorf("scopes_supported = %v, want [openid email profile]", doc.ScopesSupported)
+	}
+	// Regression guard: never advertise a scope Cognito does not know, or the
+	// authorize step fails with invalid_scope.
+	for _, s := range doc.ScopesSupported {
+		if s == "cainban:tasks" {
+			t.Errorf("scopes_supported must not advertise the non-existent Cognito scope %q", s)
+		}
 	}
 	if len(doc.BearerMethodsSupported) != 1 || doc.BearerMethodsSupported[0] != "header" {
 		t.Errorf("bearer_methods_supported = %v, want [\"header\"]", doc.BearerMethodsSupported)
@@ -148,8 +158,8 @@ func TestWriteAuthError_WWWAuthenticateResourceMetadata(t *testing.T) {
 	if !strings.Contains(wa, `resource_metadata="`+metaURL+`"`) {
 		t.Errorf("WWW-Authenticate = %q, want it to carry resource_metadata=%q", wa, metaURL)
 	}
-	if !strings.Contains(wa, `scope="`+MCPResourceScope+`"`) {
-		t.Errorf("WWW-Authenticate = %q, want it to carry scope=%q", wa, MCPResourceScope)
+	if !strings.Contains(wa, `scope="`+MCPResourceChallengeScope+`"`) {
+		t.Errorf("WWW-Authenticate = %q, want it to carry scope=%q", wa, MCPResourceChallengeScope)
 	}
 }
 
