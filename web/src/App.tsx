@@ -409,7 +409,11 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
 
   const addCmd = claudeAddCommand(MCP_API, clientId);
   const oauthConfig = mcpOAuthConfigSnippet(MCP_API, clientId, repo);
-  const prompt = agentPrompt(MCP_API, repo);
+  const setupUrl =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/cainban-mcp-setup.md`
+      : "/cainban-mcp-setup.md";
+  const prompt = agentPrompt(MCP_API, repo, setupUrl);
 
   const copy = async (text: string, which: string) => {
     try {
@@ -425,17 +429,11 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
     <>
       <section className="card" aria-labelledby="mcp-heading">
         <h2 id="mcp-heading">Add cainban to your MCP client</h2>
-        <p className="hint">
-          {selectedRepo ? (
-            <>
-              Set up for <strong>{selectedRepo}</strong>. Your client signs in
-              once through your browser and refreshes its own tokens — there is{" "}
-              <strong>no token to paste or renew</strong>.
-            </>
-          ) : (
-            <>Connect and select a repo above to fill this in for you.</>
-          )}
-        </p>
+        {!selectedRepo && (
+          <p className="hint">
+            Connect and select a repo above to fill this in for you.
+          </p>
+        )}
 
         <h3 className="subhead">Claude Code (recommended)</h3>
         <p className="hint">
@@ -499,11 +497,18 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
         </div>
         <p className="hint">
           Paste this to your AI coding agent to point it at this repo’s cainban
-          board over MCP.
+          board over MCP. It tells the agent to read the full setup guide and set
+          itself up.
         </p>
         <pre className="code-block">
           <code>{prompt}</code>
         </pre>
+        <p className="install-again">
+          Full agent-readable setup guide:{" "}
+          <a className="link" href="/cainban-mcp-setup.md" download>
+            cainban-mcp-setup.md
+          </a>
+        </p>
       </section>
     </>
   );
@@ -626,15 +631,17 @@ function mcpConfigSnippet(mcpApi: string, token: string, repo: string): string {
   );
 }
 
-function agentPrompt(mcpApi: string, repo: string): string {
+function agentPrompt(mcpApi: string, repo: string, setupUrl: string): string {
   const url = mcpApi || "https://<MCP_API>";
   return [
-    `You have a cainban kanban board for the repo ${repo}, reachable as an MCP`,
-    `server at ${url} (target it with the header X-Cainban-Repo: ${repo}). Use`,
-    `it as your task backend: before starting work, call list_tasks to see the`,
-    `board; decompose the work I give you into tasks with create_task; move a`,
-    `task with update_task_status (todo → doing → done) as you progress; and`,
-    `keep the board reflecting reality. Start by listing the current tasks for`,
+    `Set up the cainban MCP server as your task backend for the repo ${repo} by`,
+    `following the instructions at ${setupUrl} — fetch that file and do what it`,
+    `says. In short: register the MCP server at ${url} (OAuth is preferred — you`,
+    `sign in once in the browser and tokens self-refresh; no token to paste),`,
+    `target this repo with the header X-Cainban-Repo: ${repo}, then verify by`,
+    `calling list_tasks. Once connected, use it as your task backend: list_tasks`,
+    `before starting, create_task to break down the work, and update_task_status`,
+    `(todo → doing → done) as you go. Start by listing the current tasks for`,
     `${repo}.`,
   ].join(" ");
 }
