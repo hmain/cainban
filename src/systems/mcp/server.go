@@ -96,9 +96,16 @@ func (s *Server) getServer(_ *http.Request) *mcp.Server {
 // is what the local `cainban mcp --http` loopback server uses for dev. The
 // authenticated, repo-scoped multi-tenant path is HandlerWithAuth.
 func (s *Server) Handler() http.Handler {
-	return mcp.NewStreamableHTTPHandler(s.getServer, &mcp.StreamableHTTPOptions{
+	sdk := mcp.NewStreamableHTTPHandler(s.getServer, &mcp.StreamableHTTPOptions{
 		Stateless: true,
 	})
+	// Back-fill the spec-2026-07-28 Mcp-Method/Mcp-Name mirror headers when a
+	// client omits them (e.g. Claude Code's subscriptions/listen re-open), so
+	// the SDK's strict header check doesn't reject the request -32020 and send
+	// the client into a reconnect loop. Safe: the header the SDK demands is by
+	// definition the body's own method, and a client-set header is never
+	// overwritten. See header_backfill.go.
+	return BackfillMirrorHeaders(sdk)
 }
 
 // HandlerWithAuth wraps Handler with signature-first JWT auth + repo-scoped

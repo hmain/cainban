@@ -133,20 +133,46 @@ func buildGrantsReader(ctx context.Context) grantsReader {
 // makeHandler returns the Lambda handler bound to a grants reader (which may be
 // nil when the table is not configured). Split out from main so tests can
 // inject a fake reader.
-func makeHandler(reader grantsReader) func(context.Context, events.CognitoEventUserPoolsPreTokenGen) (events.CognitoEventUserPoolsPreTokenGen, error) {
-	return func(ctx context.Context, event events.CognitoEventUserPoolsPreTokenGen) (events.CognitoEventUserPoolsPreTokenGen, error) {
+func makeHandler(reader grantsReader) func(context.Context, events.CognitoEventUserPoolsPreTokenGenV2_0) (events.CognitoEventUserPoolsPreTokenGenV2_0, error) {
+	return func(ctx context.Context, event events.CognitoEventUserPoolsPreTokenGenV2_0) (events.CognitoEventUserPoolsPreTokenGenV2_0, error) {
 		overrides := resolveClaims(ctx, reader, event)
 		if len(overrides) > 0 {
-			event.Response.ClaimsOverrideDetails.ClaimsToAddOrOverride = overrides
+			// V2 trigger: claims must be written to BOTH the id token AND the
+			// access token. The MCP API's bearer is the ACCESS token (Claude
+			// Code, and any spec-compliant MCP client, sends the access token to
+			// the resource server), so the `repos` claim MUST land on the access
+			// token or cainban's validator sees no grants and returns 403. The V1
+			// trigger could only write the id token, which is why the access
+			// token carried no repos claim. We write both for parity.
+			idClaims := make(map[string]interface{}, len(overrides))
+			acClaims := make(map[string]interface{}, len(overrides))
+			for k, v := range overrides {
+				idClaims[k] = v
+				acClaims[k] = v
+			}
+			event.Response.ClaimsAndScopeOverrideDetails.IDTokenGeneration.ClaimsToAddOrOverride = idClaims
+			event.Response.ClaimsAndScopeOverrideDetails.AccessTokenGeneration.ClaimsToAddOrOverride = acClaims
+			log.Printf("cainban-pretoken: wrote claims sub=%q keys=%v to id+access tokens", eventSubject(event), keysOf(overrides))
+		} else {
+			log.Printf("cainban-pretoken: NO overrides for sub=%q (empty grants) — token will carry no repos claim", eventSubject(event))
 		}
 		return event, nil
 	}
 }
 
+// keysOf returns the claim keys (not values) for diagnostic logging.
+func keysOf(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
+
 // eventSubject returns the subject the grants table is keyed by: the standard
 // `sub` attribute (matches the token's `sub` claim), falling back to the header
 // userName only when `sub` is absent from the event.
-func eventSubject(event events.CognitoEventUserPoolsPreTokenGen) string {
+func eventSubject(event events.CognitoEventUserPoolsPreTokenGenV2_0) string {
 	if sub := strings.TrimSpace(event.Request.UserAttributes[attrSub]); sub != "" {
 		return sub
 	}
@@ -163,7 +189,7 @@ func eventSubject(event events.CognitoEventUserPoolsPreTokenGen) string {
 //   - table read ERROR                            -> fail closed: NO claims
 //   - table has >=1 grant                         -> claims from the table
 //   - table empty                                 -> attribute path (buildClaims)
-func resolveClaims(ctx context.Context, reader grantsReader, event events.CognitoEventUserPoolsPreTokenGen) map[string]string {
+func resolveClaims(ctx context.Context, reader grantsReader, event events.CognitoEventUserPoolsPreTokenGenV2_0) map[string]string {
 	attrs := event.Request.UserAttributes
 
 	// No table configured: pure attribute fallback (pre-P4.1 behavior).

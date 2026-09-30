@@ -447,15 +447,20 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Resources: &[]*string{grantsTable.TableArn()},
 	}))
 
-	// Attach as the pool's PreTokenGeneration trigger. LambdaVersion V1_0 emits
-	// the overrides as top-level ID-token claims via ClaimsToAddOrOverride
-	// (map[string]string) — the string-valued shape the validator's reposClaim
-	// decoder consumes. AddTrigger also grants Cognito permission to invoke the
-	// function (a resource-based policy), so no manual permission is needed.
+	// Attach as the pool's PreTokenGeneration trigger. LambdaVersion V2_0 lets
+	// the handler write the overrides to BOTH the ID token AND the ACCESS token
+	// (ClaimsAndScopeOverrideDetails.{IDTokenGeneration,AccessTokenGeneration}).
+	// The MCP API's bearer is the ACCESS token — a spec-compliant MCP client
+	// (Claude Code) sends the access token to the resource server — so the
+	// `repos` claim MUST be on the access token or the validator sees no grants
+	// and returns 403. V1_0 could only write ID-token claims, which is why the
+	// access token carried no repos claim. Values remain the string-valued shape
+	// the validator's reposClaim decoder consumes. AddTrigger also grants Cognito
+	// permission to invoke the function (a resource-based policy).
 	userPool.AddTrigger(
-		awscognito.UserPoolOperation_PRE_TOKEN_GENERATION(),
+		awscognito.UserPoolOperation_PRE_TOKEN_GENERATION_CONFIG(),
 		preTokenFn,
-		awscognito.LambdaVersion_V1_0,
+		awscognito.LambdaVersion_V2_0,
 	)
 
 	// Explicit CloudWatch log group for the trigger (controlled retention, and a

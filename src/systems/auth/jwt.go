@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/big"
 	"strings"
 	"time"
@@ -261,9 +262,11 @@ func (v *Validator) Validate(rawToken string) (*Identity, error) {
 	}
 
 	if c.Issuer != v.cfg.Issuer {
+		log.Printf("auth reject: issuer not trusted (got=%q want=%q)", c.Issuer, v.cfg.Issuer)
 		return nil, unauthenticated("token issuer not trusted", nil)
 	}
 	if !v.audienceAccepted(c.Audience, c.ClientID) {
+		log.Printf("auth reject: audience mismatch (aud=%v client_id=%q accepted=%v)", c.Audience, c.ClientID, v.cfg.acceptedAudiences())
 		return nil, unauthenticated("token audience mismatch", nil)
 	}
 
