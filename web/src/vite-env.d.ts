@@ -19,6 +19,14 @@ interface ImportMetaEnv {
   /** MCP API base URL (stack output McpApiUrl), shown for the client config. */
   readonly VITE_MCP_API: string;
   /**
+   * Dedicated public PKCE client id for MCP clients that run OAuth themselves
+   * (stack output McpCliClientId, e.g. Claude Code). Public, no secret. Shown
+   * in the OAuth setup snippet so the client discovers + self-refreshes tokens
+   * — the config holds NO bearer token. Optional: when unset the OAuth snippet
+   * falls back to a <McpCliClientId> placeholder.
+   */
+  readonly VITE_MCP_CLI_CLIENT_ID?: string;
+  /**
    * Redirect URL registered as a SPA client callback, e.g.
    * http://localhost:5173/ in dev or the Amplify app URL in prod. Optional —
    * defaults to window.location.origin + "/".

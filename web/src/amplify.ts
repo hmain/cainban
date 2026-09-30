@@ -49,3 +49,17 @@ export const MCP_API = String(import.meta.env.VITE_MCP_API || "").replace(
   /\/+$/,
   "",
 );
+
+// The dedicated public PKCE client id for MCP clients that run OAuth themselves
+// (Claude Code). Injected from the McpCliClientId stack output. Used only to
+// render the OAuth setup snippet — the browser SPA itself signs in with the SPA
+// client (VITE_USER_POOL_CLIENT_ID), not this one.
+export const MCP_CLI_CLIENT_ID = String(
+  import.meta.env.VITE_MCP_CLI_CLIENT_ID || "",
+).trim();
+
+// Claude Code's OAuth loopback callback port. cainban-mcp-cli registers this
+// port on the Cognito client, so pinning it avoids the ephemeral-port
+// redirect-mismatch (Cognito can't wildcard loopback ports). Shown in the setup
+// instructions as MCP_OAUTH_CALLBACK_PORT.
+export const MCP_OAUTH_CALLBACK_PORT = "3118";
