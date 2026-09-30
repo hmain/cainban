@@ -100,6 +100,8 @@ func HTTPStatus(err error) int {
 type Identity struct {
 	// Subject is the IdP `sub` claim — a stable per-user id.
 	Subject string
+	// Email is the OIDC `email` claim when present (the `email` scope is granted); may be empty.
+	Email string
 	// Repos is the set of repos this token authorizes, from the validated
 	// `repos` claim. Membership in this set is the authorization decision.
 	Repos map[string]struct{}
@@ -126,6 +128,8 @@ type Tenant struct {
 	PartitionPrefix string
 	// Subject is the validated caller id (for logging/audit).
 	Subject string
+	// Actor is the human-readable caller for the activity feed: email if present, else Subject.
+	Actor string
 	// Unscoped is true when the request authenticated successfully but named no
 	// target repo and the token carried no default_repo. Such a tenant is valid
 	// ONLY for non-tenant operations (the MCP handshake: initialize, tools/list,

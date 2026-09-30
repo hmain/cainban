@@ -83,6 +83,14 @@ type TaskStore interface {
 	LinkTasks(fromTaskID, toTaskID int, linkType task.LinkType) error
 	UnlinkTasks(fromTaskID, toTaskID int, linkType task.LinkType) error
 	GetTaskLinks(taskID int) ([]task.TaskLink, error)
+
+	// RecordActivity appends an append-only audit event for a board. It is
+	// best-effort observability and MUST NOT be read for task/board state.
+	RecordActivity(ev task.ActivityEvent) error
+	// ListActivity returns recent events for a board, newest first, capped at
+	// limit (<=0 or >200 means a sane default of 50). If boardTaskID > 0, only
+	// events for that task are returned.
+	ListActivity(boardID, boardTaskID, limit int) ([]task.ActivityEvent, error)
 }
 
 // Compile-time assertion that the SQLite implementation satisfies the contract

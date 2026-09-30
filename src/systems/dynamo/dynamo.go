@@ -98,6 +98,12 @@ type item struct {
 	FromTaskID int    `dynamodbav:"from_task_id,omitempty"`
 	ToTaskID   int    `dynamodbav:"to_task_id,omitempty"`
 	LinkType   string `dynamodbav:"link_type,omitempty"`
+	// Activity-event fields (SK = EVENT#...). EventTS is an RFC3339Nano string
+	// so lexical sort == chronological order.
+	Action  string `dynamodbav:"action,omitempty"`
+	Actor   string `dynamodbav:"actor,omitempty"`
+	Detail  string `dynamodbav:"detail,omitempty"`
+	EventTS string `dynamodbav:"event_ts,omitempty"`
 }
 
 // New builds a Store from a live DynamoDB client (single-tenant, empty prefix).
@@ -134,6 +140,15 @@ const counterSK = "COUNTER"
 func linkSK(from, to int, lt task.LinkType) string {
 	return fmt.Sprintf("LINK#%09d#%09d#%s", from, to, lt)
 }
+
+// eventSK builds the sort key for an append-only activity event. The
+// RFC3339Nano timestamp sorts lexically == chronologically, and the
+// zero-padded board task id disambiguates two events in the same nanosecond.
+func eventSK(ts time.Time, boardTaskID int) string {
+	return fmt.Sprintf("EVENT#%s#%09d", ts.UTC().Format(time.RFC3339Nano), boardTaskID)
+}
+
+const eventSKPrefix = "EVENT#"
 
 // --- store.TaskStore -------------------------------------------------------
 
@@ -784,4 +799,113 @@ func (s *Store) GetTaskLinks(taskID int) ([]task.TaskLink, error) {
 	// Newest first, matching the SQLite ORDER BY created_at DESC.
 	sort.SliceStable(links, func(i, j int) bool { return links[i].CreatedAt.After(links[j].CreatedAt) })
 	return links, nil
+}
+
+// --- activity feed (append-only audit) -------------------------------------
+
+// defaultActivityLimit / maxActivityLimit bound how many events ListActivity
+// returns; shared with the SQLite backend's contract.
+const (
+	defaultActivityLimit = 50
+	maxActivityLimit     = 200
+)
+
+// clampActivityLimit normalizes a caller-supplied limit: <=0 or >max collapses
+// to the sane default so a missing/absurd value never returns an unbounded feed.
+func clampActivityLimit(limit int) int {
+	if limit <= 0 || limit > maxActivityLimit {
+		return defaultActivityLimit
+	}
+	return limit
+}
+
+// RecordActivity appends an append-only audit event co-located in the board's
+// partition (SK = EVENT#<ts>#<taskID>). It is best-effort observability: the
+// handler swallows any error so a failed record never fails the tool call. The
+// event store is NEVER read to derive task/board state.
+func (s *Store) RecordActivity(ev task.ActivityEvent) error {
+	ts := ev.Timestamp
+	if ts.IsZero() {
+		ts = s.now().UTC()
+	}
+	ts = ts.UTC()
+	it := item{
+		PK:          s.boardPK(ev.BoardID),
+		SK:          eventSK(ts, ev.BoardTaskID),
+		BoardID:     ev.BoardID,
+		BoardTaskID: ev.BoardTaskID,
+		Action:      string(ev.Action),
+		Actor:       ev.Actor,
+		Detail:      ev.Detail,
+		EventTS:     ts.Format(time.RFC3339Nano),
+	}
+	av, err := attributevalue.MarshalMap(it)
+	if err != nil {
+		return fmt.Errorf("failed to marshal activity event: %w", err)
+	}
+	_, err = s.client.PutItem(context.TODO(), &dynamodb.PutItemInput{
+		TableName: aws.String(s.table),
+		Item:      av,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to record activity: %w", err)
+	}
+	return nil
+}
+
+// ListActivity returns recent events for a board, newest first, capped at
+// limit. When boardTaskID > 0 only that task's events are returned. Ordering is
+// enforced in Go (sort by timestamp desc) so it is correct regardless of the
+// underlying Query's scan direction.
+func (s *Store) ListActivity(boardID, boardTaskID, limit int) ([]task.ActivityEvent, error) {
+	limit = clampActivityLimit(limit)
+	ctx := context.TODO()
+	var events []task.ActivityEvent
+	var startKey map[string]ddbtypes.AttributeValue
+	for {
+		out, err := s.client.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(s.table),
+			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :prefix)"),
+			ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
+				":pk":     &ddbtypes.AttributeValueMemberS{Value: s.boardPK(boardID)},
+				":prefix": &ddbtypes.AttributeValueMemberS{Value: eventSKPrefix},
+			},
+			ScanIndexForward:  aws.Bool(false), // newest first at the source
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to list activity: %w", err)
+		}
+		for _, raw := range out.Items {
+			var it item
+			if err := attributevalue.UnmarshalMap(raw, &it); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal activity event: %w", err)
+			}
+			if boardTaskID > 0 && it.BoardTaskID != boardTaskID {
+				continue
+			}
+			ts, _ := time.Parse(time.RFC3339Nano, it.EventTS)
+			events = append(events, task.ActivityEvent{
+				BoardID:     it.BoardID,
+				BoardTaskID: it.BoardTaskID,
+				Action:      task.ActivityAction(it.Action),
+				Actor:       it.Actor,
+				Detail:      it.Detail,
+				Timestamp:   ts,
+			})
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	// Newest first, independent of the Query's scan order (the test fake and a
+	// paginated real Query may not preserve it across pages).
+	sort.SliceStable(events, func(i, j int) bool {
+		return events[i].Timestamp.After(events[j].Timestamp)
+	})
+	if len(events) > limit {
+		events = events[:limit]
+	}
+	return events, nil
 }
