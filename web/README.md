@@ -30,6 +30,7 @@ has no client secret, which is expected.
 | `VITE_COGNITO_DOMAIN` | `HostedUiDomain` (strip `https://`) | `cainban-emawiant-528757808822.auth.eu-north-1.amazoncognito.com` |
 | `VITE_CONNECT_API` | `ConnectApiUrl` | `https://64f3ievzmf.execute-api.eu-north-1.amazonaws.com/` |
 | `VITE_MCP_API` | `McpApiUrl` | `https://cl4qelp4hf.execute-api.eu-north-1.amazonaws.com/` |
+| `VITE_MCP_CLI_CLIENT_ID` (optional) | `McpCliClientId` | `79jr68h816vb3bcbgi6ueum2ht` |
 | `VITE_REDIRECT_URL` (optional) | your app URL | `http://localhost:5173/` |
 
 Read the outputs after deploy with:

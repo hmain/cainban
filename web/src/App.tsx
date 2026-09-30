@@ -6,7 +6,7 @@ import {
   fetchUserAttributes,
 } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
-import { ENTRA_PROVIDER_NAME, MCP_API } from "./amplify";
+import { ENTRA_PROVIDER_NAME, MCP_API, MCP_CLI_CLIENT_ID, MCP_OAUTH_CALLBACK_PORT } from "./amplify";
 import {
   connectRepo,
   listRepos,
@@ -403,39 +403,19 @@ function Repos({
 }
 
 function McpConfig({ selectedRepo }: { selectedRepo: string }) {
-  const [token, setToken] = useState<string>("");
-  const [tokenErr, setTokenErr] = useState<string>("");
-  const [copiedCfg, setCopiedCfg] = useState(false);
-  const [copiedPrompt, setCopiedPrompt] = useState(false);
-
   const repo = selectedRepo || "owner/repo";
+  const clientId = MCP_CLI_CLIENT_ID || "<McpCliClientId>";
+  const [copied, setCopied] = useState<string>("");
 
-  const loadToken = useCallback(async () => {
-    setTokenErr("");
-    try {
-      setToken(await getIdToken());
-    } catch (e) {
-      setTokenErr(String(e));
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadToken();
-  }, [loadToken]);
-
-  const config = mcpConfigSnippet(MCP_API, token || "<ID_TOKEN>", repo);
+  const addCmd = claudeAddCommand(MCP_API, clientId);
+  const oauthConfig = mcpOAuthConfigSnippet(MCP_API, clientId, repo);
   const prompt = agentPrompt(MCP_API, repo);
 
-  const copy = async (text: string, which: "cfg" | "prompt") => {
+  const copy = async (text: string, which: string) => {
     try {
       await navigator.clipboard.writeText(text);
-      if (which === "cfg") {
-        setCopiedCfg(true);
-        setTimeout(() => setCopiedCfg(false), 1500);
-      } else {
-        setCopiedPrompt(true);
-        setTimeout(() => setCopiedPrompt(false), 1500);
-      }
+      setCopied(which);
+      setTimeout(() => setCopied(""), 1500);
     } catch {
       // Clipboard may be unavailable (insecure context); text stays selectable.
     }
@@ -444,37 +424,77 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
   return (
     <>
       <section className="card" aria-labelledby="mcp-heading">
-        <div className="account-row">
-          <h2 id="mcp-heading">MCP client config</h2>
-          <button className="link" onClick={() => void copy(config, "cfg")}>
-            {copiedCfg ? "Copied!" : "Copy"}
-          </button>
-        </div>
+        <h2 id="mcp-heading">Add cainban to your MCP client</h2>
         <p className="hint">
           {selectedRepo ? (
             <>
-              Ready to paste for <strong>{selectedRepo}</strong>. The ID token
-              below is your current session token — it expires (~1h), so
-              regenerate it (Reload) when your agent starts failing with 401.
+              Set up for <strong>{selectedRepo}</strong>. Your client signs in
+              once through your browser and refreshes its own tokens — there is{" "}
+              <strong>no token to paste or renew</strong>.
             </>
           ) : (
             <>Connect and select a repo above to fill this in for you.</>
           )}
         </p>
+
+        <h3 className="subhead">Claude Code (recommended)</h3>
+        <p className="hint">
+          One command, then authenticate in the browser. Claude Code runs OAuth
+          (PKCE) and refreshes tokens itself.
+        </p>
+        <div className="account-row">
+          <span className="muted">Add the server:</span>
+          <button className="link" onClick={() => void copy(addCmd, "cmd")}>
+            {copied === "cmd" ? "Copied!" : "Copy"}
+          </button>
+        </div>
         <pre className="code-block">
-          <code>{config}</code>
+          <code>{addCmd}</code>
         </pre>
-        <button className="link" onClick={() => void loadToken()}>
-          Refresh token
-        </button>
-        {tokenErr && <p role="alert" className="error">{tokenErr}</p>}
+        <p className="hint">
+          Then run <code>/mcp</code> in Claude Code and pick{" "}
+          <strong>cainban → Authenticate</strong>. If the browser callback fails
+          to load after you sign in, launch Claude Code with the pinned callback
+          port: <code>MCP_OAUTH_CALLBACK_PORT={MCP_OAUTH_CALLBACK_PORT} claude</code>.
+        </p>
+
+        <details className="manual-entry">
+          <summary>Config-file form (Kiro, VS Code, other clients)</summary>
+          <div className="account-row">
+            <span className="muted">
+              For clients configured by JSON. No token — the client runs OAuth.
+            </span>
+            <button
+              className="link"
+              onClick={() => void copy(oauthConfig, "cfg")}
+            >
+              {copied === "cfg" ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <pre className="code-block">
+            <code>{oauthConfig}</code>
+          </pre>
+          <p className="hint">
+            {selectedRepo ? (
+              <>
+                Where the client supports custom headers, keep{" "}
+                <code>X-Cainban-Repo: {repo}</code>; otherwise your token’s
+                <code> default_repo</code> selects the repo.
+              </>
+            ) : (
+              <>Select a repo above to fill in the repo header.</>
+            )}
+          </p>
+        </details>
+
+        <BearerTokenFallback repo={repo} />
       </section>
 
       <section className="card" aria-labelledby="prompt-heading">
         <div className="account-row">
           <h2 id="prompt-heading">Set up your AI agent</h2>
           <button className="link" onClick={() => void copy(prompt, "prompt")}>
-            {copiedPrompt ? "Copied!" : "Copy"}
+            {copied === "prompt" ? "Copied!" : "Copy"}
           </button>
         </div>
         <p className="hint">
@@ -486,6 +506,104 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
         </pre>
       </section>
     </>
+  );
+}
+
+// BearerTokenFallback is the LEGACY manual path for MCP clients that cannot run
+// OAuth themselves. It mints a short-lived Cognito ID token to paste as a bearer
+// header — the ~1h re-paste UX that OAuth (above) removes. It is collapsed by
+// default and the token is fetched ONLY when the user opens it, so a normal
+// visit does not mint a token.
+function BearerTokenFallback({ repo }: { repo: string }) {
+  const [token, setToken] = useState<string>("");
+  const [tokenErr, setTokenErr] = useState<string>("");
+  const [loaded, setLoaded] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const loadToken = useCallback(async () => {
+    setTokenErr("");
+    try {
+      setToken(await getIdToken());
+      setLoaded(true);
+    } catch (e) {
+      setTokenErr(String(e));
+    }
+  }, []);
+
+  const config = mcpConfigSnippet(MCP_API, token || "<ID_TOKEN>", repo);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(config);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard may be unavailable; text stays selectable.
+    }
+  };
+
+  return (
+    <details
+      className="manual-entry"
+      onToggle={(e) => {
+        // Fetch the token lazily, only when the fallback is first expanded.
+        if ((e.target as HTMLDetailsElement).open && !loaded) void loadToken();
+      }}
+    >
+      <summary>Client can’t do OAuth? Use a bearer token (advanced)</summary>
+      <p className="hint">
+        For a client that connects by URL + headers only and cannot run OAuth
+        (e.g. plain header-token setups). This ID token expires (~1h) — you must
+        regenerate it (Refresh) whenever your agent starts failing with 401.
+        Prefer the OAuth setup above, which never needs this.
+      </p>
+      <div className="account-row">
+        <span className="muted">Header-token config:</span>
+        <button className="link" onClick={() => void copy()}>
+          {copied ? "Copied!" : "Copy"}
+        </button>
+      </div>
+      <pre className="code-block">
+        <code>{config}</code>
+      </pre>
+      <button className="link" onClick={() => void loadToken()}>
+        {loaded ? "Refresh token" : "Generate token"}
+      </button>
+      {tokenErr && <p role="alert" className="error">{tokenErr}</p>}
+    </details>
+  );
+}
+
+// claudeAddCommand builds the one-liner that registers cainban with Claude Code
+// over the OAuth (PKCE) path — no token, the client self-refreshes.
+function claudeAddCommand(mcpApi: string, clientId: string): string {
+  const url = mcpApi || "https://<MCP_API>";
+  return `claude mcp add --transport http --client-id ${clientId} cainban ${url}`;
+}
+
+// mcpOAuthConfigSnippet is the JSON config form for clients configured by file
+// (Kiro/VS Code/etc.) that CAN run OAuth: it carries the client_id and NO token.
+function mcpOAuthConfigSnippet(
+  mcpApi: string,
+  clientId: string,
+  repo: string,
+): string {
+  const url = mcpApi || "https://<MCP_API>";
+  return JSON.stringify(
+    {
+      mcpServers: {
+        cainban: {
+          type: "http",
+          url,
+          client_id: clientId,
+          headers: {
+            "X-Cainban-Repo": repo,
+          },
+        },
+      },
+    },
+    null,
+    2,
   );
 }
 
@@ -512,11 +630,11 @@ function agentPrompt(mcpApi: string, repo: string): string {
   const url = mcpApi || "https://<MCP_API>";
   return [
     `You have a cainban kanban board for the repo ${repo}, reachable as an MCP`,
-    `server at ${url} (send Authorization: Bearer <my ID token> and the header`,
-    `X-Cainban-Repo: ${repo}). Use it as your task backend: before starting`,
-    `work, call list_tasks to see the board; decompose the work I give you into`,
-    `tasks with create_task; move a task with update_task_status (todo → doing →`,
-    `done) as you progress; and keep the board reflecting reality. Start by`,
-    `listing the current tasks for ${repo}.`,
+    `server at ${url} (target it with the header X-Cainban-Repo: ${repo}). Use`,
+    `it as your task backend: before starting work, call list_tasks to see the`,
+    `board; decompose the work I give you into tasks with create_task; move a`,
+    `task with update_task_status (todo → doing → done) as you progress; and`,
+    `keep the board reflecting reality. Start by listing the current tasks for`,
+    `${repo}.`,
   ].join(" ");
 }
