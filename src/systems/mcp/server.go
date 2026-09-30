@@ -221,6 +221,15 @@ func (s *Server) resolveTaskSystem(ctx context.Context, boardName string) (store
 
 	partitionPrefix := ""
 	if t, ok := tenantFromContext(ctx); ok && t != nil {
+		// An UNSCOPED tenant authenticated but named no repo (and had no
+		// default_repo). It is valid only for the MCP handshake, never for a
+		// data operation: opening a store with an empty prefix would collapse
+		// every tenant into one partition. Fail closed with a clear message the
+		// client can act on (name a repo via the X-Cainban-Repo header or set a
+		// default_repo). Handshake ops (initialize, tools/list) never reach here.
+		if t.Unscoped {
+			return nil, nil, fmt.Errorf("no target repo for this request: set the %s header or a default_repo claim before calling a tool", auth.HeaderTargetRepo)
+		}
 		partitionPrefix = t.PartitionPrefix
 	}
 

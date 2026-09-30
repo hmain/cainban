@@ -207,3 +207,72 @@ func noTargetReq(t *testing.T, token string) *http.Request {
 	req.Header.Set("Authorization", "Bearer "+token)
 	return req
 }
+
+// TestResolve_NoTargetNoDefault_Unscoped proves that a signature-valid token
+// that names NO repo (no arg, no header) AND has no default_repo is NOT a 403:
+// it resolves to an authenticated, UNSCOPED tenant so the MCP handshake
+// (initialize, tools/list) can proceed. This is the repo-agnostic handshake fix
+// — previously this returned 403 before the client could list any tools.
+func TestResolve_NoTargetNoDefault_Unscoped(t *testing.T) {
+	ts := newTestSigner(t, "kid-1")
+	r := newResolver(t, ts)
+	tok := signStringRepos(t, ts, stringReposClaims{
+		Issuer:   "https://issuer.test/pool",
+		Subject:  "user-1",
+		Audience: "test-audience",
+		Expiry:   fixedNow.Add(time.Hour).Unix(),
+		IssuedAt: fixedNow.Add(-time.Minute).Unix(),
+		Repos:    "acme/repo-a", // has a grant, but names no target and no default
+	})
+	tenant, err := r.Resolve(noTargetReq(t, tok), "")
+	if err != nil {
+		t.Fatalf("no target + no default_repo should be unscoped, got error: %v", err)
+	}
+	if !tenant.Unscoped {
+		t.Errorf("tenant.Unscoped = false, want true")
+	}
+	if tenant.Repo != "" || tenant.PartitionPrefix != "" {
+		t.Errorf("unscoped tenant must carry no repo/prefix, got repo=%q prefix=%q", tenant.Repo, tenant.PartitionPrefix)
+	}
+	if tenant.Subject == "" {
+		t.Errorf("unscoped tenant must still carry the validated subject")
+	}
+}
+
+// TestResolve_NamedUnauthorized_StillForbidden proves the unscoped path did NOT
+// weaken authorization: a repo that IS named but not granted is still a 403,
+// never silently downgraded to unscoped.
+func TestResolve_NamedUnauthorized_StillForbidden(t *testing.T) {
+	ts := newTestSigner(t, "kid-1")
+	r := newResolver(t, ts)
+	tok := signStringRepos(t, ts, stringReposClaims{
+		Issuer:   "https://issuer.test/pool",
+		Subject:  "user-1",
+		Audience: "test-audience",
+		Expiry:   fixedNow.Add(time.Hour).Unix(),
+		IssuedAt: fixedNow.Add(-time.Minute).Unix(),
+		Repos:    "acme/repo-a",
+	})
+	if _, err := r.Resolve(bearerReq(t, tok, "acme/repo-b"), ""); HTTPStatus(err) != 403 {
+		t.Errorf("named unauthorized repo: status = %d, want 403", HTTPStatus(err))
+	}
+}
+
+// TestResolve_MalformedTarget_StillForbidden proves a supplied-but-malformed
+// target is a 403, not an unscoped downgrade — a client bug must not hide behind
+// a working handshake.
+func TestResolve_MalformedTarget_StillForbidden(t *testing.T) {
+	ts := newTestSigner(t, "kid-1")
+	r := newResolver(t, ts)
+	tok := signStringRepos(t, ts, stringReposClaims{
+		Issuer:   "https://issuer.test/pool",
+		Subject:  "user-1",
+		Audience: "test-audience",
+		Expiry:   fixedNow.Add(time.Hour).Unix(),
+		IssuedAt: fixedNow.Add(-time.Minute).Unix(),
+		Repos:    "acme/repo-a",
+	})
+	if _, err := r.Resolve(bearerReq(t, tok, "not-a-valid-repo"), ""); HTTPStatus(err) != 403 {
+		t.Errorf("malformed target: status = %d, want 403", HTTPStatus(err))
+	}
+}

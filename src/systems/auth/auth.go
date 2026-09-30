@@ -126,6 +126,14 @@ type Tenant struct {
 	PartitionPrefix string
 	// Subject is the validated caller id (for logging/audit).
 	Subject string
+	// Unscoped is true when the request authenticated successfully but named no
+	// target repo and the token carried no default_repo. Such a tenant is valid
+	// ONLY for non-tenant operations (the MCP handshake: initialize, tools/list,
+	// ping, notifications) — it MUST NOT open a data store. Repo and
+	// PartitionPrefix are empty when Unscoped is true; a store-opening path must
+	// fail closed rather than run with an empty prefix (which would collapse all
+	// tenants into one partition). See Resolver.Resolve.
+	Unscoped bool
 }
 
 // PartitionPrefixFor returns the DynamoDB partition prefix for a repo. It is the

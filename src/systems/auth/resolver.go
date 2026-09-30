@@ -46,6 +46,15 @@ func NewResolver(v *Validator) *Resolver {
 //     token does not grant is a 403.
 //  5. Return a Tenant carrying the isolating partition prefix.
 //
+// When the caller names NO repo (no arg, no header) AND the token carries no
+// default_repo, the request is authenticated but UNSCOPED: it returns a Tenant
+// with Unscoped=true and empty Repo/PartitionPrefix. This lets the MCP handshake
+// (initialize, tools/list, ping, notifications) succeed for a token that simply
+// has no default repo, instead of a spurious 403 before the client can even list
+// tools. An unscoped tenant MUST NOT open a data store — the store-opening path
+// (resolveTaskSystem) fails closed on it. A repo that IS named but not granted is
+// still a 403; only the absence of any target becomes unscoped.
+//
 // argRepo is the per-call target from an MCP tool argument; pass "" when the
 // caller relies on the header/default. Both header and arg are UNTRUSTED for
 // authorization — only membership in the validated claim grants access.
@@ -64,7 +73,13 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 	target, err := r.resolveTarget(identity, req, argRepo)
 	if err != nil {
 		log.Printf("cainban auth: 403 resolveTarget failed (sub=%q default_repo=%q repos=%v): %v", identity.Subject, identity.DefaultRepo, repoKeys(identity.Repos), err)
-		return nil, err // 403 (no repo the caller may touch)
+		return nil, err // 403 (an explicitly named target was invalid)
+	}
+
+	// No repo named and no default_repo: authenticated but unscoped. Valid only
+	// for non-tenant handshake operations; the store path fails closed on it.
+	if target == "" {
+		return &Tenant{Subject: identity.Subject, Unscoped: true}, nil
 	}
 
 	if !identity.authorizes(target) {
@@ -81,19 +96,24 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 
 // resolveTarget picks the repo IDENTITY (which repo), preferring an explicit MCP
 // tool arg, then the request header, then the token's default_repo claim. It
-// normalizes the value but does NOT authorize it (that is Resolve's job). A
-// caller that supplies nothing and has no default_repo gets a 403 (there is no
-// repo to scope to) rather than silently touching some other tenant.
+// normalizes the value but does NOT authorize it (that is Resolve's job).
+//
+// A caller that supplies NOTHING and has no default_repo gets an empty string
+// (not an error): Resolve turns that into an unscoped, authenticated tenant so
+// the handshake can proceed. A value that IS supplied but is structurally
+// invalid is still an error (403) — a malformed target must never be silently
+// downgraded to unscoped, which would hide a client bug behind a working
+// handshake.
 func (r *Resolver) resolveTarget(id *Identity, req *http.Request, argRepo string) (string, error) {
 	raw := strings.TrimSpace(argRepo)
 	if raw == "" && req != nil {
 		raw = strings.TrimSpace(req.Header.Get(HeaderTargetRepo))
 	}
 	if raw == "" {
-		raw = id.DefaultRepo
+		raw = strings.TrimSpace(id.DefaultRepo)
 	}
-	if strings.TrimSpace(raw) == "" {
-		return "", forbidden("no target repo supplied and token has no default_repo")
+	if raw == "" {
+		return "", nil // nothing named anywhere -> unscoped (handled by Resolve)
 	}
 	norm, err := NormalizeRepo(raw)
 	if err != nil {
