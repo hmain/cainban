@@ -33,20 +33,38 @@ func doPost(t *testing.T, h http.Handler, body string, hdr map[string]string) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 }
 
-func TestBackfill_SubscriptionsListen_SetsMethod(t *testing.T) {
+func TestBackfill_SubscriptionsListen_NotBackfilled(t *testing.T) {
 	cap := &captureHandler{}
 	h := BackfillMirrorHeaders(cap)
+	// subscriptions/listen is INTENTIONALLY excluded: on a stateless server the
+	// SDK would otherwise hold this POST open as a 30s-billed SSE stream. Leaving
+	// the header off lets the SDK reject it instantly (-32020) without dropping
+	// the connection. So the shim must pass it through UNMODIFIED.
 	body := `{"jsonrpc":"2.0","id":1,"method":"subscriptions/listen","params":{}}`
 	doPost(t, h, body, nil)
 
-	if cap.method != "subscriptions/listen" {
-		t.Errorf("Mcp-Method = %q, want %q", cap.method, "subscriptions/listen")
+	if cap.method != "" {
+		t.Errorf("Mcp-Method = %q, want empty (subscriptions/listen must NOT be back-filled)", cap.method)
 	}
 	if cap.name != "" {
-		t.Errorf("Mcp-Name = %q, want empty (listen carries no name)", cap.name)
+		t.Errorf("Mcp-Name = %q, want empty", cap.name)
 	}
 	if cap.body != body {
 		t.Errorf("downstream body = %q, want unchanged %q", cap.body, body)
+	}
+}
+
+func TestBackfill_Initialize_StillBackfilled(t *testing.T) {
+	cap := &captureHandler{}
+	h := BackfillMirrorHeaders(cap)
+	// initialize/tools/list are ordinary request/response POSTs (no stream), and
+	// back-filling them is what keeps the connection stable. The listen exclusion
+	// must NOT regress these.
+	body := `{"jsonrpc":"2.0","id":9,"method":"initialize","params":{}}`
+	doPost(t, h, body, nil)
+
+	if cap.method != "initialize" {
+		t.Errorf("Mcp-Method = %q, want %q (initialize must still be back-filled)", cap.method, "initialize")
 	}
 }
 

@@ -49,10 +49,11 @@ type backfillEnvelope struct {
 //
 // Under a 2026-07-28 connection the go-sdk's Streamable-HTTP handler requires
 // the Mcp-Method header on every request (validateMcpHeaders -> -32020). Some
-// clients — notably Claude Code's subscriptions/listen re-open — open a
-// long-lived notification stream WITHOUT that header, so the SDK rejects it and
-// the client reconnects in a ~30s loop. cainban owns neither the client nor the
-// SDK validator, and StreamableHTTPOptions exposes no knob to relax the check.
+// clients — notably Claude Code — send ordinary requests (initialize,
+// tools/list, tools/call) WITHOUT that header, so the SDK rejects them and the
+// connection churns in a ~30s reconnect loop. cainban owns neither the client
+// nor the SDK validator, and StreamableHTTPOptions exposes no knob to relax the
+// check.
 //
 // This shim removes the churn at the only layer cainban controls, WITHOUT
 // weakening the check: the header the spec demands is by definition the body's
@@ -60,6 +61,11 @@ type backfillEnvelope struct {
 // SDK would accept. A request that DID carry the header is untouched, so a real
 // mismatch is still the SDK's to reject. The body is restored verbatim for the
 // downstream handler.
+//
+// subscriptions/listen is INTENTIONALLY excluded (see below): cainban has no
+// notifications to stream, and back-filling that method makes the SDK hold the
+// POST open as a 30s-billed SSE stream. Leaving its header off lets the SDK
+// reject it instantly — cheaper, and it does not drop the connection.
 func BackfillMirrorHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get(mcpMethodHeader) != "" || r.Body == nil {
@@ -101,6 +107,21 @@ func BackfillMirrorHeaders(next http.Handler) http.Handler {
 
 		var env backfillEnvelope
 		if err := json.Unmarshal(trimmed, &env); err != nil || env.Method == "" {
+			restore()
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		// Deliberately do NOT back-fill subscriptions/listen. cainban advertises
+		// no subscription/list-changed capability, so it has nothing to stream —
+		// but the SDK, once the header validates, holds that POST open as a
+		// long-lived SSE stream until the Lambda's timeout (a full 30s of billed
+		// wall-clock, observed 3x per Claude Code connect). Leaving the header
+		// OFF lets the SDK reject the request instantly with -32020, which the
+		// client absorbs without dropping the connection. Every other method IS
+		// back-filled (that is what keeps the connection stable); this single
+		// method is the one where the fast reject is strictly cheaper.
+		if env.Method == "subscriptions/listen" {
 			restore()
 			next.ServeHTTP(w, r)
 			return
