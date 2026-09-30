@@ -152,7 +152,10 @@ func (f *fakeDDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ 
 			}
 			allowMissing := strings.Contains(cond, "attribute_not_exists(version)")
 			match := hasVersion && curVersion == expected
-			if !match && !(allowMissing && !hasVersion) {
+			// A legacy item (no version attribute) matches only when the
+			// condition explicitly allows a missing version (expected == 0).
+			legacyOK := allowMissing && !hasVersion
+			if !match && !legacyOK {
 				return nil, &ddbtypes.ConditionalCheckFailedException{}
 			}
 		}
