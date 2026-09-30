@@ -33,15 +33,17 @@ func listToolsWire(t *testing.T) []*mcp.Tool {
 	return res.Tools
 }
 
-// TestToolsListStable asserts that the MCP server advertises exactly the eight
+// TestToolsListStable asserts that the MCP server advertises exactly the nine
 // cainban tools. This is the regression guard for the "tool schema unchanged"
 // exit criterion of the stateless refactor: if a tool is added, removed, or
-// renamed, this test fails.
+// renamed, this test fails. P5A.4 added the read-only list_activity tool
+// (8 -> 9); the eight prior tools are unchanged.
 func TestToolsListStable(t *testing.T) {
 	want := []string{
 		"change_board",
 		"create_task",
 		"get_task",
+		"list_activity",
 		"list_boards",
 		"list_tasks",
 		"update_task",

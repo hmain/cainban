@@ -38,6 +38,7 @@ func newTestSigner(t *testing.T, kid string) *testSigner {
 type tokenClaims struct {
 	Issuer      string   `json:"iss,omitempty"`
 	Subject     string   `json:"sub,omitempty"`
+	Email       string   `json:"email,omitempty"`
 	Audience    string   `json:"aud,omitempty"`
 	ClientID    string   `json:"client_id,omitempty"`
 	Expiry      int64    `json:"exp,omitempty"`

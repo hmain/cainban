@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/board"
@@ -283,6 +284,21 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 		Name:        "change_board",
 		Description: "Change the active kanban board",
 	}, s.handleChangeBoard)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "list_activity",
+		Description: "List recent task activity (who changed what), newest first",
+	}, s.handleListActivity)
+}
+
+// actorFromCtx returns the human-readable caller (email, else sub) recorded on
+// the request's tenant for the activity feed. Empty on the local CLI path,
+// which carries no tenant.
+func actorFromCtx(ctx context.Context) string {
+	if t, ok := tenantFromContext(ctx); ok && t != nil {
+		return t.Actor
+	}
+	return ""
 }
 
 // Tool handler argument types.
@@ -328,6 +344,11 @@ type ChangeBoardArgs struct {
 	BoardName string `json:"board_name" jsonschema:"the name of the board to switch to"`
 }
 
+type ListActivityArgs struct {
+	TaskID int `json:"task_id,omitempty" jsonschema:"optional: only show activity for this board task ID; omit for the whole board"`
+	Limit  int `json:"limit,omitempty" jsonschema:"max events to return, newest first (default 50, max 200)"`
+}
+
 // Tool handlers. Each resolves its board database per request.
 
 func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest, args CreateTaskArgs) (*mcp.CallToolResult, any, error) {
@@ -351,6 +372,15 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest,
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create task: %w", err)
 	}
+
+	// Best-effort append-only audit: never fail the tool call on a record error.
+	_ = taskSystem.RecordActivity(task.ActivityEvent{
+		BoardID:     boardID,
+		BoardTaskID: createdTask.BoardTaskID,
+		Action:      task.ActivityCreated,
+		Actor:       actorFromCtx(ctx),
+		Detail:      createdTask.Title,
+	})
 
 	priorityStr := ""
 	if createdTask.Priority > 0 {
@@ -457,6 +487,15 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("failed to update task status: %w", err)
 	}
 
+	// Best-effort append-only audit (success path only; t.Status is the old value).
+	_ = taskSystem.RecordActivity(task.ActivityEvent{
+		BoardID:     boardID,
+		BoardTaskID: args.ID,
+		Action:      task.ActivityStatusChanged,
+		Actor:       actorFromCtx(ctx),
+		Detail:      fmt.Sprintf("%s -> %s", t.Status, args.Status),
+	})
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
@@ -535,6 +574,15 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 	priorityLevel, _ := task.ParsePriority(args.Priority)
 	priorityName := task.GetPriorityName(priorityLevel)
 
+	// Best-effort append-only audit (success path only; t.Priority is the old value).
+	_ = taskSystem.RecordActivity(task.ActivityEvent{
+		BoardID:     boardID,
+		BoardTaskID: args.ID,
+		Action:      task.ActivityPriorityChanged,
+		Actor:       actorFromCtx(ctx),
+		Detail:      fmt.Sprintf("%s -> %s", task.GetPriorityName(t.Priority), priorityName),
+	})
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
@@ -568,6 +616,15 @@ func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest,
 	} else if err := taskSystem.Update(t.ID, args.Title, args.Description); err != nil {
 		return nil, nil, fmt.Errorf("failed to update task: %w", err)
 	}
+
+	// Best-effort append-only audit (success path only).
+	_ = taskSystem.RecordActivity(task.ActivityEvent{
+		BoardID:     boardID,
+		BoardTaskID: args.ID,
+		Action:      task.ActivityUpdated,
+		Actor:       actorFromCtx(ctx),
+		Detail:      args.Title,
+	})
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
@@ -624,4 +681,40 @@ func (s *Server) handleChangeBoard(ctx context.Context, req *mcp.CallToolRequest
 			},
 		},
 	}, nil, nil
+}
+
+// handleListActivity returns the append-only activity feed for the current
+// board (or a single task when task_id is given), newest first. The event store
+// is pure audit and is never used to derive task/board state.
+func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolRequest, args ListActivityArgs) (*mcp.CallToolResult, any, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := 1
+
+	events, err := taskSystem.ListActivity(boardID, args.TaskID, args.Limit)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list activity: %w", err)
+	}
+
+	if len(events) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: "No activity recorded"},
+			},
+		}, events, nil
+	}
+
+	var content []mcp.Content
+	for _, ev := range events {
+		content = append(content, &mcp.TextContent{
+			Text: fmt.Sprintf("%s  #%d %s  %s  (%s)",
+				ev.Timestamp.Format(time.RFC3339), ev.BoardTaskID, ev.Action, ev.Detail, ev.Actor),
+		})
+	}
+
+	return &mcp.CallToolResult{Content: content}, events, nil
 }

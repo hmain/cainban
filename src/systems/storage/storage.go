@@ -104,6 +104,20 @@ func (db *DB) initialize() error {
 	CREATE INDEX IF NOT EXISTS idx_task_links_from ON task_links(from_task_id);
 	CREATE INDEX IF NOT EXISTS idx_task_links_to ON task_links(to_task_id);
 
+	-- Append-only activity feed: who changed what. NEVER read for task/board
+	-- state. CREATE TABLE IF NOT EXISTS is idempotent for existing databases,
+	-- so this needs no ALTER migration (brand-new table).
+	CREATE TABLE IF NOT EXISTS activity (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		board_id INTEGER NOT NULL,
+		board_task_id INTEGER NOT NULL,
+		action TEXT NOT NULL,
+		actor TEXT,
+		detail TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_activity_board ON activity(board_id, id DESC);
+
 	-- Create default board if none exists
 	INSERT OR IGNORE INTO boards (id, name, description) 
 	VALUES (1, 'Default Board', 'Default kanban board');

@@ -79,7 +79,7 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 	// No repo named and no default_repo: authenticated but unscoped. Valid only
 	// for non-tenant handshake operations; the store path fails closed on it.
 	if target == "" {
-		return &Tenant{Subject: identity.Subject, Unscoped: true}, nil
+		return &Tenant{Subject: identity.Subject, Actor: actorFor(identity), Unscoped: true}, nil
 	}
 
 	if !identity.authorizes(target) {
@@ -91,7 +91,17 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 		Repo:            target,
 		PartitionPrefix: PartitionPrefixFor(target),
 		Subject:         identity.Subject,
+		Actor:           actorFor(identity),
 	}, nil
+}
+
+// actorFor returns the human-readable caller id for audit: email when the
+// token carried one, else the opaque subject. Never empty for a valid token.
+func actorFor(id *Identity) string {
+	if id.Email != "" {
+		return id.Email
+	}
+	return id.Subject
 }
 
 // resolveTarget picks the repo IDENTITY (which repo), preferring an explicit MCP

@@ -91,6 +91,7 @@ type jwtHeader struct {
 type claims struct {
 	Issuer      string        `json:"iss"`
 	Subject     string        `json:"sub"`
+	Email       string        `json:"email"`
 	Audience    audienceClaim `json:"aud"`
 	ClientID    string        `json:"client_id"`
 	Expiry      int64         `json:"exp"`
@@ -299,6 +300,7 @@ func (v *Validator) Validate(rawToken string) (*Identity, error) {
 	}
 	return &Identity{
 		Subject:     c.Subject,
+		Email:       c.Email,
 		Repos:       repos,
 		DefaultRepo: defaultRepo,
 	}, nil
