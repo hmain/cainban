@@ -13,7 +13,22 @@
 // behavior-preserving.
 package store
 
-import "github.com/hmain/cainban/src/systems/task"
+import (
+	"github.com/hmain/cainban/src/systems/task"
+)
+
+// ErrVersionConflict is returned by the *IfVersion methods when the caller's
+// expected version does not match the version currently stored for a task.
+//
+// It signals an optimistic-concurrency lost-update prevention: the task was
+// modified since the caller last read it. Callers should re-read the task and
+// retry. Backends wrap this sentinel with a message that includes the task id,
+// so use errors.Is(err, store.ErrVersionConflict) to detect it.
+//
+// The canonical value is defined in package task (store imports task, so the
+// value cannot live here without forcing task to import store — a cycle). This
+// is an alias of that single value, so a conflict from either backend matches.
+var ErrVersionConflict = task.ErrVersionConflict
 
 // TaskStore is the persistence contract cainban's handlers and CLI depend on.
 //
@@ -42,6 +57,16 @@ type TaskStore interface {
 	UpdateStatus(id int, status task.Status) error
 	Update(id int, title, description string) error
 	UpdatePriority(id int, priority interface{}) error
+
+	// UpdateStatusIfVersion / UpdateIfVersion / UpdatePriorityIfVersion are the
+	// optimistic-concurrency variants: they apply the field change only if the
+	// task's stored version equals expectedVersion, atomically incrementing the
+	// version on success. On a version mismatch they return
+	// ErrVersionConflict (wrapped with the task id). Legacy rows with no
+	// recorded version read as version 0, so expectedVersion == 0 matches them.
+	UpdateStatusIfVersion(id int, status task.Status, expectedVersion int) error
+	UpdateIfVersion(id int, title, description string, expectedVersion int) error
+	UpdatePriorityIfVersion(id int, priority interface{}, expectedVersion int) error
 
 	// SearchTasks fuzzy-matches task titles within a board.
 	SearchTasks(boardID int, query string) ([]*task.Task, error)

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -299,8 +300,9 @@ type ListTasksArgs struct {
 }
 
 type UpdateTaskStatusArgs struct {
-	ID     int    `json:"id" jsonschema:"the task ID"`
-	Status string `json:"status" jsonschema:"the new status (todo, doing, done)"`
+	ID              int    `json:"id" jsonschema:"the task ID"`
+	Status          string `json:"status" jsonschema:"the new status (todo, doing, done)"`
+	ExpectedVersion int    `json:"expected_version,omitempty" jsonschema:"optimistic-concurrency guard: the task version you last read; the write fails with a version-conflict error if the task changed since. Omit (or 0) to force-write."`
 }
 
 type GetTaskArgs struct {
@@ -308,14 +310,16 @@ type GetTaskArgs struct {
 }
 
 type UpdateTaskPriorityArgs struct {
-	ID       int         `json:"id" jsonschema:"task ID to update"`
-	Priority interface{} `json:"priority" jsonschema:"priority level (none, low, medium, high, critical or 0-4)"`
+	ID              int         `json:"id" jsonschema:"task ID to update"`
+	Priority        interface{} `json:"priority" jsonschema:"priority level (none, low, medium, high, critical or 0-4)"`
+	ExpectedVersion int         `json:"expected_version,omitempty" jsonschema:"optimistic-concurrency guard: the task version you last read; the write fails with a version-conflict error if the task changed since. Omit (or 0) to force-write."`
 }
 
 type UpdateTaskArgs struct {
-	ID          int    `json:"id" jsonschema:"the task ID"`
-	Title       string `json:"title" jsonschema:"the new title"`
-	Description string `json:"description,omitempty" jsonschema:"the new description"`
+	ID              int    `json:"id" jsonschema:"the task ID"`
+	Title           string `json:"title" jsonschema:"the new title"`
+	Description     string `json:"description,omitempty" jsonschema:"the new description"`
+	ExpectedVersion int    `json:"expected_version,omitempty" jsonschema:"optimistic-concurrency guard: the task version you last read; the write fails with a version-conflict error if the task changed since. Omit (or 0) to force-write."`
 }
 
 type ListBoardsArgs struct{}
@@ -442,7 +446,14 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
 	}
 
-	if err := taskSystem.UpdateStatus(t.ID, task.Status(args.Status)); err != nil {
+	if args.ExpectedVersion > 0 {
+		if err := taskSystem.UpdateStatusIfVersion(t.ID, task.Status(args.Status), args.ExpectedVersion); err != nil {
+			if errors.Is(err, store.ErrVersionConflict) {
+				return versionConflictResult(args.ID), nil, nil
+			}
+			return nil, nil, fmt.Errorf("failed to update task status: %w", err)
+		}
+	} else if err := taskSystem.UpdateStatus(t.ID, task.Status(args.Status)); err != nil {
 		return nil, nil, fmt.Errorf("failed to update task status: %w", err)
 	}
 
@@ -453,6 +464,20 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 			},
 		},
 	}, nil, nil
+}
+
+// versionConflictResult formats the clean, agent-facing tool error returned
+// when an expected_version guard fails: it tells the caller to re-read and
+// retry rather than surfacing the raw store error.
+func versionConflictResult(id int) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{
+				Text: fmt.Sprintf("task #%d changed since you read it (version conflict); re-read with get_task and retry", id),
+			},
+		},
+	}
 }
 
 func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, any, error) {
@@ -496,7 +521,14 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
 	}
 
-	if err := taskSystem.UpdatePriority(t.ID, args.Priority); err != nil {
+	if args.ExpectedVersion > 0 {
+		if err := taskSystem.UpdatePriorityIfVersion(t.ID, args.Priority, args.ExpectedVersion); err != nil {
+			if errors.Is(err, store.ErrVersionConflict) {
+				return versionConflictResult(args.ID), nil, nil
+			}
+			return nil, nil, fmt.Errorf("failed to update task priority: %w", err)
+		}
+	} else if err := taskSystem.UpdatePriority(t.ID, args.Priority); err != nil {
 		return nil, nil, fmt.Errorf("failed to update task priority: %w", err)
 	}
 
@@ -526,7 +558,14 @@ func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest,
 		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
 	}
 
-	if err := taskSystem.Update(t.ID, args.Title, args.Description); err != nil {
+	if args.ExpectedVersion > 0 {
+		if err := taskSystem.UpdateIfVersion(t.ID, args.Title, args.Description, args.ExpectedVersion); err != nil {
+			if errors.Is(err, store.ErrVersionConflict) {
+				return versionConflictResult(args.ID), nil, nil
+			}
+			return nil, nil, fmt.Errorf("failed to update task: %w", err)
+		}
+	} else if err := taskSystem.Update(t.ID, args.Title, args.Description); err != nil {
 		return nil, nil, fmt.Errorf("failed to update task: %w", err)
 	}
 

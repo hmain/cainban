@@ -90,6 +90,7 @@ type item struct {
 	Description string     `dynamodbav:"description,omitempty"`
 	Status      string     `dynamodbav:"status,omitempty"`
 	Priority    int        `dynamodbav:"priority"`
+	Version     int        `dynamodbav:"version,omitempty"`
 	DeletedAt   *time.Time `dynamodbav:"deleted_at,omitempty"`
 	CreatedAt   time.Time  `dynamodbav:"created_at,omitempty"`
 	UpdatedAt   time.Time  `dynamodbav:"updated_at,omitempty"`
@@ -169,6 +170,7 @@ func (s *Store) CreateWithPriority(boardID int, title, description string, prior
 		Description: description,
 		Status:      task.StatusTodo,
 		Priority:    priorityLevel,
+		Version:     1,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
@@ -227,6 +229,7 @@ func (s *Store) taskItem(t *task.Task) item {
 		Description: t.Description,
 		Status:      string(t.Status),
 		Priority:    t.Priority,
+		Version:     t.Version,
 		DeletedAt:   t.DeletedAt,
 		CreatedAt:   t.CreatedAt,
 		UpdatedAt:   t.UpdatedAt,
@@ -242,6 +245,7 @@ func (it item) toTask() *task.Task {
 		Description: it.Description,
 		Status:      task.Status(it.Status),
 		Priority:    it.Priority,
+		Version:     it.Version,
 		DeletedAt:   it.DeletedAt,
 		CreatedAt:   it.CreatedAt,
 		UpdatedAt:   it.UpdatedAt,
@@ -341,11 +345,17 @@ func (s *Store) ListByStatus(boardID int, status task.Status) ([]*task.Task, err
 }
 
 // updateTaskFields applies a set of field updates to a task item (default
-// board) and always bumps updated_at. Returns an error if the task is missing.
+// board), always bumps updated_at, and always increments version (every write
+// bumps the optimistic-concurrency version). Returns an error if the task is
+// missing.
 func (s *Store) updateTaskFields(id int, expr string, names map[string]string, values map[string]ddbtypes.AttributeValue) error {
 	now := s.now().UTC()
 	values[":updated"] = &ddbtypes.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)}
-	fullExpr := expr + ", updated_at = :updated"
+	values[":one"] = &ddbtypes.AttributeValueMemberN{Value: "1"}
+	// version = if_not_exists(version, :zero) + :one bumps a missing (legacy)
+	// attribute from 0 to 1 as well as an existing counter.
+	values[":zero"] = &ddbtypes.AttributeValueMemberN{Value: "0"}
+	fullExpr := expr + ", updated_at = :updated, version = if_not_exists(version, :zero) + :one"
 	_, err := s.client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
 		TableName: aws.String(s.table),
 		Key: map[string]ddbtypes.AttributeValue{
@@ -361,6 +371,70 @@ func (s *Store) updateTaskFields(id int, expr string, names map[string]string, v
 		var cf *ddbtypes.ConditionalCheckFailedException
 		if errors.As(err, &cf) {
 			return fmt.Errorf("task with id %d not found", id)
+		}
+		return fmt.Errorf("failed to update task %d: %w", id, err)
+	}
+	return nil
+}
+
+// updateTaskFieldsIfVersion is the optimistic-concurrency variant of
+// updateTaskFields: it applies the update only if the stored version equals
+// expectedVersion, atomically incrementing version and bumping updated_at.
+//
+// Legacy items have NO version attribute and read as version 0, so when
+// expectedVersion == 0 the guard also accepts a missing attribute
+// (attribute_not_exists(version) OR version = :expected). On a
+// ConditionalCheckFailedException it re-GETs the item: a missing item is a
+// not-found error; an existing one is a genuine ErrVersionConflict.
+func (s *Store) updateTaskFieldsIfVersion(id int, expectedVersion int, expr string, names map[string]string, values map[string]ddbtypes.AttributeValue) error {
+	now := s.now().UTC()
+	values[":updated"] = &ddbtypes.AttributeValueMemberS{Value: now.Format(time.RFC3339Nano)}
+	values[":one"] = &ddbtypes.AttributeValueMemberN{Value: "1"}
+	values[":zero"] = &ddbtypes.AttributeValueMemberN{Value: "0"}
+	values[":expected"] = &ddbtypes.AttributeValueMemberN{Value: strconv.Itoa(expectedVersion)}
+
+	fullExpr := expr + ", updated_at = :updated, version = if_not_exists(version, :zero) + :one"
+	versionGuard := "version = :expected"
+	if expectedVersion == 0 {
+		versionGuard = "(attribute_not_exists(version) OR version = :expected)"
+	}
+	condition := "attribute_exists(PK) AND " + versionGuard
+
+	_, err := s.client.UpdateItem(context.TODO(), &dynamodb.UpdateItemInput{
+		TableName: aws.String(s.table),
+		Key: map[string]ddbtypes.AttributeValue{
+			"PK": &ddbtypes.AttributeValueMemberS{Value: s.boardPK(1)},
+			"SK": &ddbtypes.AttributeValueMemberS{Value: taskSK(id)},
+		},
+		UpdateExpression:          aws.String(fullExpr),
+		ExpressionAttributeNames:  names,
+		ExpressionAttributeValues: values,
+		ConditionExpression:       aws.String(condition),
+	})
+	if err != nil {
+		var cf *ddbtypes.ConditionalCheckFailedException
+		if errors.As(err, &cf) {
+			// Distinguish not-found from a real version conflict.
+			out, getErr := s.client.GetItem(context.TODO(), &dynamodb.GetItemInput{
+				TableName: aws.String(s.table),
+				Key: map[string]ddbtypes.AttributeValue{
+					"PK": &ddbtypes.AttributeValueMemberS{Value: s.boardPK(1)},
+					"SK": &ddbtypes.AttributeValueMemberS{Value: taskSK(id)},
+				},
+			})
+			if getErr != nil {
+				return fmt.Errorf("failed to resolve update conflict for task %d: %w", id, getErr)
+			}
+			if len(out.Item) == 0 {
+				return fmt.Errorf("task with id %d not found", id)
+			}
+			var it item
+			if unmErr := attributevalue.UnmarshalMap(out.Item, &it); unmErr != nil {
+				return fmt.Errorf("task #%d changed since you read it (expected version %d): %w",
+					id, expectedVersion, task.ErrVersionConflict)
+			}
+			return fmt.Errorf("task #%d changed since you read it (stored version %d, expected %d): %w",
+				id, it.Version, expectedVersion, task.ErrVersionConflict)
 		}
 		return fmt.Errorf("failed to update task %d: %w", id, err)
 	}
@@ -411,6 +485,54 @@ func (s *Store) UpdatePriority(id int, priority interface{}) error {
 
 // Delete soft-deletes a task (SQLite default behavior).
 func (s *Store) Delete(id int) error { return s.SoftDelete(id) }
+
+// UpdateStatusIfVersion updates a task's status only if the stored version
+// matches expectedVersion, atomically incrementing version. On mismatch it
+// returns ErrVersionConflict.
+func (s *Store) UpdateStatusIfVersion(id int, status task.Status, expectedVersion int) error {
+	if !task.IsValidStatus(string(status)) {
+		return fmt.Errorf("invalid status: %s", status)
+	}
+	return s.updateTaskFieldsIfVersion(id, expectedVersion,
+		"SET #s = :status",
+		map[string]string{"#s": "status"},
+		map[string]ddbtypes.AttributeValue{":status": &ddbtypes.AttributeValueMemberS{Value: string(status)}},
+	)
+}
+
+// UpdateIfVersion updates a task's title and description only if the stored
+// version matches expectedVersion, atomically incrementing version. On mismatch
+// it returns ErrVersionConflict.
+func (s *Store) UpdateIfVersion(id int, title, description string, expectedVersion int) error {
+	if err := task.ValidateTitle(title); err != nil {
+		return err
+	}
+	return s.updateTaskFieldsIfVersion(id, expectedVersion,
+		"SET title = :title, description = :desc",
+		nil,
+		map[string]ddbtypes.AttributeValue{
+			":title": &ddbtypes.AttributeValueMemberS{Value: title},
+			":desc":  &ddbtypes.AttributeValueMemberS{Value: description},
+		},
+	)
+}
+
+// UpdatePriorityIfVersion updates a task's priority only if the stored version
+// matches expectedVersion, atomically incrementing version. On mismatch it
+// returns ErrVersionConflict.
+func (s *Store) UpdatePriorityIfVersion(id int, priority interface{}, expectedVersion int) error {
+	priorityLevel, err := task.ParsePriority(priority)
+	if err != nil {
+		return err
+	}
+	return s.updateTaskFieldsIfVersion(id, expectedVersion,
+		"SET priority = :priority",
+		nil,
+		map[string]ddbtypes.AttributeValue{
+			":priority": &ddbtypes.AttributeValueMemberN{Value: strconv.Itoa(priorityLevel)},
+		},
+	)
+}
 
 // SoftDelete marks a task deleted without removing the item.
 func (s *Store) SoftDelete(id int) error {

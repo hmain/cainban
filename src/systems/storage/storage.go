@@ -80,6 +80,7 @@ func (db *DB) initialize() error {
 		description TEXT,
 		status TEXT NOT NULL DEFAULT 'todo',
 		priority INTEGER DEFAULT 0,
+		version INTEGER NOT NULL DEFAULT 0,
 		deleted_at DATETIME NULL,
 		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
 		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -128,6 +129,7 @@ func (db *DB) migrate() error {
 
 	hasDeletedAt := false
 	hasBoardTaskID := false
+	hasVersion := false
 	for rows.Next() {
 		var cid int
 		var name, dataType string
@@ -144,6 +146,9 @@ func (db *DB) migrate() error {
 		}
 		if name == "board_task_id" {
 			hasBoardTaskID = true
+		}
+		if name == "version" {
+			hasVersion = true
 		}
 	}
 
@@ -172,6 +177,16 @@ func (db *DB) migrate() error {
 		_, err = db.conn.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_board_task_id ON tasks(board_id, board_task_id)")
 		if err != nil {
 			return fmt.Errorf("failed to create board_task_id index: %w", err)
+		}
+	}
+
+	// Add version column for optimistic concurrency if it doesn't exist.
+	// Legacy rows default to 0, which the *IfVersion guards treat as the
+	// initial version so an expected_version of 0 matches an un-migrated task.
+	if !hasVersion {
+		_, err = db.conn.Exec("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 0")
+		if err != nil {
+			return fmt.Errorf("failed to add version column: %w", err)
 		}
 	}
 

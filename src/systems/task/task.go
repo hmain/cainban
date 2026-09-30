@@ -2,11 +2,20 @@ package task
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 )
+
+// ErrVersionConflict is the canonical optimistic-concurrency sentinel. It lives
+// here (not in package store) because store imports task, so task cannot import
+// store without a cycle. store re-exports it as store.ErrVersionConflict, and
+// the SQLite backend below returns it directly; both name the same error value,
+// so errors.Is(err, store.ErrVersionConflict) matches conflicts from either
+// backend.
+var ErrVersionConflict = errors.New("version conflict")
 
 // Status represents the state of a task
 type Status string
@@ -141,6 +150,7 @@ type Task struct {
 	Description string     `json:"description"`
 	Status      Status     `json:"status"`
 	Priority    int        `json:"priority"`
+	Version     int        `json:"version"` // optimistic-concurrency version; legacy rows read as 0
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
@@ -181,8 +191,8 @@ func (s *System) CreateWithPriority(boardID int, title, description string, prio
 	}
 
 	query := `
-		INSERT INTO tasks (board_id, board_task_id, title, description, status, priority)
-		VALUES (?, ?, ?, ?, ?, ?)
+		INSERT INTO tasks (board_id, board_task_id, title, description, status, priority, version)
+		VALUES (?, ?, ?, ?, ?, ?, 1)
 		RETURNING id, created_at, updated_at
 	`
 
@@ -200,6 +210,7 @@ func (s *System) CreateWithPriority(boardID int, title, description string, prio
 	task.Description = description
 	task.Status = StatusTodo
 	task.Priority = priorityLevel
+	task.Version = 1
 
 	return &task, nil
 }
@@ -207,14 +218,14 @@ func (s *System) CreateWithPriority(boardID int, title, description string, prio
 // GetByID retrieves a task by ID
 func (s *System) GetByID(id int) (*Task, error) {
 	query := `
-		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
+		SELECT id, board_id, board_task_id, title, description, status, priority, version, deleted_at, created_at, updated_at
 		FROM tasks WHERE id = ? AND deleted_at IS NULL
 	`
 
 	var task Task
 	err := s.db.QueryRow(query, id).Scan(
 		&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
-		&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
+		&task.Status, &task.Priority, &task.Version, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -229,14 +240,14 @@ func (s *System) GetByID(id int) (*Task, error) {
 // GetByBoardTaskID retrieves a task by board-scoped task ID
 func (s *System) GetByBoardTaskID(boardID, boardTaskID int) (*Task, error) {
 	query := `
-		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
+		SELECT id, board_id, board_task_id, title, description, status, priority, version, deleted_at, created_at, updated_at
 		FROM tasks WHERE board_id = ? AND board_task_id = ? AND deleted_at IS NULL
 	`
 
 	var task Task
 	err := s.db.QueryRow(query, boardID, boardTaskID).Scan(
 		&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
-		&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
+		&task.Status, &task.Priority, &task.Version, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -251,7 +262,7 @@ func (s *System) GetByBoardTaskID(boardID, boardTaskID int) (*Task, error) {
 // List retrieves all tasks for a board
 func (s *System) List(boardID int) ([]*Task, error) {
 	query := `
-		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
+		SELECT id, board_id, board_task_id, title, description, status, priority, version, deleted_at, created_at, updated_at
 		FROM tasks WHERE board_id = ? AND deleted_at IS NULL
 		ORDER BY priority DESC, board_task_id ASC
 	`
@@ -267,7 +278,7 @@ func (s *System) List(boardID int) ([]*Task, error) {
 		var task Task
 		err := rows.Scan(
 			&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
-			&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
+			&task.Status, &task.Priority, &task.Version, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan task: %w", err)
@@ -285,7 +296,7 @@ func (s *System) List(boardID int) ([]*Task, error) {
 // ListByStatus retrieves tasks by status for a board
 func (s *System) ListByStatus(boardID int, status Status) ([]*Task, error) {
 	query := `
-		SELECT id, board_id, board_task_id, title, description, status, priority, deleted_at, created_at, updated_at
+		SELECT id, board_id, board_task_id, title, description, status, priority, version, deleted_at, created_at, updated_at
 		FROM tasks WHERE board_id = ? AND status = ? AND deleted_at IS NULL
 		ORDER BY priority DESC, board_task_id ASC
 	`
@@ -301,7 +312,7 @@ func (s *System) ListByStatus(boardID int, status Status) ([]*Task, error) {
 		var task Task
 		err := rows.Scan(
 			&task.ID, &task.BoardID, &task.BoardTaskID, &task.Title, &task.Description,
-			&task.Status, &task.Priority, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
+			&task.Status, &task.Priority, &task.Version, &task.DeletedAt, &task.CreatedAt, &task.UpdatedAt,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan task: %w", err)
@@ -324,7 +335,7 @@ func (s *System) UpdateStatus(id int, status Status) error {
 
 	query := `
 		UPDATE tasks 
-		SET status = ?, updated_at = CURRENT_TIMESTAMP
+		SET status = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`
 
@@ -353,7 +364,7 @@ func (s *System) Update(id int, title, description string) error {
 
 	query := `
 		UPDATE tasks 
-		SET title = ?, description = ?, updated_at = CURRENT_TIMESTAMP
+		SET title = ?, description = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?
 	`
 
@@ -388,7 +399,7 @@ func (s *System) UpdatePriority(id int, priority interface{}) error {
 
 	query := `
 		UPDATE tasks 
-		SET priority = ?, updated_at = CURRENT_TIMESTAMP 
+		SET priority = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP 
 		WHERE id = ?
 	`
 
@@ -404,6 +415,118 @@ func (s *System) UpdatePriority(id int, priority interface{}) error {
 
 	if rowsAffected == 0 {
 		return fmt.Errorf("task with ID %d not found", id)
+	}
+
+	return nil
+}
+
+// versionConflictOrNotFound is called after a guarded UPDATE affected 0 rows.
+// It distinguishes a genuine not-found from an optimistic-concurrency conflict
+// by re-checking whether a live (non-deleted) task with that id exists. A
+// missing task yields a not-found error; an existing one means the stored
+// version no longer matched expectedVersion, so it wraps ErrVersionConflict.
+func (s *System) versionConflictOrNotFound(id, expectedVersion int) error {
+	var stored int
+	err := s.db.QueryRow("SELECT version FROM tasks WHERE id = ? AND deleted_at IS NULL", id).Scan(&stored)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("task with id %d not found", id)
+		}
+		return fmt.Errorf("failed to check task version: %w", err)
+	}
+	return fmt.Errorf("task #%d changed since you read it (stored version %d, expected %d): %w",
+		id, stored, expectedVersion, ErrVersionConflict)
+}
+
+// UpdateStatusIfVersion updates a task's status only if the stored version
+// matches expectedVersion, atomically incrementing the version. On mismatch it
+// returns ErrVersionConflict.
+func (s *System) UpdateStatusIfVersion(id int, status Status, expectedVersion int) error {
+	if !IsValidStatus(string(status)) {
+		return fmt.Errorf("invalid status: %s", status)
+	}
+
+	query := `
+		UPDATE tasks 
+		SET status = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND deleted_at IS NULL AND version = ?
+	`
+
+	result, err := s.db.Exec(query, status, id, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("failed to update task status: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return s.versionConflictOrNotFound(id, expectedVersion)
+	}
+
+	return nil
+}
+
+// UpdateIfVersion updates a task's title and description only if the stored
+// version matches expectedVersion, atomically incrementing the version. On
+// mismatch it returns ErrVersionConflict.
+func (s *System) UpdateIfVersion(id int, title, description string, expectedVersion int) error {
+	if err := ValidateTitle(title); err != nil {
+		return err
+	}
+
+	query := `
+		UPDATE tasks 
+		SET title = ?, description = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ? AND deleted_at IS NULL AND version = ?
+	`
+
+	result, err := s.db.Exec(query, title, description, id, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("failed to update task: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return s.versionConflictOrNotFound(id, expectedVersion)
+	}
+
+	return nil
+}
+
+// UpdatePriorityIfVersion updates a task's priority only if the stored version
+// matches expectedVersion, atomically incrementing the version. On mismatch it
+// returns ErrVersionConflict.
+func (s *System) UpdatePriorityIfVersion(id int, priority interface{}, expectedVersion int) error {
+	priorityLevel, err := ParsePriority(priority)
+	if err != nil {
+		return err
+	}
+
+	query := `
+		UPDATE tasks 
+		SET priority = ?, version = version + 1, updated_at = CURRENT_TIMESTAMP 
+		WHERE id = ? AND deleted_at IS NULL AND version = ?
+	`
+
+	result, err := s.db.Exec(query, priorityLevel, id, expectedVersion)
+	if err != nil {
+		return fmt.Errorf("failed to update task priority: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to check update result: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return s.versionConflictOrNotFound(id, expectedVersion)
 	}
 
 	return nil

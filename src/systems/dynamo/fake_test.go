@@ -134,6 +134,28 @@ func (f *fakeDDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ 
 				return nil, &ddbtypes.ConditionalCheckFailedException{}
 			}
 		}
+		// Optimistic-concurrency guard(s):
+		//   "version = :expected"
+		//   "(attribute_not_exists(version) OR version = :expected)"
+		if strings.Contains(cond, "version = :expected") {
+			expected := ""
+			if v, ok := in.ExpressionAttributeValues[":expected"].(*ddbtypes.AttributeValueMemberN); ok {
+				expected = v.Value
+			}
+			curVersion := ""
+			hasVersion := false
+			if exists {
+				if v, ok := item["version"].(*ddbtypes.AttributeValueMemberN); ok {
+					curVersion = v.Value
+					hasVersion = true
+				}
+			}
+			allowMissing := strings.Contains(cond, "attribute_not_exists(version)")
+			match := hasVersion && curVersion == expected
+			if !match && !(allowMissing && !hasVersion) {
+				return nil, &ddbtypes.ConditionalCheckFailedException{}
+			}
+		}
 	}
 	if !exists {
 		return nil, &ddbtypes.ConditionalCheckFailedException{}
@@ -157,6 +179,26 @@ func (f *fakeDDB) UpdateItem(_ context.Context, in *dynamodb.UpdateItemInput, _ 
 	// clause (the store always uses simple "field = :placeholder" forms).
 	if idx := strings.Index(expr, "SET "); idx >= 0 {
 		setClause := expr[idx+len("SET "):]
+		// Special-case the optimistic-concurrency version bump, which is the
+		// only non-simple assignment the store issues:
+		//   "version = if_not_exists(version, :zero) + :one"
+		// Its inner comma would break a naive comma-split, so evaluate it and
+		// strip it from the clause before splitting the remaining simple
+		// "field = :placeholder" assignments.
+		const versionBump = "version = if_not_exists(version, :zero) + :one"
+		if strings.Contains(setClause, versionBump) {
+			cur := 0
+			if v, ok := item["version"].(*ddbtypes.AttributeValueMemberN); ok {
+				cur, _ = strconv.Atoi(v.Value)
+			}
+			inc := 1
+			if v, ok := in.ExpressionAttributeValues[":one"].(*ddbtypes.AttributeValueMemberN); ok {
+				inc, _ = strconv.Atoi(v.Value)
+			}
+			item["version"] = &ddbtypes.AttributeValueMemberN{Value: strconv.Itoa(cur + inc)}
+			setClause = strings.ReplaceAll(setClause, ", "+versionBump, "")
+			setClause = strings.ReplaceAll(setClause, versionBump, "")
+		}
 		for _, assign := range strings.Split(setClause, ",") {
 			parts := strings.SplitN(assign, "=", 2)
 			if len(parts) != 2 {
