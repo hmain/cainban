@@ -70,17 +70,21 @@ type backfillEnvelope struct {
 // subscription capability, so a fast reject is the correct answer.
 func BackfillMirrorHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.Header.Get(mcpMethodHeader) != "" || r.Body == nil {
+		// Only POST requests with a body carry a JSON-RPC method. Anything else
+		// (GET, DELETE, empty body) is not ours to inspect.
+		if r.Method != http.MethodPost || r.Body == nil {
 			next.ServeHTTP(w, r)
 			return
 		}
 
-		// Read a bounded prefix of the body, then restore the FULL body for the
-		// downstream handler regardless of what we found.
+		// Peek a bounded prefix of the body, then restore the FULL body for the
+		// downstream handler regardless of what we find. We peek BEFORE the
+		// Mcp-Method-header guard because the subscriptions/listen rejection
+		// below must fire whether or not the client set that header — Claude
+		// Code sets Mcp-Method: subscriptions/listen on the request, so a guard
+		// that skips on a present header would skip the rejection too.
 		body, err := io.ReadAll(io.LimitReader(r.Body, maxBackfillPeekBytes+1))
 		if err != nil {
-			// Can't peek — leave the request exactly as-is and let the SDK deal
-			// with it. Restore whatever we managed to read plus the rest.
 			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), r.Body))
 			next.ServeHTTP(w, r)
 			return
@@ -90,9 +94,7 @@ func BackfillMirrorHeaders(next http.Handler) http.Handler {
 			r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(body), rest))
 		}
 
-		// Only derive headers when the peek captured the whole body (a request
-		// larger than the cap is a tool-call payload that would have carried the
-		// header anyway; we don't guess at a truncated envelope).
+		// A request larger than the cap is a tool-call payload we don't parse.
 		if len(body) > maxBackfillPeekBytes {
 			restore()
 			next.ServeHTTP(w, r)
@@ -114,20 +116,30 @@ func BackfillMirrorHeaders(next http.Handler) http.Handler {
 			return
 		}
 
-		// Reject subscriptions/listen HERE, before the SDK ever sees it.
+		// Reject subscriptions/listen HERE, before the SDK ever sees it, and
+		// BEFORE the Mcp-Method-header guard below — Claude Code sends this
+		// request WITH Mcp-Method: subscriptions/listen set, so gating on an
+		// absent header would let it through to the SDK (confirmed in the
+		// deployed diagnostic logs).
 		//
-		// The SDK decides to hold this POST open as a long-lived SSE stream from
-		// the BODY method (ephemeralConnectOpts sets isSubscriptionsListen by
-		// parsing the body, not the header), so merely omitting the Mcp-Method
-		// header does NOT prevent the stream — the request still reaches the
-		// streaming path and blocks until the Lambda's 30s timeout. cainban is
-		// mounted Stateless:true and advertises no subscription/list-changed
-		// capability, so it has nothing to stream and no business holding a
-		// stream open at all. Returning a JSON-RPC method-not-found now short-
-		// circuits the SDK entirely: the client gets an instant answer and stops
-		// retrying, and no 30s-billed streaming invocation is created.
+		// The SDK decides to hold this POST open as a long-lived stream from the
+		// BODY method (ephemeralConnectOpts sets isSubscriptionsListen by parsing
+		// the body), so the request otherwise blocks until the Lambda's 30s
+		// timeout. cainban is mounted Stateless:true and advertises no
+		// subscription/list-changed capability, so it has nothing to stream.
+		// Returning a JSON-RPC method-not-found short-circuits the SDK entirely:
+		// the client gets an instant answer and no 30s-billed invocation is made.
 		if env.Method == "subscriptions/listen" {
 			writeMethodNotFound(w, trimmed)
+			return
+		}
+
+		// Back-fill the Mcp-Method / Mcp-Name headers only when the client did
+		// not set Mcp-Method. This is the original shim behavior that keeps the
+		// connection stable; it must never overwrite a client-set header.
+		if r.Header.Get(mcpMethodHeader) != "" {
+			restore()
+			next.ServeHTTP(w, r)
 			return
 		}
 

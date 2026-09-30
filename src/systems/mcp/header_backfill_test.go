@@ -82,6 +82,34 @@ func TestBackfill_Initialize_StillBackfilled(t *testing.T) {
 	}
 }
 
+func TestBackfill_SubscriptionsListen_RejectedEvenWithHeader(t *testing.T) {
+	cap := &captureHandler{}
+	h := BackfillMirrorHeaders(cap)
+	// Claude Code sends subscriptions/listen WITH Mcp-Method already set. The
+	// rejection must fire regardless of the header, or the request reaches the
+	// SDK and opens a 30s-billed stream (confirmed in deployed diagnostic logs).
+	body := `{"jsonrpc":"2.0","id":"listen:0","method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set(mcpMethodHeader, "subscriptions/listen") // the client sets this
+	h.ServeHTTP(rec, req)
+
+	if cap.method != "" || cap.body != "" {
+		t.Errorf("downstream handler was reached (method=%q); listen must be rejected even with the header set", cap.method)
+	}
+	var resp struct {
+		Error struct {
+			Code int `json:"code"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not valid JSON: %v", err)
+	}
+	if resp.Error.Code != -32601 {
+		t.Errorf("error code = %d, want -32601", resp.Error.Code)
+	}
+}
+
 func TestBackfill_ToolsCall_SetsMethodAndName(t *testing.T) {
 	cap := &captureHandler{}
 	h := BackfillMirrorHeaders(cap)
