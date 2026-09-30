@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -33,24 +34,37 @@ func doPost(t *testing.T, h http.Handler, body string, hdr map[string]string) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 }
 
-func TestBackfill_SubscriptionsListen_NotBackfilled(t *testing.T) {
+func TestBackfill_SubscriptionsListen_RejectedFast(t *testing.T) {
 	cap := &captureHandler{}
 	h := BackfillMirrorHeaders(cap)
-	// subscriptions/listen is INTENTIONALLY excluded: on a stateless server the
-	// SDK would otherwise hold this POST open as a 30s-billed SSE stream. Leaving
-	// the header off lets the SDK reject it instantly (-32020) without dropping
-	// the connection. So the shim must pass it through UNMODIFIED.
-	body := `{"jsonrpc":"2.0","id":1,"method":"subscriptions/listen","params":{}}`
-	doPost(t, h, body, nil)
+	// subscriptions/listen must be REJECTED here with a JSON-RPC -32601, before
+	// the SDK sees it — otherwise the SDK opens a 30s-billed SSE stream (it
+	// decides that from the body method, not the header). The downstream handler
+	// must NOT be reached, and the response must echo the request id.
+	body := `{"jsonrpc":"2.0","id":7,"method":"subscriptions/listen","params":{}}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	h.ServeHTTP(rec, req)
 
-	if cap.method != "" {
-		t.Errorf("Mcp-Method = %q, want empty (subscriptions/listen must NOT be back-filled)", cap.method)
+	if cap.method != "" || cap.body != "" {
+		t.Errorf("downstream handler was reached (method=%q body=%q); listen must be short-circuited", cap.method, cap.body)
 	}
-	if cap.name != "" {
-		t.Errorf("Mcp-Name = %q, want empty", cap.name)
+	var resp struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
-	if cap.body != body {
-		t.Errorf("downstream body = %q, want unchanged %q", cap.body, body)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("response not valid JSON: %v (body=%q)", err, rec.Body.String())
+	}
+	if resp.Error.Code != -32601 {
+		t.Errorf("error code = %d, want -32601 (method not found)", resp.Error.Code)
+	}
+	if string(resp.ID) != "7" {
+		t.Errorf("response id = %s, want 7 (echoed request id)", resp.ID)
 	}
 }
 

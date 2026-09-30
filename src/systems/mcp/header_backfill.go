@@ -62,10 +62,12 @@ type backfillEnvelope struct {
 // mismatch is still the SDK's to reject. The body is restored verbatim for the
 // downstream handler.
 //
-// subscriptions/listen is INTENTIONALLY excluded (see below): cainban has no
-// notifications to stream, and back-filling that method makes the SDK hold the
-// POST open as a 30s-billed SSE stream. Leaving its header off lets the SDK
-// reject it instantly — cheaper, and it does not drop the connection.
+// subscriptions/listen is handled specially: it is REJECTED here with a
+// JSON-RPC method-not-found, before the SDK sees it. The SDK decides to hold a
+// listen POST open as a long-lived SSE stream from the BODY method (not the
+// header), so omitting the header does not stop the stream — only short-
+// circuiting the request does. cainban is stateless and advertises no
+// subscription capability, so a fast reject is the correct answer.
 func BackfillMirrorHeaders(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.Header.Get(mcpMethodHeader) != "" || r.Body == nil {
@@ -112,18 +114,20 @@ func BackfillMirrorHeaders(next http.Handler) http.Handler {
 			return
 		}
 
-		// Deliberately do NOT back-fill subscriptions/listen. cainban advertises
-		// no subscription/list-changed capability, so it has nothing to stream —
-		// but the SDK, once the header validates, holds that POST open as a
-		// long-lived SSE stream until the Lambda's timeout (a full 30s of billed
-		// wall-clock, observed 3x per Claude Code connect). Leaving the header
-		// OFF lets the SDK reject the request instantly with -32020, which the
-		// client absorbs without dropping the connection. Every other method IS
-		// back-filled (that is what keeps the connection stable); this single
-		// method is the one where the fast reject is strictly cheaper.
+		// Reject subscriptions/listen HERE, before the SDK ever sees it.
+		//
+		// The SDK decides to hold this POST open as a long-lived SSE stream from
+		// the BODY method (ephemeralConnectOpts sets isSubscriptionsListen by
+		// parsing the body, not the header), so merely omitting the Mcp-Method
+		// header does NOT prevent the stream — the request still reaches the
+		// streaming path and blocks until the Lambda's 30s timeout. cainban is
+		// mounted Stateless:true and advertises no subscription/list-changed
+		// capability, so it has nothing to stream and no business holding a
+		// stream open at all. Returning a JSON-RPC method-not-found now short-
+		// circuits the SDK entirely: the client gets an instant answer and stops
+		// retrying, and no 30s-billed streaming invocation is created.
 		if env.Method == "subscriptions/listen" {
-			restore()
-			next.ServeHTTP(w, r)
+			writeMethodNotFound(w, trimmed)
 			return
 		}
 
@@ -138,6 +142,36 @@ func BackfillMirrorHeaders(next http.Handler) http.Handler {
 		restore()
 		next.ServeHTTP(w, r)
 	})
+}
+
+// writeMethodNotFound replies to a single JSON-RPC request with a -32601
+// (method not found) error, echoing the request's id so the client can match
+// the response. cainban implements no subscriptions/listen, so this is the
+// correct spec answer — and returning it here (instead of passing the request
+// to the SDK) is what prevents the SDK from opening a long-lived stream.
+func writeMethodNotFound(w http.ResponseWriter, reqBody []byte) {
+	var idHolder struct {
+		ID json.RawMessage `json:"id"`
+	}
+	_ = json.Unmarshal(reqBody, &idHolder)
+	id := idHolder.ID
+	if len(id) == 0 {
+		id = json.RawMessage("null")
+	}
+	resp := struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{JSONRPC: "2.0", ID: id}
+	resp.Error.Code = -32601 // JSON-RPC method not found
+	resp.Error.Message = "method not found: subscriptions/listen (server advertises no subscription capability)"
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK) // JSON-RPC errors ride a 200; the error is in-band
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // mirrorName returns the Mcp-Name value the spec requires for the name-bearing
