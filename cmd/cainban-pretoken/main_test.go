@@ -126,8 +126,8 @@ func (f *fakeReader) GetDefaultRepo(_ context.Context, subject string) (string, 
 	return f.defaults[subject], nil
 }
 
-func eventWith(sub string, attrs map[string]string) events.CognitoEventUserPoolsPreTokenGen {
-	ev := events.CognitoEventUserPoolsPreTokenGen{}
+func eventWith(sub string, attrs map[string]string) events.CognitoEventUserPoolsPreTokenGenV2_0 {
+	ev := events.CognitoEventUserPoolsPreTokenGenV2_0{}
 	if attrs == nil {
 		attrs = map[string]string{}
 	}
@@ -252,12 +252,18 @@ func TestHandler_SetsOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	claims := out.Response.ClaimsOverrideDetails.ClaimsToAddOrOverride
-	if claims["repos"] != `["acme/repo-a"]` {
-		t.Errorf("repos override = %q, want [\"acme/repo-a\"]", claims["repos"])
-	}
-	if claims["default_repo"] != "acme/repo-a" {
-		t.Errorf("default_repo override = %q, want acme/repo-a", claims["default_repo"])
+	// V2: claims must be on BOTH the id token AND the access token. The access
+	// token is what the MCP resource server receives, so assert it explicitly.
+	det := out.Response.ClaimsAndScopeOverrideDetails
+	idClaims := det.IDTokenGeneration.ClaimsToAddOrOverride
+	acClaims := det.AccessTokenGeneration.ClaimsToAddOrOverride
+	for name, claims := range map[string]map[string]interface{}{"id": idClaims, "access": acClaims} {
+		if claims["repos"] != `["acme/repo-a"]` {
+			t.Errorf("%s-token repos override = %v, want [\"acme/repo-a\"]", name, claims["repos"])
+		}
+		if claims["default_repo"] != "acme/repo-a" {
+			t.Errorf("%s-token default_repo override = %v, want acme/repo-a", name, claims["default_repo"])
+		}
 	}
 }
 
@@ -272,8 +278,9 @@ func TestHandler_NoGrantsNoOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	if len(out.Response.ClaimsOverrideDetails.ClaimsToAddOrOverride) != 0 {
-		t.Errorf("expected no claim overrides, got %v", out.Response.ClaimsOverrideDetails.ClaimsToAddOrOverride)
+	det := out.Response.ClaimsAndScopeOverrideDetails
+	if len(det.IDTokenGeneration.ClaimsToAddOrOverride) != 0 || len(det.AccessTokenGeneration.ClaimsToAddOrOverride) != 0 {
+		t.Errorf("expected no claim overrides, got id=%v access=%v", det.IDTokenGeneration.ClaimsToAddOrOverride, det.AccessTokenGeneration.ClaimsToAddOrOverride)
 	}
 }
 
@@ -287,9 +294,9 @@ func TestHandler_NilReaderFallsBackToAttributes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
 	}
-	claims := out.Response.ClaimsOverrideDetails.ClaimsToAddOrOverride
+	claims := out.Response.ClaimsAndScopeOverrideDetails.AccessTokenGeneration.ClaimsToAddOrOverride
 	if claims["repos"] != `["acme/repo-a"]` {
-		t.Errorf("repos override = %q, want [\"acme/repo-a\"]", claims["repos"])
+		t.Errorf("repos override = %v, want [\"acme/repo-a\"]", claims["repos"])
 	}
 }
 

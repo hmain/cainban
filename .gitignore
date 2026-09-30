@@ -66,3 +66,11 @@ coverage.html
 
 # Claude Code settings
 .claude/
+
+# KiroCrew local session settings
+.kiro/
+
+# Stray compiled cmd binaries (name == cmd dir basename)
+/cainban-pretoken
+/cainban-connect
+/cainban

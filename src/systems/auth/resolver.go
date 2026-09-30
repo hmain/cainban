@@ -1,9 +1,19 @@
 package auth
 
 import (
+	"log"
 	"net/http"
 	"strings"
 )
+
+// repoKeys returns the authorized repo set as a slice for diagnostic logging.
+func repoKeys(m map[string]struct{}) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
 
 // HeaderTargetRepo is the request header a client uses to name the repo it wants
 // to act on (repo IDENTITY). It is UNTRUSTED: it only selects which repo, and is
@@ -53,10 +63,12 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 
 	target, err := r.resolveTarget(identity, req, argRepo)
 	if err != nil {
+		log.Printf("cainban auth: 403 resolveTarget failed (sub=%q default_repo=%q repos=%v): %v", identity.Subject, identity.DefaultRepo, repoKeys(identity.Repos), err)
 		return nil, err // 403 (no repo the caller may touch)
 	}
 
 	if !identity.authorizes(target) {
+		log.Printf("cainban auth: 403 not authorized for target=%q (sub=%q repos=%v)", target, identity.Subject, repoKeys(identity.Repos))
 		return nil, forbidden("caller not authorized for repo " + target)
 	}
 

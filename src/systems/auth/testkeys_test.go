@@ -39,6 +39,7 @@ type tokenClaims struct {
 	Issuer      string   `json:"iss,omitempty"`
 	Subject     string   `json:"sub,omitempty"`
 	Audience    string   `json:"aud,omitempty"`
+	ClientID    string   `json:"client_id,omitempty"`
 	Expiry      int64    `json:"exp,omitempty"`
 	NotBefore   int64    `json:"nbf,omitempty"`
 	IssuedAt    int64    `json:"iat,omitempty"`
