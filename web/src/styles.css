@@ -192,3 +192,64 @@ code {
   color: var(--muted);
   font-size: 0.9rem;
 }
+
+/* Activity feed (P5A.4) — reuses the design-system variables. */
+.activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.activity-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas:
+    "badge body"
+    "badge meta";
+  gap: 0.1rem 0.6rem;
+  align-items: start;
+  padding: 0.55rem 0.7rem;
+  background: #0b0d12;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.activity-badge {
+  grid-area: badge;
+  align-self: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.1rem 0.5rem;
+  white-space: nowrap;
+}
+
+.activity-badge.activity-created {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.activity-badge.activity-status_changed {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.activity-body {
+  grid-area: body;
+  color: var(--text);
+  font-size: 0.925rem;
+  word-break: break-word;
+}
+
+.activity-meta {
+  grid-area: meta;
+  color: var(--muted);
+  font-size: 0.8rem;
+}

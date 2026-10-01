@@ -16,6 +16,7 @@ import {
   getIdToken,
   type AvailableRepo,
 } from "./connectApi";
+import { listActivity, type ActivityEvent } from "./mcpApi";
 
 type AuthState = "loading" | "signed-out" | "signed-in";
 
@@ -123,6 +124,7 @@ function SignedIn({ email }: { email: string }) {
       <LinkIdentity />
       <Repos selectedRepo={selectedRepo} onSelectRepo={setSelectedRepo} />
       <McpConfig selectedRepo={selectedRepo} />
+      <ActivityFeed selectedRepo={selectedRepo} />
     </>
   );
 }
@@ -512,6 +514,137 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
       </section>
     </>
   );
+}
+
+// ActivityFeed shows the append-only "who changed what" audit feed (P5A.4) for
+// the selected repo's board, read from the MCP `list_activity` tool over the
+// MCP JSON-RPC endpoint (see mcpApi.ts). Read-only: it never mutates the board.
+// It renders nothing until a repo is selected, and loads on demand (and on an
+// explicit Refresh) so a normal visit makes no MCP call.
+function ActivityFeed({ selectedRepo }: { selectedRepo: string }) {
+  const [events, setEvents] = useState<ActivityEvent[]>([]);
+  const [state, setState] = useState<"idle" | "loading" | "ready" | "error">(
+    "idle",
+  );
+  const [error, setError] = useState("");
+  const [empty, setEmpty] = useState(false);
+
+  const load = useCallback(async () => {
+    if (!selectedRepo) return;
+    setState("loading");
+    setError("");
+    try {
+      const res = await listActivity(selectedRepo, { limit: 50 });
+      setEvents(res.events);
+      setEmpty(res.empty);
+      setState("ready");
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      setState("error");
+    }
+  }, [selectedRepo]);
+
+  // Auto-load when the selected repo changes (and clear when deselected).
+  useEffect(() => {
+    if (!selectedRepo) {
+      setEvents([]);
+      setEmpty(false);
+      setState("idle");
+      setError("");
+      return;
+    }
+    void load();
+  }, [selectedRepo, load]);
+
+  if (!selectedRepo) return null;
+
+  return (
+    <section className="card" aria-labelledby="activity-heading">
+      <div className="account-row">
+        <h2 id="activity-heading">Recent activity</h2>
+        <button
+          className="link"
+          disabled={state === "loading"}
+          onClick={() => void load()}
+        >
+          {state === "loading" ? "Loading…" : "Refresh"}
+        </button>
+      </div>
+      <p className="hint">
+        Who changed what on <code>{selectedRepo}</code>’s board, newest first.
+        This is a read-only audit feed — it never changes a task.
+      </p>
+
+      {state === "loading" && <p className="hint">Loading activity…</p>}
+      {state === "error" && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+      {state === "ready" && empty && (
+        <p className="hint">
+          No activity recorded yet. Activity appears here once tasks are created
+          or moved on this board.
+        </p>
+      )}
+      {state === "ready" && !empty && (
+        <ul className="activity-list">
+          {events.map((ev, i) => (
+            <li key={`${ev.Timestamp}-${ev.BoardTaskID}-${i}`} className="activity-item">
+              <span className={`activity-badge activity-${ev.Action}`}>
+                {actionLabel(ev.Action)}
+              </span>
+              <span className="activity-body">
+                <code>#{ev.BoardTaskID}</code> {ev.Detail}
+              </span>
+              <span className="activity-meta">
+                {formatActor(ev.Actor)} · {formatWhen(ev.Timestamp)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+// actionLabel maps the server action strings to short human labels.
+function actionLabel(action: string): string {
+  switch (action) {
+    case "created":
+      return "created";
+    case "status_changed":
+      return "moved";
+    case "priority_changed":
+      return "priority";
+    case "updated":
+      return "edited";
+    default:
+      return action || "changed";
+  }
+}
+
+// formatActor shows the email/sub as-is, but shortens an opaque UUID sub to a
+// prefix so the line stays readable when email was unavailable.
+function formatActor(actor: string): string {
+  if (!actor) return "unknown";
+  if (actor.includes("@")) return actor;
+  // Looks like an opaque sub (UUID) — show a short prefix.
+  if (/^[0-9a-f-]{20,}$/i.test(actor)) return `${actor.slice(0, 8)}…`;
+  return actor;
+}
+
+// formatWhen renders an RFC3339 timestamp as a compact local time, falling back
+// to the raw string if it does not parse.
+function formatWhen(ts: string): string {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return ts;
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 // BearerTokenFallback is the LEGACY manual path for MCP clients that cannot run
