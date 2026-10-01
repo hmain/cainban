@@ -77,6 +77,18 @@ connect:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
 		-o .build/connect/bootstrap ./cmd/cainban-connect
 
+# Verify the LIVE API edge after a deploy: asserts the CORS preflight succeeds
+# (unauthenticated OPTIONS -> 2xx with CORS headers) AND that the data path is
+# still auth-gated (unauthenticated request -> 401). Endpoints are read from the
+# deployed CloudFormation stack outputs, so no URLs are hardcoded. Requires AWS
+# creds that can read the stack (AWS_PROFILE / AWS_REGION) + curl. Run this after
+# every `cdk deploy` of the MCP/Connect APIs.
+#   make verify-deploy                   # defaults to CainbanPhase2Stack
+#   STACK=... ORIGIN=... make verify-deploy
+.PHONY: verify-deploy
+verify-deploy:
+	./infra/scripts/verify-deploy.sh
+
 # Development setup
 dev: setup-hooks
 	$(GOMOD) download
@@ -124,4 +136,5 @@ help:
 	@echo "  docker-build Build Docker image"
 	@echo "  docker-run   Run Docker container"
 	@echo "  coverage     Generate test coverage report"
+	@echo "  verify-deploy Smoke-check the live API edge (CORS preflight + auth gate)"
 	@echo "  help         Show this help message"
