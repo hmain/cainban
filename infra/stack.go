@@ -619,6 +619,31 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Integration: mcpIntegration,
 	})
 
+	// CORS preflight exemption. The two routes above use HttpMethod_ANY, which
+	// also matches the browser's OPTIONS preflight — and because the API's
+	// DefaultAuthorizer is the JWT authorizer, that preflight (which carries NO
+	// Authorization header, as browsers never send one on preflight) is rejected
+	// 401 BEFORE the managed CORS layer can answer it. The browser then sees a
+	// non-2xx preflight and blocks the real POST ("preflight does not have HTTP
+	// ok status"). Declaring explicit OPTIONS routes with HttpNoneAuthorizer makes
+	// them more specific than the ANY route, so OPTIONS bypasses the authorizer
+	// and the managed CorsPreflight responds (204). This mirrors why the Connect
+	// API never hit this: its routes declare explicit GET/POST/DELETE methods, so
+	// OPTIONS never matched a route under its authorizer. The authed data methods
+	// (POST/GET on these paths) are unchanged and still require a valid JWT.
+	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_OPTIONS},
+		Integration: mcpIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
+	})
+	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/{proxy+}"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_OPTIONS},
+		Integration: mcpIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
+	})
+
 	// --- RFC 9728 protected-resource metadata route (MCP OAuth step a) ---
 	//
 	// GET /.well-known/oauth-protected-resource is PUBLIC — a spec-compliant MCP
