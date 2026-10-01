@@ -139,6 +139,29 @@ func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetad
 	mux.Handle(WellKnownAuthServerPath, authServerMeta)
 	// Everything else (root, /{proxy+}, tool calls) goes through the JWT auth +
 	// tenant-resolution gate. "/" is the ServeMux catch-all.
-	mux.Handle("/", authed)
+	//
+	// EXCEPT the CORS preflight: a browser sends an unauthenticated OPTIONS
+	// request before the real POST, with no Authorization header. It must get a
+	// 2xx or the browser blocks the real call. The API Gateway managed CORS layer
+	// attaches the Access-Control-* response headers; we just need a 2xx body-less
+	// reply here (reached via the no-auth OPTIONS routes in infra/stack.go, so
+	// the authorizer does not 401 the preflight first). We answer OPTIONS before
+	// delegating to the authed handler so a preflight never needs a token.
+	mux.Handle("/", corsPreflightOr(authed))
 	return mux
+}
+
+// corsPreflightOr returns a handler that answers an OPTIONS preflight with 204
+// (no body) and delegates every other method to next. The managed API Gateway
+// CORS layer adds the Access-Control-* headers to the response; this only
+// needs to supply the 2xx status a browser preflight requires. It never runs
+// auth, which is correct — a CORS preflight carries no credentials by design.
+func corsPreflightOr(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

@@ -133,6 +133,17 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	if otherRec.Code != http.StatusUnauthorized {
 		t.Errorf("protected route status = %d, want 401 (auth must gate non-well-known)", otherRec.Code)
 	}
+
+	// (c) a CORS preflight (OPTIONS) must be answered publicly with 204 — a
+	// browser sends it with no Authorization header before the real POST, and a
+	// non-2xx preflight makes the browser block the whole call. The auth gate
+	// must NOT run on it (the spy handler never fires).
+	preflightReq := httptest.NewRequest(http.MethodOptions, "/", nil)
+	preflightRec := httptest.NewRecorder()
+	mux.ServeHTTP(preflightRec, preflightReq)
+	if preflightRec.Code != http.StatusNoContent {
+		t.Errorf("CORS preflight status = %d, want 204 (preflight must bypass auth and succeed)", preflightRec.Code)
+	}
 }
 
 // TestWriteAuthError_WWWAuthenticateResourceMetadata proves a 401 from a
