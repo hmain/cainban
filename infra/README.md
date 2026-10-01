@@ -125,9 +125,20 @@ export CDK_DEFAULT_REGION=eu-north-1
 cd infra
 cdk bootstrap aws://<ACCOUNT_ID>/eu-north-1
 
-# review then deploy:
-cdk diff
-cdk deploy CainbanPhase2Stack
+# one-time per account/region:
+cd infra
+cdk bootstrap aws://<ACCOUNT_ID>/eu-north-1
+cdk diff CainbanPhase2Stack     # review it FULLY before deploying
+
+# PREFERRED deploy, from the repo root: builds the bundles, runs `cdk deploy`,
+# then AUTOMATICALLY runs `make verify-deploy` (a live smoke check of the API
+# edge — CORS preflight must be 2xx, data path must still 401 unauth), so a
+# broken edge cannot ship unnoticed:
+cd ..
+make deploy
+
+# Manual equivalent (if you deploy by hand, run verify-deploy yourself after):
+#   make bundles && cd infra && cdk deploy CainbanPhase2Stack && cd .. && make verify-deploy
 ```
 
 After deploy, the stack outputs `McpApiUrl` (the MCP HTTP API endpoint),

@@ -89,6 +89,22 @@ connect:
 verify-deploy:
 	./infra/scripts/verify-deploy.sh
 
+# One canonical deploy flow: build every Lambda bundle, cdk deploy the stack,
+# then AUTOMATICALLY run verify-deploy as the final gate so a broken live edge
+# (e.g. a CORS preflight the authorizer 401s) can never ship unnoticed. Use this
+# instead of a bare `cdk deploy` — it guarantees the bundles are fresh and the
+# edge is smoke-checked. The CDK CLI and stack are overridable:
+#   make deploy
+#   CDK="npx -y aws-cdk@2.1143.0" STACK=CainbanPhase2Stack make deploy
+# Requires AWS creds (AWS_PROFILE / AWS_REGION) that can deploy + read the stack.
+# NOTE: review `cdk diff` yourself BEFORE this — deploy does not gate on the diff.
+CDK ?= npx -y aws-cdk@2.1143.0
+STACK ?= CainbanPhase2Stack
+.PHONY: deploy
+deploy: bundles
+	cd infra && $(CDK) deploy $(STACK) --require-approval never
+	STACK=$(STACK) $(MAKE) verify-deploy
+
 # Development setup
 dev: setup-hooks
 	$(GOMOD) download
@@ -137,4 +153,5 @@ help:
 	@echo "  docker-run   Run Docker container"
 	@echo "  coverage     Generate test coverage report"
 	@echo "  verify-deploy Smoke-check the live API edge (CORS preflight + auth gate)"
+	@echo "  deploy       Build bundles, cdk deploy, then auto-run verify-deploy"
 	@echo "  help         Show this help message"
