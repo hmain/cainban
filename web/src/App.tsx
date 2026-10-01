@@ -2,8 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   signInWithRedirect,
   signOut,
-  getCurrentUser,
-  fetchUserAttributes,
+  fetchAuthSession,
 } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { ENTRA_PROVIDER_NAME, MCP_API, MCP_CLI_CLIENT_ID, MCP_OAUTH_CALLBACK_PORT } from "./amplify";
@@ -26,15 +25,23 @@ export function App() {
 
   const refreshUser = useCallback(async () => {
     try {
-      await getCurrentUser();
-      let mail = "";
-      try {
-        const attrs = await fetchUserAttributes();
-        mail = attrs.email ?? "";
-      } catch {
-        // Attributes may be unavailable briefly right after redirect; ignore.
+      // Read the session + email from the ID TOKEN, not fetchUserAttributes().
+      // fetchUserAttributes() calls Cognito's GetUser API, which requires the
+      // `aws.cognito.signin.user.admin` scope on the access token — the SPA only
+      // requests `openid email profile`, so GetUser returns a 400
+      // (NotAuthorizedException: Access Token does not have required scopes).
+      // The email is already a claim in the ID token (guaranteed by the `email`
+      // scope + the Entra attribute map), so we read it there: no cognito-idp
+      // round-trip, no 400, and it works for federated (Entra) users whose
+      // attributes GetUser serves poorly anyway.
+      const session = await fetchAuthSession();
+      const idToken = session.tokens?.idToken;
+      if (!idToken) {
+        setAuthState("signed-out");
+        return;
       }
-      setEmail(mail);
+      const claimEmail = idToken.payload?.email;
+      setEmail(typeof claimEmail === "string" ? claimEmail : "");
       setAuthState("signed-in");
     } catch {
       setAuthState("signed-out");
