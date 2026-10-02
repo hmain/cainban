@@ -127,7 +127,7 @@ Add to `~/.kiro/settings/mcp.json`:
 
 2. **For Claude Desktop**:
 
-Add to your Claude Desktop configuration:
+Add to your Claude Desktop configuration (update the `command` path to point to your cainban binary):
 ```json
 {
   "mcpServers": {
@@ -139,7 +139,9 @@ Add to your Claude Desktop configuration:
 }
 ```
 
-2. **Update the path** in the configuration above to point to your cainban binary location.
+> **Project-specific access.** To share cainban with a team, commit an `mcp.json`
+> with the same `mcpServers` block to your project root — teammates get cainban
+> automatically when they clone the repo.
 
 3. **Test the integration**:
    
@@ -274,40 +276,6 @@ cainban is designed to work seamlessly with AI agents:
 - JSON-RPC 2.0 compliant
 - Compatible with Kiro, Claude Desktop, and other MCP clients
 - Tools available: `create_task`, `list_tasks`, `update_task_status`, `get_task`, `update_task_priority`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task_links`, `delete_task`, `restore_task`, `list_boards`, `change_board`, `list_activity` (see the full table below)
-
-## MCP Setup Options
-
-### Global Access (Recommended)
-Configure cainban globally to use from any project:
-
-```json
-{
-  "mcpServers": {
-    "cainban": {
-      "command": "/path/to/cainban/cainban",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-### Project-Specific Access
-For team projects, add to your project root:
-
-```bash
-cat > mcp.json << 'EOF'
-{
-  "mcpServers": {
-    "cainban": {
-      "command": "/path/to/cainban/cainban",
-      "args": ["mcp"]
-    }
-  }
-}
-EOF
-```
-
-Team members will automatically get cainban access when they clone your project.
 
 ## Available MCP Tools
 
