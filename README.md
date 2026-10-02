@@ -8,7 +8,8 @@ It also enables AI code generators through its MCP server to decompose tasks int
 - **Command-line first**: All operations can be performed via CLI without launching a GUI application
 - **Interactive TUI**: Full-featured Terminal User Interface with viewport-based scrolling for large task lists
 - **MCP Integration**: Built-in Model Context Protocol (MCP) server for seamless AI integration
-- **SQLite Backend**: Lightweight, file-based database storage
+- **Two backends, one codebase**: local **SQLite** (CLI/TUI) and a serverless **DynamoDB** path (the AWS Lambda MCP deployment) — selected at runtime via `CAINBAN_BACKEND`
+- **Serverless multi-user**: a stateless MCP server on AWS Lambda (arm64) behind an API Gateway HTTP API + **Cognito JWT authorizer**, with repo-scoped tenancy and a GitHub-App "connect" flow — see [Serverless deployment](#serverless-deployment) and [`infra/README.md`](infra/README.md)
 
 ## Quick Start
 
@@ -257,11 +258,11 @@ Reference tasks by partial titles instead of remembering IDs:
 
 ## Architecture
 
-- **Language**: Go
-- **Database**: SQLite
-- **Systems Architecture**: Modular systems in `src/systems/` for extensibility
+- **Language**: Go (single language across CLI, Lambdas, and CDK infra)
+- **Storage**: pluggable via `CAINBAN_BACKEND` — **SQLite** (local CLI/TUI, requires CGO) or **DynamoDB** (serverless, pure Go, used by the Lambda)
+- **Systems Architecture**: Modular systems in `src/systems/` (`auth`, `board`, `task`, `mcp`, `store`, `storage`, `dynamo`, `grants`, `github`, `connect`, `crypter`, `secrets`)
 - **TUI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea) with viewport-based scrolling
-- **Terminal UI**: Full-featured responsive interface with professional UX patterns
+- **Serverless**: three arm64 `provided.al2023` Lambdas (`cainban-mcp`, `cainban-pretoken`, `cainban-connect`) provisioned by an **AWS CDK (Go)** app in [`infra/`](infra/); a Cognito user pool + JWT authorizer; DynamoDB data + grants tables; a React/Vite SPA (`web/`) hosted on Amplify
 - TODO: **Markdown Rendering**: [Glow](https://github.com/charmbracelet/glow)
 
 ## AI Integration
@@ -274,7 +275,7 @@ cainban is designed to work seamlessly with AI agents:
 - Real-time board state synchronization
 - JSON-RPC 2.0 compliant
 - Compatible with Amazon Q CLI, Claude Desktop, and other MCP clients
-- Tools available: create_task, list_tasks, update_task_status, get_task, update_task_priority, update_task, list_boards, change_board
+- Tools available: `create_task`, `list_tasks`, `update_task_status`, `get_task`, `update_task_priority`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task_links`, `delete_task`, `restore_task`, `list_boards`, `change_board`, `list_activity` (see the full table below)
 
 ## MCP Setup Options
 
@@ -327,12 +328,14 @@ Team members will automatically get cainban access when they clone your project.
 | `restore_task` | Restore a soft-deleted task | "Restore task 8" |
 | `list_boards` | List all available boards | "Show me all my boards" |
 | `change_board` | Switch to a different board | "Switch to the project board" |
+| `list_activity` | Recent task activity (who changed what), newest first | "Show recent activity on this board" |
 
 ## Development
 
 ### Prerequisites
-- Go 1.21+
-- SQLite3
+- Go 1.26+ (matches `go.mod` and CI)
+- SQLite3 (for the local backend; CGO required)
+- For serverless work: AWS CDK v2 CLI, AWS credentials, and `curl` (see [`infra/README.md`](infra/README.md))
 
 ### Setup
 ```bash
@@ -384,31 +387,185 @@ All tests use in-memory databases for fast, isolated testing.
 - **Database**: Enable SQLite foreign key constraints and WAL mode
 - **Memory**: Use `go test -memprofile` for memory leak detection
 
-### Git Workflow
+### Development → Production Workflow
 
-This project follows a feature branch workflow:
+cainban ships through a gated pipeline: nothing reaches the live serverless edge
+without passing local gates, CI, a reviewed infra diff, and a post-deploy smoke
+check. The flow below is the single source of truth — the Makefile targets and
+CI jobs it names are what actually run.
 
-1. Create feature branches from `main`
-2. Use descriptive branch names: `feature/board-system`, `fix/sqlite-connection`
-3. Squash commits before merging to maintain clean history
-4. Delete branches after successful merge
-5. No compatibility bridges - breaking changes are acceptable during development
+```
+ feature branch ──▶ local gates ──▶ PR + CI ──▶ review ──▶ merge to main
+                       │                │                      │
+             make quality (lint+test)   test.yml              │
+             make bundles (if infra)    (vet · test -race ·   │
+                                         golangci-lint ·      │
+                                         build)               ▼
+                                                       cdk diff (review FULLY)
+                                                              │
+                                                              ▼
+                                                   make deploy  ─────────────┐
+                                                   (bundles → cdk deploy →    │
+                                                    verify-deploy smoke check)│
+                                                              │              │
+                                              Amplify auto-build (web/)       │
+                                                              ▼              ▼
+                                                        PRODUCTION (live edge verified)
+```
+
+#### 1. Branch
+
+Feature branches off `main`, descriptive names (`feature/activity-feed`,
+`fix/cors-preflight`, `docs/...`). Never commit to `main` directly; never force-push a protected branch.
+
+#### 2. Local gates (before every push)
+
+```bash
+make quality          # golangci-lint + go test -race -cover ./...  (lint + test in one)
+# or individually:
+make lint             # golangci-lint
+make test             # go test -race -cover ./...
+go vet ./...          # also run in CI
+
+# If you touched infra or any Lambda handler, confirm the bundles still build:
+make bundles          # builds .build/lambda + .build/pretoken + .build/connect (arm64)
+
+# If you touched the SPA:
+cd web && npm ci && npm run build
+```
+
+Pre-commit hooks enforce the basics automatically — install once with `make setup-hooks`.
+
+#### 3. Pull request + CI
+
+Open a PR against `main`. The **`test.yml`** workflow runs three required jobs on
+every push/PR: **test** (`go mod verify`, `go vet`, `go test -race` + coverage),
+**lint** (`golangci-lint`), and **build** (`go build ./cmd/cainban`). All must be
+green. CI runs Go **1.26** across every job.
+
+> **Dependabot PRs** do not get a human-authored review by default, and a CLEAN
+> status only means "no checks failed" — not "verified good". Check out the
+> branch and run the full gate locally before merging, especially major bumps
+> (a bad transitive bump can break `npm install`/`go build` without failing a
+> status check).
+
+#### 4. Review the infra diff (infra/Lambda changes only)
+
+Code merging to `main` does **not** auto-deploy the serverless stack — deploys are
+a deliberate, credentialed step. Before deploying, **always** review the CloudFormation diff and read it in full:
+
+```bash
+make bundles
+cd infra && npx -y aws-cdk@2.1143.0 diff CainbanPhase2Stack
+```
+
+Look for: unexpected resource replacements/deletions, IAM widening, and
+context-param drift (a flagless deploy can silently revert live values set
+out-of-band — the real Entra/URL values live in the tracked `infra/cdk.json`
+context so a plain deploy stays idempotent).
+
+#### 5. Deploy (the one canonical command)
+
+```bash
+export AWS_PROFILE=aws-test-hamin AWS_REGION=eu-north-1
+make deploy
+```
+
+`make deploy` is the only sanctioned path. It chains three steps so none can be
+skipped:
+
+1. `make bundles` — rebuild all three Lambda bundles from the current source
+   (never trust a stale `.build/` after a branch switch).
+2. `cdk deploy CainbanPhase2Stack` — apply the stack.
+3. `make verify-deploy` — **auto-runs** as the final gate.
+
+#### 6. Post-deploy verification (automatic, and re-runnable)
+
+`make verify-deploy` smoke-checks the **live API edge** using endpoints read from
+the deployed CloudFormation stack outputs (nothing hardcoded):
+
+- the **CORS preflight** must succeed (unauthenticated `OPTIONS` → 2xx with
+  `Access-Control-Allow-Origin`), on both `/` and a sub-path;
+- the **data path must stay auth-gated** (unauthenticated request → 401), so a
+  preflight fix can never silently open the data plane.
+
+It exits non-zero on any failure (CI/pipeline-friendly). Run it standalone any
+time against a deployed stack: `STACK=CainbanPhase2Stack make verify-deploy`.
+
+This check exists because a CORS/authorizer regression is invisible to unit tests
+and `cdk synth` — it only appears when a real browser hits the real gateway.
+**When a frontend starts calling a new backend origin, the cross-origin preflight
+is a first-class acceptance test, not an afterthought.**
+
+#### 7. The web SPA
+
+The `web/` SPA deploys separately via **Amplify Hosting**, which auto-builds on
+push to `main` (outside GitHub Actions). After a merge that changes `web/`, confirm
+the Amplify build succeeded on the merge commit and the live bundle carries the
+change before calling it shipped.
+
+#### Rollback
+
+Infra/Lambda: redeploy the previous known-good commit with `make deploy` (the
+stack is CloudFormation-managed; `cdk deploy` of an earlier source rolls forward
+to that state). The DynamoDB tables are `RETAIN` + PITR, so data survives a stack
+issue. The SPA rolls back by reverting the offending commit on `main` (Amplify
+rebuilds).
+
+### Git conventions
+
+1. Feature branches from `main`; descriptive names.
+2. Squash-merge to keep `main` history clean; delete the branch after merge.
+3. No compatibility bridges — breaking changes are acceptable during development.
+4. Verify a merge actually landed the tip commits on `main` before trusting a
+   "merged" status.
 
 ### Project Structure
 
 ```
 cainban/
-├── cmd/cainban/           # Main CLI application
-├── src/systems/           # Modular system components
-│   ├── board/            # Board management system
-│   ├── task/             # Task management system
-│   ├── mcp/              # MCP server system
-│   └── storage/          # Database abstraction system
-├── internal/             # Internal packages
-├── docs/                 # Documentation
-├── tests/                # Test files and test documentation
-└── examples/             # Usage examples
+├── cmd/
+│   ├── cainban/           # Main CLI + TUI application
+│   ├── cainban-lambda/    # Serverless MCP handler (arm64 Lambda bootstrap)
+│   ├── cainban-pretoken/  # Cognito pre-token-generation trigger
+│   └── cainban-connect/   # GitHub-connect OAuth API Lambda
+├── src/systems/           # Modular systems
+│   ├── auth/             # Signature-first JWT validation + repo-scoped tenancy
+│   ├── board/ task/      # Board + task domain logic
+│   ├── mcp/              # MCP server + tool dispatch
+│   ├── store/ storage/   # Storage abstraction
+│   ├── dynamo/           # DynamoDB backend (serverless)
+│   ├── grants/           # Per-user repo grants (grants table)
+│   ├── github/ connect/  # GitHub App + connect flow
+│   └── crypter/ secrets/ # KMS + Secrets Manager helpers
+├── src/tui/              # Bubble Tea TUI
+├── infra/               # AWS CDK (Go) app + verify-deploy.sh
+├── web/                 # React/Vite SPA (Amplify-hosted)
+├── docs/                # Design docs, RFCs, setup guides
+└── tests/               # Integration tests
 ```
+
+## Serverless deployment
+
+Beyond the local CLI, cainban runs as a multi-user serverless deployment: a
+stateless MCP server on **AWS Lambda (arm64)** behind an **API Gateway HTTP API +
+Cognito JWT authorizer**, a **DynamoDB** backend with repo-scoped tenancy
+(`REPO#<owner>/<repo>#`), and a **GitHub-App connect flow** that verifies a user's
+repo access server-side before granting it. Clients send
+`Authorization: Bearer <Cognito JWT>` (no request signing).
+
+Everything deploy-related — the full stack, IAM surface, env vars, the auth
+design, the pre-token trigger, and the grants model — is documented in
+[`infra/README.md`](infra/README.md). Deploy with the gated flow in
+[Development → Production Workflow](#development--production-workflow)
+(`make deploy`, which auto-runs `make verify-deploy`).
+
+Related guides:
+- [`docs/agent-via-mcp.md`](docs/agent-via-mcp.md) — using cainban as an AI agent's task backend over MCP
+- [`docs/github-app-setup.md`](docs/github-app-setup.md) — register the GitHub App and connect a repo
+- [`docs/mcp-oauth-setup.md`](docs/mcp-oauth-setup.md) — MCP OAuth client setup
+- [`docs/serverless-multiuser-plan.md`](docs/serverless-multiuser-plan.md) — the full design + isolation proof
+- [`docs/rfc-security-review.md`](docs/rfc-security-review.md) — security review findings + remediation plan
 
 ## Troubleshooting
 
@@ -429,26 +586,13 @@ chmod +x ./cainban
 ls -la ~/.cainban/cainban.db
 ```
 
-## Status:
+## Status
 
-**Current Version**: v0.2.1 - Board-Scoped Task IDs  
-**Major Features**: Board-scoped task IDs, automatic migration, enhanced MCP efficiency, GitHub Actions releases  
-**Previous**: Official Go MCP SDK, enhanced AI compatibility, interactive TUI with viewport scrolling  
+**Local CLI/TUI**: stable — board-scoped task IDs, fuzzy search, task links, soft/hard delete, interactive TUI.
 
-## Recent Updates:
+**Serverless (multi-user)**: live — stateless MCP on Lambda behind a Cognito JWT authorizer, DynamoDB with repo-scoped tenancy, atomic per-board id counter, optimistic-concurrency `version` guard, an append-only activity feed (`list_activity`), and the GitHub-App connect flow + React/Vite connect SPA. A gated `make deploy` → `make verify-deploy` pipeline guards the live edge.
 
-### v0.2.1 - Board-Scoped Task IDs
-- **Board-Scoped Task IDs**: Each board now has its own task ID sequence (1, 2, 3, etc.)
-- **Automatic Migration**: Existing boards seamlessly upgrade to board-scoped IDs
-- **MCP Efficiency**: Reduced context overflow in AI conversations with smaller task IDs
-- **GitHub Actions**: Automatic releases with multi-platform binaries
-- **Backward Compatibility**: Internal global IDs preserved for database relationships
-
-### Key Benefits:
-- **Reduced Token Usage**: Task IDs are now 1-3 digits instead of large numbers
-- **Better UX**: Users see intuitive task numbers (#1, #2, #3) per board  
-- **AI-Friendly**: MCP operations use manageable task references
-- **Seamless Upgrade**: No manual migration needed - works automatically
+See [`docs/`](docs/) for the phase plans and the [security RFC](docs/rfc-security-review.md).
 
 
 ## Contributing
