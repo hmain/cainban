@@ -1,6 +1,6 @@
-# cainban infra (Phase 3 CDK)
+# cainban infra (CDK)
 
-AWS CDK (Go) app that provisions the serverless stack for cainban:
+This is the AWS CDK (Go) app that provisions cainban's serverless stack. What it creates:
 
 - **DynamoDB** single table `cainban` (on-demand, PITR, `RETAIN` on delete)
 - **DynamoDB** grants table `cainban-grants` (**Phase 4** — on-demand, PITR,
@@ -72,8 +72,7 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
 > repo is **403**. See the Authentication section below for the auth design and
 > the isolation model.
 
-Go CDK (not TypeScript) is used so the whole repo stays single-language: the
-Lambda handler and the infrastructure are both Go.
+The CDK app is written in Go so the whole repo stays one language: the Lambda handlers and the infrastructure are both Go.
 
 ## Deploy target
 
@@ -120,10 +119,6 @@ is required once per account/region before the first deploy.
 ```sh
 export AWS_PROFILE=aws-test-hamin
 export CDK_DEFAULT_REGION=eu-north-1
-
-# one-time per account/region:
-cd infra
-cdk bootstrap aws://<ACCOUNT_ID>/eu-north-1
 
 # one-time per account/region:
 cd infra
