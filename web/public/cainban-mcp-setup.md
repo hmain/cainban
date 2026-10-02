@@ -66,11 +66,17 @@ exhaustive):
 | Agent       | MCP config              | Location                     |
 | ----------- | ----------------------- | ---------------------------- |
 | Claude Code | `claude mcp add` / `.mcp.json` | CLI or project root   |
+| Kiro Crew   | `~/.kiro/crew/mcp.json` | gateway host (then `kirocrew restart`) |
 | Kiro        | `mcp.json`              | Kiro MCP settings            |
 | Cursor      | `.cursor/mcp.json`      | `.cursor/` directory         |
 | VS Code     | `.vscode/mcp.json`      | `.vscode/` directory         |
 
 **Success:** you know the tool and its MCP config target.
+
+Prefer a ready-made recipe below over deriving the steps: **Per-agent quick
+setup** has an exact, ordered recipe for each tool. If your tool is listed there,
+follow its recipe and skip to Step 3; the generic Step 2a/2b below is the
+fallback for a tool with no recipe.
 
 ### Step 2a (recommended): Register via OAuth — no token in config
 
@@ -104,6 +110,134 @@ authentication. Proceed to Step 3.
 If the client's settings later show the `X-Cainban-Repo` value as `[REDACTED]`,
 that's the client masking header values on display — the value is a non-secret
 repo selector and the stored config is unchanged. Leave it be.
+
+### Per-agent quick setup
+
+Ready-made recipes. Each is self-contained: register → where it loads → the one
+human step → verify. Substitute `<MCP_API>`, `<CLIENT_ID>`, and `<owner>/<repo>`
+from the connect page (an agent handed the setup prompt already has them). Follow
+your tool's recipe, then go to Step 4 to verify.
+
+#### Claude Code
+
+One command — Claude Code runs the OAuth itself:
+
+```
+claude mcp add --transport http --client-id <CLIENT_ID> cainban <MCP_API>
+```
+
+Set the repo by adding `"headers": { "X-Cainban-Repo": "<owner>/<repo>" }` to the
+entry it wrote, or rely on your token's `default_repo`. Authenticate with
+`/mcp → cainban → Authenticate` and finish the browser sign-in. Verify with
+`list_tasks`. If the callback page won't load but its URL has `?code=…`, relaunch
+with `MCP_OAUTH_CALLBACK_PORT=3118 claude` and retry.
+
+#### Kiro Crew runtime (this gateway)
+
+The agent config is layered: a writable source you edit, projected read-only into
+the agent spec by the gateway. Edit the writable source and let the gateway
+project it — never hand-edit the projection.
+
+1. Merge the cainban server into `~/.kiro/crew/mcp.json` (the highest-priority
+   **writable** MCP source; the gateway's config rebuild merges it into the agent
+   spec and auto-mounts the `@cainban` tools):
+
+   ```json
+   {
+     "mcpServers": {
+       "cainban": {
+         "type": "http",
+         "url": "<MCP_API>",
+         "client_id": "<CLIENT_ID>",
+         "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+       }
+     }
+   }
+   ```
+
+   Do **not** edit the projected `~/.kiro/agents/<agent>.json` (read-only,
+   gateway-owned), and do **not** add `allowedTools` to the entry — that waives
+   the governance ceiling and the gateway revokes it on the next rebuild.
+2. The gateway owner rebuilds the projection and restarts the gateway from a
+   **terminal** (`kirocrew restart`) — not from inside a chat, which would kill
+   the session mid-turn.
+3. Open a **fresh chat** after the restart. The runtime hits cainban's 401 and
+   raises an inline **Authorize** banner — click it and complete the sign-in.
+4. Verify in that chat: `list_tasks` for `<owner>/<repo>`. An empty board is
+   success.
+
+Runtime-specific gotcha: if the Authorize banner fails closed with "URL contained
+credential or exfiltration pattern," cainban's Cognito sign-in host isn't in the
+gateway's OAuth-endpoint allowlist. The gateway owner adds it to
+`~/.kiro/crew/oauth_endpoints.json` (hand-edit, no restart needed), using
+cainban's own Cognito domain and region:
+
+```json
+{ "additional_authorization_endpoints": [
+  { "host": "<cognito-domain>.auth.<region>.amazoncognito.com", "path": "/oauth2/authorize" }
+] }
+```
+
+#### Kiro
+
+Add the server to Kiro's MCP settings (`mcp.json`), merging into any existing
+`mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "type": "http",
+      "url": "<MCP_API>",
+      "client_id": "<CLIENT_ID>",
+      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+    }
+  }
+}
+```
+
+Reload Kiro's MCP servers, complete the browser sign-in when prompted, verify
+with `list_tasks`.
+
+#### Cursor
+
+Same entry in `.cursor/mcp.json` (project) or Cursor's global MCP config:
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "type": "http",
+      "url": "<MCP_API>",
+      "client_id": "<CLIENT_ID>",
+      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+    }
+  }
+}
+```
+
+Reload the window, complete the browser sign-in when Cursor prompts, verify with
+`list_tasks`.
+
+#### VS Code
+
+Same entry in `.vscode/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "type": "http",
+      "url": "<MCP_API>",
+      "client_id": "<CLIENT_ID>",
+      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+    }
+  }
+}
+```
+
+Reload the window / restart the MCP servers, complete the browser sign-in when
+prompted, verify with `list_tasks`.
 
 ### Step 2b (fallback only): Register with a bearer token
 
