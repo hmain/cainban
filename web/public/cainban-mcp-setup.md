@@ -132,7 +132,32 @@ entry it wrote, or rely on your token's `default_repo`. Authenticate with
 `list_tasks`. If the callback page won't load but its URL has `?code=…`, relaunch
 with `MCP_OAUTH_CALLBACK_PORT=3118 claude` and retry.
 
-#### Kiro Crew runtime (this gateway)
+#### Kiro Crew dashboard (Add Custom Server)
+
+The dashboard's **Settings → MCP Servers → Add Custom Server** paste box uses a
+stricter spec than the on-disk `mcp.json`: it accepts `url`, `clientId`,
+`scopes`, and `headers` only. It rejects `type` (transport is inferred from the
+URL) and the snake_case `client_id` — paste a block with those keys and it fails
+with `unknown spec key 'client_id'`. Use the camelCase `clientId` and drop
+`type`:
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "url": "<MCP_API>",
+      "clientId": "<CLIENT_ID>",
+      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+    }
+  }
+}
+```
+
+The dashboard shows the `headers` value masked after saving — that is display
+masking of a non-secret repo selector, not corruption. Then rebuild/restart and
+authenticate as in the runtime recipe below.
+
+#### Kiro Crew runtime (this gateway, config file)
 
 The agent config is layered: a writable source you edit, projected read-only into
 the agent spec by the gateway. Edit the writable source and let the gateway
