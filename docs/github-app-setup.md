@@ -1,23 +1,24 @@
 # cainban — GitHub App setup (operator checklist)
 
-This is the **operator** procedure to register the GitHub App that cainban's
-Phase 4 connect/verify flow uses, and to load its credentials into AWS Secrets
-Manager. It is a **human step done once**, out of band from the code — the code
-(`src/systems/github`, `src/systems/secrets`) only *reads* the finished secret
-at runtime and makes GitHub API calls with it. **No credential from this
-checklist ever goes into the repo, code, or the CDK template.**
+cainban's Phase 4 connect/verify flow needs a GitHub App of its own. This guide
+walks you through registering that App and loading its credentials into AWS
+Secrets Manager. You do this once, by hand, out of band from the code. At
+runtime the code (`src/systems/github`, `src/systems/secrets`) only reads the
+finished secret and uses it to call the GitHub API. No credential from this
+guide ever goes into the repo, the code, or the CDK template.
 
 > Phase 4 target: **github.com** only. Enterprise/GitLab are out of scope.
 
 ---
 
-## Why a GitHub App (not an OAuth App)
+## Why a GitHub App, and not an OAuth App
 
-cainban verifies a user's access to `owner/repo` **server-side** before writing
-a grant. A GitHub **App** gives fine-grained, per-repo permissions, is
-installable on an **organization** by an org admin, and authenticates as itself
-(App JWT) to discover which repos it covers — exactly what the org-repo
-verification needs. An OAuth App cannot do the installation-coverage check.
+cainban checks a user's access to `owner/repo` on the server before it writes a
+grant. A GitHub App is what makes that check possible. It gives you
+fine-grained, per-repo permissions, an org admin can install it on an
+organization, and it authenticates as itself with an App JWT to discover which
+repos it covers. That coverage check is the whole point, and an OAuth App can't
+do it.
 
 ---
 
@@ -31,15 +32,15 @@ testing).
 | --- | --- |
 | **GitHub App name** | e.g. `cainban-connect` (must be globally unique) |
 | **Homepage URL** | your cainban homepage or repo URL |
-| **Callback URL** | the P4.3 connect callback: `<ConnectApiUrl>connect/github/callback` — read `<ConnectApiUrl>` from the stack output after deploy (see below). You can register a placeholder now and update it once the stack is deployed. |
+| **Callback URL** | the P4.3 connect callback: `<ConnectApiUrl>connect/github/callback`. Read `<ConnectApiUrl>` from the stack output after deploy (see below). Register a placeholder now and update it once the stack is deployed. |
 | **Expire user authorization tokens** | ✅ enabled (short-lived user tokens) |
 | **Request user authorization (OAuth) during installation** | ✅ enabled (needed for the P4.3 OAuth leg that identifies the connecting user) |
-| **Webhook** | **☐ OFF** — uncheck **Active**. No webhook is used in Phase 4 (issue/PR sync is a later phase). Leave the webhook URL/secret blank. |
+| **Webhook** | **☐ OFF** — uncheck **Active**. Phase 4 uses no webhook (issue/PR sync comes in a later phase). Leave the webhook URL/secret blank. |
 | **Setup URL** | optional; leave blank for now |
 
 ## 2. Permissions (least privilege)
 
-Set **Repository permissions**:
+Give the App only what it needs. Set **Repository permissions**:
 
 | Permission | Access | Why |
 | --- | --- | --- |
@@ -52,36 +53,35 @@ Set **Organization permissions**:
 | --- | --- | --- |
 | **Members** | **Read-only** | enables `GET /orgs/{org}/members/{login}` (org-membership entitlement) |
 
-Leave every other permission at **No access**. Subscribe to **no** webhook
+Leave every other permission at **No access**, and subscribe to no webhook
 events.
 
 ## 3. Installability
 
-- **Where can this GitHub App be installed?** → **Any account** (so org admins
-  of customer orgs can install it) — or **Only on this account** if you are
-  scoping to a single org for now.
-- The App must be **installable on an organization** and installed by an **org
-  admin**, who chooses **all repos** or **selected repos**. cainban's
-  verification only ever returns `true` for a repo the installation actually
-  covers.
+- **Where can this GitHub App be installed?** → **Any account**, so org admins
+  of customer orgs can install it. Pick **Only on this account** instead if you
+  are scoping to a single org for now.
+- An org admin installs the App on an organization and chooses **all repos** or
+  **selected repos**. cainban's verification returns `true` only for a repo the
+  installation actually covers.
 
 ## 4. Generate credentials
 
-After creating the App, on its settings page:
+Once the App exists, grab four things from its settings page:
 
 1. **App ID** — note the numeric **App ID** (top of the page).
 2. **Client ID** — note the **Client ID** (`Iv1.…` / `Iv23…`).
-3. **Client secret** — **Generate a new client secret**; copy it now (shown
-   once). Used by the P4.3 OAuth leg.
-4. **Private key** — **Generate a private key**; a `.pem` (PKCS#1, header
+3. **Client secret** — **Generate a new client secret** and copy it now; GitHub
+   shows it once. The P4.3 OAuth leg uses it.
+4. **Private key** — **Generate a private key**. A `.pem` (PKCS#1, header
    `-----BEGIN RSA PRIVATE KEY-----`) downloads. This is the App's signing key
-   for the App JWT. **Store it only in Secrets Manager** (step 6) — never commit
-   it, never paste it into code or CDK.
+   for the App JWT. Keep it only in Secrets Manager (step 6). Never commit it,
+   and never paste it into code or CDK.
 
 ## 5. Install the App
 
 Install the App on the target **organization** (or user) and select the repos it
-should cover. Verification will only pass for covered repos.
+should cover. Verification passes only for covered repos.
 
 ## 5a. Finalize the App Callback URL (P4.3)
 
@@ -104,25 +104,25 @@ echo "${CONNECT_URL}connect/github/callback"
 ```
 
 Set that exact value as the App's **Callback URL** (GitHub → your App →
-**General** → *Identifying and authorizing users* → **Callback URL**). It must
-match the `redirect_uri` the connect Lambda sends; the stack passes the connect
-Lambda a `CAINBAN_CONNECT_REDIRECT_URI` only if you set that env var — leave it
+**General** → *Identifying and authorizing users* → **Callback URL**). It has to
+match the `redirect_uri` the connect Lambda sends. The stack passes the connect
+Lambda a `CAINBAN_CONNECT_REDIRECT_URI` only if you set that env var; leave it
 unset to rely on the App's registered default callback.
 
-> **Transport:** the `/connect/*` routes are fronted by an **API Gateway HTTP
-> API with a managed Cognito JWT authorizer** — every route requires
+> **Transport:** an **API Gateway HTTP API with a managed Cognito JWT
+> authorizer** fronts the `/connect/*` routes. Every route needs
 > `Authorization: Bearer <Cognito JWT>` (no SigV4). The **callback route
-> (`/connect/github/callback`) is deliberately exempt from the authorizer**:
-> it is a GitHub browser redirect that carries no JWT, and it authenticates from
-> the HMAC-signed, sub-bound `state` parameter instead (minted by
-> `/connect/github/start`, which itself required a valid JWT). So the browser
-> hop to `/connect/github/start` needs a Cognito token, but the redirect back to
-> the callback works as a plain browser navigation.
+> (`/connect/github/callback`) is deliberately exempt from the authorizer**: it
+> is a GitHub browser redirect that carries no JWT, so it authenticates from the
+> HMAC-signed, sub-bound `state` parameter instead (minted by
+> `/connect/github/start`, which itself required a valid JWT). The browser hop to
+> `/connect/github/start` needs a Cognito token; the redirect back to the
+> callback works as a plain browser navigation.
 
 ## 6. Load the credentials into AWS Secrets Manager
 
-The CDK stack creates a **placeholder** secret named **`cainban/github-app`**
-(empty JSON envelope, `RETAIN` on delete) and grants the cainban Lambda
+The CDK stack creates a **placeholder** secret named **`cainban/github-app`** (an
+empty JSON envelope, `RETAIN` on delete) and grants the cainban Lambda
 least-privilege `secretsmanager:GetSecretValue` on **that secret only**. After
 deploy, fill it with the JSON the loader (`src/systems/secrets`) expects:
 
@@ -136,16 +136,17 @@ deploy, fill it with the JSON the loader (`src/systems/secrets`) expects:
 ```
 
 - `app_id` may be a JSON string or number.
-- `private_key` is the **full PEM**, newlines escaped as `\n` inside the JSON
-  string (or use the file-based command below, which handles newlines for you).
-- `client_id` / `client_secret` are used by the P4.3 OAuth leg (code↔login
-  exchange) **and** to derive the connect API's anti-CSRF state-signing key.
-  They are now **required** for the connect flow (`/connect/*`) — the connect
-  Lambda fails at cold start if either is empty. `app_id` + `private_key` remain
-  required for `VerifyRepoAccess`.
+- `private_key` is the **full PEM**, with newlines escaped as `\n` inside the
+  JSON string. Or use the file-based command below, which handles the newlines
+  for you.
+- `client_id` / `client_secret` do double duty: the P4.3 OAuth leg uses them for
+  the code↔login exchange, and the connect API derives its anti-CSRF
+  state-signing key from them. The connect flow (`/connect/*`) now **requires**
+  both — the connect Lambda fails at cold start if either is empty. `app_id` +
+  `private_key` stay required for `VerifyRepoAccess`.
 
-Put the value in with the AWS CLI (never echo the key into shell history in a
-shared environment; prefer the file form). The PEM you downloaded is
+Put the value in with the AWS CLI. In a shared environment, never echo the key
+into shell history; prefer the file form. The PEM you downloaded is
 `cainban-connect.private-key.pem`:
 
 ```sh
@@ -168,16 +169,16 @@ rm -f /tmp/cainban-github-app.json   # do not leave the key on disk
 ```
 
 > The secret **name** is what the Lambda reads via the `CAINBAN_GITHUB_APP_SECRET`
-> env var (the CDK sets it from the stack's `GitHubAppSecretName` output). If you
-> rename the secret, update that env var.
+> env var (the CDK sets it from the stack's `GitHubAppSecretName` output). Rename
+> the secret and you have to update that env var too.
 
 ## 7. Verify (no secret value leaves AWS)
 
 - Confirm the secret exists and is filled: `aws secretsmanager describe-secret
-  --secret-id cainban/github-app` (metadata only — does **not** print the value).
+  --secret-id cainban/github-app`. This prints metadata only, not the value.
 - P4.3's connect flow exercises `VerifyRepoAccess` end to end. In P4.2 the
-  package is unit-tested entirely against a mocked GitHub API; there is no live
-  GitHub call in code or CI.
+  package is unit-tested entirely against a mocked GitHub API; no live GitHub
+  call happens in code or CI.
 
 ---
 
@@ -185,20 +186,20 @@ rm -f /tmp/cainban-github-app.json   # do not leave the key on disk
 
 - **Rotate the private key**: generate a new key on the App page, update the
   `private_key` field in `cainban/github-app` (`put-secret-value`), then delete
-  the old key on GitHub. The loader reads the current secret each cold start.
-- **Rotate the client secret**: same pattern for `client_secret`.
-- **Revoke access to a repo**: uninstall the App from the org/repo (or narrow
-  the installed repos). `VerifyRepoAccess` then returns `false` for that repo,
-  and the P4.3 connect flow will refuse to (re)grant it.
+  the old key on GitHub. The loader reads the current secret on each cold start.
+- **Rotate the client secret**: same pattern, for `client_secret`.
+- **Revoke access to a repo**: uninstall the App from the org/repo, or narrow
+  the installed repos. `VerifyRepoAccess` then returns `false` for that repo, and
+  the P4.3 connect flow refuses to (re)grant it.
 
 ## Security notes
 
-- The private key and client secret exist **only** in Secrets Manager. They are
-  not in the repository, the code, or the CDK template — the CDK creates only an
+- The private key and client secret live **only** in Secrets Manager. They are
+  not in the repository, the code, or the CDK template; the CDK creates only an
   empty placeholder.
 - IAM is least-privilege: the Lambda holds `GetSecretValue` (+ `DescribeSecret`)
   on the `cainban/github-app` secret ARN **alone**.
 - The App JWT is short-lived (well under GitHub's 10-minute ceiling) and minted
   per call; installation tokens are short-lived by GitHub design.
-- cainban **never** trusts a client-supplied claim of access — every
+- cainban **never** trusts a client-supplied claim of access. Every
   authorization decision is a server-side GitHub API result.
