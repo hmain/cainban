@@ -174,7 +174,7 @@ For a bit more advanced usage:
 
 ## Key Features
 
-### 🎯 **Task Priority Management**
+### Task Priority Management
 Set and manage task priorities with both CLI and AI integration:
 
 ```bash
@@ -196,7 +196,7 @@ TODO:
   #2 Create terminal UI (legacy)        # No priority = none
 ```
 
-### 🖥️ **Interactive Terminal UI**
+### Interactive Terminal UI
 Experience cainban through a powerful, responsive TUI built with Bubble Tea:
 
 ```bash
@@ -217,18 +217,18 @@ Experience cainban through a powerful, responsive TUI built with Bubble Tea:
 
 **Navigation Example:**
 ```
-┌─ cainban v0.2.1-dev.11 ─ Go MCP SDK Integration ──────────────┐
+┌─ cainban ─────────────────────────────────────────────────────┐
 │ TODO [1/3]:                                                    │
 │   #8 [critical] Implement task dependencies                    │
-│   #6 [high] Enhanced TUI with viewport scrolling              │
+│   #6 [high] Enhanced TUI with viewport scrolling               │
 │ DOING [2/3]:                                                   │
-│   #10 [high] Prepare for public release                       │
+│   #10 [high] Prepare for public release                        │
 │ DONE [3/3]:                                                    │
-│   #9 [medium] Enhanced AI features                            │
-└────────────────────────────── Press q to quit ───────────────┘
+│   #9 [medium] Enhanced AI features                             │
+└────────────────────────────── Press q to quit ────────────────┘
 ```
 
-### 🔍 **Fuzzy Task Search**
+### Fuzzy Task Search
 Reference tasks by partial titles instead of remembering IDs:
 
 ```bash
@@ -257,6 +257,44 @@ Reference tasks by partial titles instead of remembering IDs:
 - Multiple matches show helpful suggestions
 
 ## Architecture
+
+cainban runs the same core two ways: a local CLI/TUI over SQLite, and a
+multi-user serverless deployment over DynamoDB. The backend is chosen at runtime
+by `CAINBAN_BACKEND`.
+
+```mermaid
+flowchart TB
+    subgraph Local["Local (CLI / TUI)"]
+        CLI[cainban CLI + Bubble Tea TUI]
+        SQLite[(SQLite)]
+        CLI --> SQLite
+    end
+
+    subgraph Serverless["Serverless (multi-user)"]
+        SPA[React/Vite SPA<br/>Amplify Hosting]
+        AGW[API Gateway HTTP API<br/>+ Cognito JWT authorizer]
+        MCP[cainban-mcp Lambda]
+        CONNECT[cainban-connect Lambda]
+        PRETOKEN[cainban-pretoken trigger]
+        COGNITO[Cognito user pool]
+        DDB[(DynamoDB: cainban)]
+        GRANTS[(DynamoDB: cainban-grants)]
+        GH[GitHub App]
+
+        SPA -->|Bearer JWT| AGW
+        AGW --> MCP
+        AGW --> CONNECT
+        MCP -->|repo-scoped| DDB
+        CONNECT --> GRANTS
+        CONNECT --> GH
+        COGNITO -. mints token .-> PRETOKEN
+        PRETOKEN -->|reads grants| GRANTS
+    end
+
+    Core[["Shared Go core<br/>src/systems: auth · board · task · mcp · store"]]
+    CLI -.-> Core
+    MCP -.-> Core
+```
 
 - **Language**: Go (single language across CLI, Lambdas, and CDK infra)
 - **Storage**: pluggable via `CAINBAN_BACKEND` — **SQLite** (local CLI/TUI, requires CGO) or **DynamoDB** (serverless, pure Go, used by the Lambda)
@@ -360,23 +398,17 @@ without passing local gates, CI, a reviewed infra diff, and a post-deploy smoke
 check. The flow below is the single source of truth — the Makefile targets and
 CI jobs it names are what actually run.
 
-```
- feature branch ──▶ local gates ──▶ PR + CI ──▶ review ──▶ merge to main
-                       │                │                      │
-             make quality (lint+test)   test.yml              │
-             make bundles (if infra)    (vet · test -race ·   │
-                                         golangci-lint ·      │
-                                         build)               ▼
-                                                       cdk diff (review FULLY)
-                                                              │
-                                                              ▼
-                                                   make deploy  ─────────────┐
-                                                   (bundles → cdk deploy →    │
-                                                    verify-deploy smoke check)│
-                                                              │              │
-                                              Amplify auto-build (web/)       │
-                                                              ▼              ▼
-                                                        PRODUCTION (live edge verified)
+```mermaid
+flowchart TD
+    A[Feature branch<br/>off main] --> B[Local gates<br/>make quality · make bundles]
+    B --> C[PR + CI<br/>test.yml: vet · test -race · golangci-lint · build]
+    C --> D{Review}
+    D --> E[Merge to main]
+    E --> F[Review cdk diff FULLY]
+    F --> G[make deploy<br/>bundles → cdk deploy → verify-deploy]
+    E --> H[Amplify auto-build web/]
+    G --> I[Production<br/>live edge verified]
+    H --> I
 ```
 
 #### 1. Branch
@@ -519,6 +551,26 @@ Cognito JWT authorizer**, a **DynamoDB** backend with repo-scoped tenancy
 (`REPO#<owner>/<repo>#`), and a **GitHub-App connect flow** that verifies a user's
 repo access server-side before granting it. Clients send
 `Authorization: Bearer <Cognito JWT>` (no request signing).
+
+Authenticated request flow (401 if the token is missing/invalid, 403 if valid
+but not granted the target repo):
+
+```mermaid
+sequenceDiagram
+    participant C as Client (SPA / agent)
+    participant G as API Gateway<br/>Cognito JWT authorizer
+    participant L as cainban-mcp Lambda
+    participant D as DynamoDB (repo-scoped)
+
+    C->>G: POST /  Authorization: Bearer JWT
+    G-->>C: 401 if signature/issuer/expiry invalid
+    G->>L: forward (edge auth passed)
+    L->>L: signature-first JWT re-check<br/>resolve caller to one authorized repo
+    L-->>C: 403 if token lacks access to target repo
+    L->>D: query/write under REPO#owner/repo#
+    D-->>L: items (tenant-isolated)
+    L-->>C: 200 result
+```
 
 Everything deploy-related — the full stack, IAM surface, env vars, the auth
 design, the pre-token trigger, and the grants model — is documented in
