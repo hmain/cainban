@@ -98,7 +98,7 @@ go build -o cainban cmd/cainban/main.go
 
 ### 3. MCP Server for AI Integration
 
-cainban includes a built-in Model Context Protocol (MCP) server using the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk), ensuring full compatibility with AI tools like Amazon Q CLI, Claude Desktop, and other MCP clients.
+cainban includes a built-in Model Context Protocol (MCP) server using the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk), ensuring full compatibility with AI tools like Kiro, Claude Desktop, and other MCP clients.
 
 > **Using cainban as an AI agent's task backend?** See [`docs/agent-via-mcp.md`](docs/agent-via-mcp.md) for the agent-over-MCP guide: the auth/repo-scoping model, the exact MCP tools, and a worked agent loop against the serverless endpoint.
 
@@ -111,9 +111,9 @@ cainban includes a built-in Model Context Protocol (MCP) server using the offici
 > [`infra/README.md`](infra/README.md) for the deployed stack and IAM surface,
 > and [`docs/github-app-setup.md`](docs/github-app-setup.md) to connect a repo.
 
-1. **For Amazon Q CLI** (recommended):
+1. **For Kiro** (recommended):
    
-Add to `~/.aws/amazonq/mcp.json`:
+Add to `~/.kiro/settings/mcp.json`:
 ```json
 {
   "mcpServers": {
@@ -272,7 +272,7 @@ cainban is designed to work seamlessly with AI agents:
 - Exposes cainban operations as MCP tools
 - Real-time board state synchronization
 - JSON-RPC 2.0 compliant
-- Compatible with Amazon Q CLI, Claude Desktop, and other MCP clients
+- Compatible with Kiro, Claude Desktop, and other MCP clients
 - Tools available: `create_task`, `list_tasks`, `update_task_status`, `get_task`, `update_task_priority`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task_links`, `delete_task`, `restore_task`, `list_boards`, `change_board`, `list_activity` (see the full table below)
 
 ## MCP Setup Options
@@ -566,7 +566,7 @@ Related guides:
 ## Troubleshooting
 
 ### MCP Server Issues
-1. **Server not loading**: Check timeout settings with `q settings mcp.noInteractiveTimeout 5000`
+1. **Server not loading**: Increase the MCP server launch timeout in your client's MCP settings (in Kiro, set a higher `timeout` on the server entry in `~/.kiro/settings/mcp.json`)
 2. **Tools not available**: Verify binary path in MCP configuration
 3. **Database errors**: Run `./cainban init` to initialize the database
 
