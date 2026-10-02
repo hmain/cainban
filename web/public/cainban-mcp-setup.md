@@ -1,61 +1,54 @@
 # Set up the cainban MCP server for your AI coding agent
 
-## Overview
+cainban is a per-repo kanban board exposed as a remote MCP server (Streamable
+HTTP, OAuth 2.1). This guide sets it up as the task backend for an AI coding tool
+(Claude Code, Kiro, Cursor, VS Code). You register the server, sign in once in
+the browser, verify by listing the board, and point the agent at your repo.
 
-This file sets up **cainban** — a per-repo kanban board exposed as a remote
-**MCP server** (Streamable HTTP, OAuth 2.1) — as a task backend for an AI coding
-tool (Claude Code, Kiro, Cursor, VS Code, …). The workflow:
+cainban authenticates the user, never the agent, and authorizes each request by
+the token's validated `repos` claim. The agent handles no credentials.
 
-- Detecting which AI tool is in use and its MCP configuration file
-- Registering the cainban MCP server, preferring **OAuth** (the client signs in
-  once in the browser and refreshes its own tokens — nothing long-lived in the
-  config) and falling back to a header token only if the client cannot do OAuth
-- Authenticating the user via the browser sign-in the client runs itself
-- Verifying the connection by listing the board
-- Pointing the agent at the target repo
+## What you need
 
-cainban authenticates the user (never the agent) and authorizes each request by
-the token's validated `repos` claim. The agent does no credential handling.
+Three values, all public, all on the cainban connect page — and if an agent was
+handed the connect page's setup prompt, they are already in that prompt. Use
+them. Don't stop to ask the user for them, and never ask for a token or secret.
 
-## Before you start
+- **mcp_api** — the cainban MCP server URL (`<MCP_API>`).
+- **client_id** — the public OAuth client id (`<CLIENT_ID>`). It is public and
+  authorizes nothing on its own, so it is safe in config. It is not a secret;
+  don't treat it as one.
+- **repo** — the target repository as `<owner>/<repo>`, sent as the
+  `X-Cainban-Repo` header so cainban picks the right board. If the client can't
+  set custom headers, the token's `default_repo` claim selects the repo instead.
 
-Gather these inputs and confirm prerequisites **before** running any step. Ask
-for anything missing in a single message, then proceed autonomously.
-
-### Required inputs
-
-- **mcp_api** (required): the cainban MCP server URL, e.g.
-  `<MCP_API>`. From the connect page.
-- **client_id** (required for OAuth): the public OAuth client id, e.g.
-  `<CLIENT_ID>`. It is public (no secret) — safe to place in config. From the
-  connect page.
-- **repo** (required): the target repository as `<owner>/<repo>`. Sent as the
-  `X-Cainban-Repo` header so cainban knows which board to use.
-
-### Input constraints
-
-- You MUST NOT ask the user for a bearer token, access key, or secret — OAuth is
-  handled entirely by the client's browser sign-in flow.
-- The `client_id` is a PUBLIC identifier of the application, shared by all users;
-  it authorizes nothing on its own. You MUST NOT treat it as a secret.
-- You MUST send `X-Cainban-Repo: <owner>/<repo>` on requests where the client
-  supports custom headers; otherwise the token's `default_repo` claim selects
-  the repo.
+If one of the three genuinely wasn't given to you, it's on the connect page —
+ask for that one thing in a single message, then carry on without further
+back-and-forth.
 
 ### Prerequisites
 
-- An MCP-capable AI tool. For OAuth (recommended) the tool MUST support the MCP
-  Streamable-HTTP transport with client-run OAuth (Claude Code does; most modern
-  clients do). A header-only client uses the fallback in Step 2b.
-- A browser on the same machine for the one-time sign-in.
+An MCP-capable AI tool and a browser on the same machine for the one-time
+sign-in. For the OAuth path (recommended) the tool must support the MCP
+Streamable-HTTP transport with client-run OAuth; Claude Code and most modern
+clients do. A header-only client uses the fallback in Step 2b.
 
-## How to run this file
+## How to run this
 
-Complete the steps yourself by running the commands / writing the config. Tell
-the user which step you are on and why. One step requires the human to act —
-**Step 3 (browser sign-in)** — pause and let them complete it. If a step fails,
-see **Troubleshooting** at the end for that step, apply the resolution, and
-resume; for errors not covered there, report the full output and do not proceed.
+Do the steps yourself — run the commands, write the config — and tell the user
+which step you're on. One step is the user's: the browser sign-in in Step 3.
+Pause there and let them finish it.
+
+Two things that trip people up, so expect them:
+
+- A newly-added MCP server usually loads only in a **new session**, not the one
+  you added it in. So after registering and authenticating, verify in a fresh
+  chat — the cainban tools won't appear in the current one.
+- Verifying can return **403** — that means your account isn't granted the repo
+  yet. It's not a setup bug; connect the repo on the connect page and retry.
+
+If a step fails for another reason, check Troubleshooting at the end; if it's
+not covered there, report the full output and stop.
 
 ## Steps
 
