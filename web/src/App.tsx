@@ -486,7 +486,10 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
               <>
                 Where the client supports custom headers, keep{" "}
                 <code>X-Cainban-Repo: {repo}</code>; otherwise your token’s
-                <code> default_repo</code> selects the repo.
+                <code> default_repo</code> selects the repo. The header is a
+                non-secret repo selector, so if your client masks it as{" "}
+                <code>[REDACTED]</code> in its settings, that’s cosmetic — leave
+                it as-is.
               </>
             ) : (
               <>Select a repo above to fill in the repo header.</>

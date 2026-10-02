@@ -19,8 +19,14 @@ them. Don't stop to ask the user for them, and never ask for a token or secret.
   authorizes nothing on its own, so it is safe in config. It is not a secret;
   don't treat it as one.
 - **repo** — the target repository as `<owner>/<repo>`, sent as the
-  `X-Cainban-Repo` header so cainban picks the right board. If the client can't
-  set custom headers, the token's `default_repo` claim selects the repo instead.
+  `X-Cainban-Repo` header so cainban picks the right board. This is a plain
+  owner/repo string, not a secret: it only names which repo you want, and
+  authorization comes from the token's `repos` claim, never the header. Some
+  clients mask header values in their settings view (they assume a header holds a
+  token) — so you may see it shown as `[REDACTED]`. That's cosmetic display only;
+  the stored value is intact. Leave it as you set it; don't try to "fix" the mask.
+  If the client can't set custom headers, the token's `default_repo` claim selects
+  the repo instead.
 
 If one of the three genuinely wasn't given to you, it's on the connect page —
 ask for that one thing in a single message, then carry on without further
@@ -94,6 +100,10 @@ other servers):
 
 **Success:** the server is registered and the client shows it as needing
 authentication. Proceed to Step 3.
+
+If the client's settings later show the `X-Cainban-Repo` value as `[REDACTED]`,
+that's the client masking header values on display — the value is a non-secret
+repo selector and the stored config is unchanged. Leave it be.
 
 ### Step 2b (fallback only): Register with a bearer token
 
