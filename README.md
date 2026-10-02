@@ -1,23 +1,20 @@
 # cainban
 
-cainban (c-AI-nban) is a command-line kanban board designed to expose all commands as command-line options. You can use it to manage a todo-list, your daily tasks, or your personal development backlog. 
-It also enables AI code generators through its MCP server to decompose tasks into smaller components, allowing the AI agent to concentrate on delivering the entire project step by step.
+cainban (c-AI-nban) is a kanban board you drive entirely from the command line. Use it for a todo list, your daily tasks, or a personal backlog.
+
+It also gives AI coding agents a task backend over MCP, so an agent can break a project into small tasks and work through them one at a time.
 
 ## Overview
 
-- **Command-line first**: All operations can be performed via CLI without launching a GUI application
-- **Interactive TUI**: Full-featured Terminal User Interface with viewport-based scrolling for large task lists
-- **MCP Integration**: Built-in Model Context Protocol (MCP) server for seamless AI integration
-- **Two backends, one codebase**: local **SQLite** (CLI/TUI) and a serverless **DynamoDB** path (the AWS Lambda MCP deployment) — selected at runtime via `CAINBAN_BACKEND`
-- **Serverless multi-user**: a stateless MCP server on AWS Lambda (arm64) behind an API Gateway HTTP API + **Cognito JWT authorizer**, with repo-scoped tenancy and a GitHub-App "connect" flow — see [Serverless deployment](#serverless-deployment) and [`infra/README.md`](infra/README.md)
+Everything cainban does works from the CLI, no GUI needed. There's a terminal UI (`cainban tui`) with viewport scrolling for large boards when you want one, and a built-in MCP server so AI tools can read and change the board.
 
-## Quick Start
+It runs two ways from one codebase, chosen at runtime by `CAINBAN_BACKEND`: local SQLite for the CLI/TUI, and a serverless DynamoDB path for the AWS Lambda deployment. The serverless side is multi-user — a stateless MCP server on Lambda behind an API Gateway HTTP API and a Cognito JWT authorizer, with per-repo tenancy and a GitHub-App connect flow. See [Serverless deployment](#serverless-deployment) and [`infra/README.md`](infra/README.md).
 
-## Installation
+## Getting started
 
-### Option 1: Download Pre-built Binary (Recommended)
+### Install
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/hmain/cainban/releases):
+The quickest path is a pre-built binary. Download the latest release for your platform from [GitHub Releases](https://github.com/hmain/cainban/releases):
 
 - **Linux**: `cainban-linux-amd64` or `cainban-linux-arm64`
 - **macOS**: `cainban-darwin-amd64` or `cainban-darwin-arm64` 
@@ -30,25 +27,24 @@ chmod +x cainban-linux-amd64
 sudo mv cainban-linux-amd64 /usr/local/bin/cainban
 ```
 
-### Option 2: Build from Source
+### Build from source
 
 ```bash
-# Clone the repository
 git clone https://github.com/hmain/cainban.git
 cd cainban
 
-# Quick setup with install script (recommended)
+# Quickest: the install script
 ./install.sh
 
-# Or manual build:
+# Or build by hand:
 go mod tidy
 go build -o cainban cmd/cainban/main.go
 
-# Initialize your kanban board
+# Initialize your board
 ./cainban init
 ```
 
-### 2. Basic Usage
+### Basic usage
 
 ```bash
 # Add tasks
@@ -96,9 +92,9 @@ go build -o cainban cmd/cainban/main.go
 ./cainban tui
 ```
 
-### 3. MCP Server for AI Integration
+### MCP server for AI tools
 
-cainban includes a built-in Model Context Protocol (MCP) server using the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk), ensuring full compatibility with AI tools like Kiro, Claude Desktop, and other MCP clients.
+cainban has a built-in MCP server built on the official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk), so it works with Kiro, Claude Desktop, and other MCP clients.
 
 > **Using cainban as an AI agent's task backend?** See [`docs/agent-via-mcp.md`](docs/agent-via-mcp.md) for the agent-over-MCP guide: the auth/repo-scoping model, the exact MCP tools, and a worked agent loop against the serverless endpoint.
 
@@ -152,9 +148,9 @@ Add to your Claude Desktop configuration (update the `command` path to point to 
 "Move task 1 to doing status"
 ```
 
-#### Natural Language Task Management
+#### Natural-language task management
 
-Once configured, you can manage your kanban board through natural conversation:
+Once it's configured, you manage the board by talking to the agent:
 
 - **"List my tasks"** → Shows all tasks organized by status with priority indicators
 - **"Create a task to implement user auth"** → Creates new task
@@ -165,17 +161,15 @@ Once configured, you can manage your kanban board through natural conversation:
 - **"List all my boards"** → Shows available kanban boards
 - **"Switch to the project board"** → Changes active board
 
-### Advanced Usage
+### Pointing an agent at your backlog
 
-For a bit more advanced usage:
-
-- Start working on the next tasks in the **Cainban** to-do list or backlog. If a task has subtasks, begin with those (get_task_links). Follow good Git practices, like using branches and other Git tools. Use the "default" **Cainban** board for your tasks. If you find any issues, create new tasks for them. Break down tasks into smaller subtasks so you can focus on one small problem at a time.
+A pattern that works well: tell the agent to pick up the next task on the default board, and if a task has subtasks (`get_task_links`), start with those. Have it work on a branch, create new tasks for issues it finds, and break big tasks into small ones so it stays focused on one problem at a time.
 
 
-## Key Features
+## Key features
 
-### Task Priority Management
-Set and manage task priorities with both CLI and AI integration:
+### Task priorities
+Set priorities from the CLI or through an agent:
 
 ```bash
 # Set priority levels: none, low, medium, high, critical (or 0-4)
@@ -186,7 +180,8 @@ Set and manage task priorities with both CLI and AI integration:
 # Critical tasks appear first, followed by high, medium, low, none
 ```
 
-**Priority Display:**
+Tasks sort by priority in listings — critical first, then high, medium, low, none:
+
 ```
 TODO:
   #8 [critical] Implement task dependencies
@@ -196,24 +191,15 @@ TODO:
   #2 Create terminal UI (legacy)        # No priority = none
 ```
 
-### Interactive Terminal UI
-Experience cainban through a powerful, responsive TUI built with Bubble Tea:
+### Terminal UI
+cainban has a terminal UI built on Bubble Tea:
 
 ```bash
 # Launch the interactive interface
 ./cainban tui
 ```
 
-**TUI Features:**
-- **Viewport-Based Scrolling**: Smooth navigation through large task lists (635+ tasks tested)
-- **Enhanced Navigation**: 
-  - `j`/`k` or `↑`/`↓` for line-by-line movement with auto-scroll
-  - `Page Up`/`Page Down` for page-based scrolling
-  - `Home`/`End` for instant jumping to top/bottom
-- **Visual Indicators**: Real-time scroll position display `[X/Y]` for large datasets
-- **Responsive Design**: Dynamic column widths that adapt to your terminal size
-- **Professional UX**: Starts at the top, handles terminal resizing, follows Bubble Tea best practices
-- **Intuitive Controls**: Press `q` to quit, `?` for help
+It uses viewport scrolling, so it stays responsive on large boards (tested past 635 tasks). Navigate with `j`/`k` or the arrow keys, `Page Up`/`Page Down`, and `Home`/`End`; a `[X/Y]` indicator shows your scroll position. Columns resize with the terminal. Press `q` to quit, `?` for help.
 
 **Navigation Example:**
 ```
@@ -228,8 +214,8 @@ Experience cainban through a powerful, responsive TUI built with Bubble Tea:
 └────────────────────────────── Press q to quit ────────────────┘
 ```
 
-### Fuzzy Task Search
-Reference tasks by partial titles instead of remembering IDs:
+### Fuzzy task search
+Reference tasks by partial title instead of memorizing IDs:
 
 ```bash
 # Instead of: ./cainban move 10 doing
@@ -245,16 +231,7 @@ Reference tasks by partial titles instead of remembering IDs:
 ./cainban search "terminal"
 ```
 
-**Smart Matching:**
-- **Exact match**: Highest priority
-- **Substring match**: High priority  
-- **Word prefix**: Medium priority
-- **Multiple words**: Bonus scoring
-
-**Conflict Resolution:**
-- Numeric input prioritizes ID lookup first
-- Falls back to fuzzy search if ID doesn't exist
-- Multiple matches show helpful suggestions
+Matching is ranked: an exact title wins, then a substring, then a word prefix, with a bonus when several words match. A numeric argument is treated as an ID first and falls back to fuzzy search if no task has that ID. When more than one task matches, cainban shows the candidates instead of guessing.
 
 ## Architecture
 
@@ -296,26 +273,15 @@ flowchart TB
     MCP -.-> Core
 ```
 
-- **Language**: Go (single language across CLI, Lambdas, and CDK infra)
-- **Storage**: pluggable via `CAINBAN_BACKEND` — **SQLite** (local CLI/TUI, requires CGO) or **DynamoDB** (serverless, pure Go, used by the Lambda)
-- **Systems Architecture**: Modular systems in `src/systems/` (`auth`, `board`, `task`, `mcp`, `store`, `storage`, `dynamo`, `grants`, `github`, `connect`, `crypter`, `secrets`)
-- **TUI Framework**: [Bubble Tea](https://github.com/charmbracelet/bubbletea) with viewport-based scrolling
-- **Serverless**: three arm64 `provided.al2023` Lambdas (`cainban-mcp`, `cainban-pretoken`, `cainban-connect`) provisioned by an **AWS CDK (Go)** app in [`infra/`](infra/); a Cognito user pool + JWT authorizer; DynamoDB data + grants tables; a React/Vite SPA (`web/`) hosted on Amplify
-- TODO: **Markdown Rendering**: [Glow](https://github.com/charmbracelet/glow)
+It's all Go — the CLI, the three Lambdas, and the CDK infra share one language. Storage is pluggable behind `CAINBAN_BACKEND`: SQLite locally (needs CGO), DynamoDB in the serverless path (pure Go). The domain logic lives in `src/systems/` (`auth`, `board`, `task`, `mcp`, `store`, `storage`, `dynamo`, `grants`, `github`, `connect`, `crypter`, `secrets`), the TUI uses [Bubble Tea](https://github.com/charmbracelet/bubbletea), and the serverless side is three arm64 `provided.al2023` Lambdas (`cainban-mcp`, `cainban-pretoken`, `cainban-connect`) deployed by an AWS CDK (Go) app in [`infra/`](infra/), plus a Cognito pool, two DynamoDB tables, and a React/Vite SPA in `web/` on Amplify.
 
-## AI Integration
+Markdown rendering via [Glow](https://github.com/charmbracelet/glow) is still on the TODO list.
 
-cainban is designed to work seamlessly with AI agents:
+## AI integration
 
-### MCP Server
-- Built with official [Go MCP SDK](https://github.com/modelcontextprotocol/go-sdk) for maximum compatibility
-- Exposes cainban operations as MCP tools
-- Real-time board state synchronization
-- JSON-RPC 2.0 compliant
-- Compatible with Kiro, Claude Desktop, and other MCP clients
-- Tools available: `create_task`, `list_tasks`, `update_task_status`, `get_task`, `update_task_priority`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task_links`, `delete_task`, `restore_task`, `list_boards`, `change_board`, `list_activity` (see the full table below)
+The MCP server exposes cainban's operations as tools and speaks JSON-RPC 2.0, so Kiro, Claude Desktop, and other MCP clients can read and change the board directly. The tools are `create_task`, `list_tasks`, `update_task_status`, `get_task`, `update_task_priority`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task_links`, `delete_task`, `restore_task`, `list_boards`, `change_board`, and `list_activity` — the table below has an example call for each.
 
-## Available MCP Tools
+## MCP tools
 
 | Tool | Description | Example Usage |
 |------|-------------|---------------|
@@ -351,8 +317,6 @@ go run cmd/cainban/main.go init
 
 ### Testing
 
-cainban includes comprehensive tests for all systems including TUI interactions:
-
 ```bash
 # Run all tests
 go test ./...
@@ -371,27 +335,13 @@ go test ./src/tui/...
 go test -v ./src/tui/
 ```
 
-**Test Coverage:**
-- **TUI Tests**: Key navigation, window resizing, quit commands
-- **Task System**: CRUD operations, status updates, priority management
-- **Storage**: Database operations, migrations
-- **MCP Server**: Tool registration and execution
+Tests cover TUI navigation and resizing, task CRUD and priority, storage and migrations, and MCP tool registration. They run against in-memory databases, so they're fast and isolated.
 
-All tests use in-memory databases for fast, isolated testing.
+### Code quality
 
-### Code Quality
+Static checks: `go vet` and `golangci-lint` for Go, `sqlite3 -bail` to validate the SQLite schema, `markdownlint` for the docs. For runtime issues, `go test -race` catches data races and `go test -memprofile` catches leaks; the SQLite path runs with foreign keys and WAL mode on.
 
-#### Syntax Validation
-- **Go**: Use `go vet` and `golangci-lint` for static analysis
-- **SQL**: Validate SQLite schema with `sqlite3 -bail`
-- **Markdown**: Use `markdownlint` for documentation consistency
-
-#### Runtime Error Checking
-- **Go**: Use `go test -race` for race condition detection
-- **Database**: Enable SQLite foreign key constraints and WAL mode
-- **Memory**: Use `go test -memprofile` for memory leak detection
-
-### Development → Production Workflow
+### Development to production workflow
 
 cainban ships through a gated pipeline: nothing reaches the live serverless edge
 without passing local gates, CI, a reviewed infra diff, and a post-deploy smoke
@@ -518,7 +468,7 @@ rebuilds).
 4. Verify a merge actually landed the tip commits on `main` before trusting a
    "merged" status.
 
-### Project Structure
+### Project layout
 
 ```
 cainban/
@@ -575,7 +525,7 @@ sequenceDiagram
 Everything deploy-related — the full stack, IAM surface, env vars, the auth
 design, the pre-token trigger, and the grants model — is documented in
 [`infra/README.md`](infra/README.md). Deploy with the gated flow in
-[Development → Production Workflow](#development--production-workflow)
+[Development → Production Workflow](#development-to-production-workflow)
 (`make deploy`, which auto-runs `make verify-deploy`).
 
 Related guides:
@@ -585,12 +535,10 @@ Related guides:
 
 ## Troubleshooting
 
-### MCP Server Issues
-1. **Server not loading**: Increase the MCP server launch timeout in your client's MCP settings (in Kiro, set a higher `timeout` on the server entry in `~/.kiro/settings/mcp.json`)
-2. **Tools not available**: Verify binary path in MCP configuration
-3. **Database errors**: Run `./cainban init` to initialize the database
+If the MCP server won't load, increase the launch timeout in your client's MCP settings (in Kiro, raise `timeout` on the server entry in `~/.kiro/settings/mcp.json`). If the tools don't show up, check the binary path in your MCP config. If you hit database errors, run `./cainban init` to create the database.
 
-### Common Solutions
+A few commands that help when something's off:
+
 ```bash
 # Test MCP server manually
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize"}' | ./cainban mcp
@@ -604,23 +552,18 @@ ls -la ~/.cainban/cainban.db
 
 ## Status
 
-**Local CLI/TUI**: stable — board-scoped task IDs, fuzzy search, task links, soft/hard delete, interactive TUI.
+The local CLI/TUI is stable: board-scoped task IDs, fuzzy search, task links, soft and hard delete, and the terminal UI.
 
-**Serverless (multi-user)**: live — stateless MCP on Lambda behind a Cognito JWT authorizer, DynamoDB with repo-scoped tenancy, atomic per-board id counter, optimistic-concurrency `version` guard, an append-only activity feed (`list_activity`), and the GitHub-App connect flow + React/Vite connect SPA. A gated `make deploy` → `make verify-deploy` pipeline guards the live edge.
+The serverless multi-user side is live too — a stateless MCP server on Lambda behind the Cognito JWT authorizer, DynamoDB with per-repo tenancy, an atomic per-board id counter, an optimistic-concurrency `version` guard, an append-only activity feed (`list_activity`), and the GitHub-App connect flow with its React/Vite SPA. The `make deploy` → `make verify-deploy` pipeline guards the live edge.
 
-See [`docs/`](docs/) for the MCP, agent, and GitHub-App setup guides.
-
+The [`docs/`](docs/) folder has the MCP, agent, and GitHub-App setup guides.
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes following the code quality guidelines
-4. Add tests for new functionality
-5. Submit a pull request
+Branch off `main`, make your change behind the code-quality checks above, add tests for anything new, and open a PR. The full gate and deploy flow is in [Development → Production Workflow](#development-to-production-workflow).
 
 ## License
 
-MIT License - see LICENSE file for details.
+MIT — see the LICENSE file.
 
 
