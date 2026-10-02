@@ -255,11 +255,7 @@ the step-(b) OAuth proxy. Full setup:
 
 - [`docs/mcp-oauth-setup.md`](./mcp-oauth-setup.md) — MCP-native OAuth (RFC 9728
   discovery + pre-registered PKCE client); this is step (a).
-- [`docs/phase5-mcp-oauth.md`](./phase5-mcp-oauth.md) — the full Phase 5 MCP
-  OAuth design (step a resource-server + step b proxy).
 - [`docs/github-app-setup.md`](./github-app-setup.md) — connect a repo (the step
   that puts a repo into the `repos` claim).
-- [`docs/serverless-multiuser-plan.md`](./serverless-multiuser-plan.md) — the
-  full serverless/multi-tenant design this guide is the end goal of.
 - [`infra/README.md`](../infra/README.md) — the deployed Lambdas, IAM surface,
   and how the MCP + connect functions are provisioned.

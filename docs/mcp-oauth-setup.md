@@ -1,17 +1,16 @@
 # cainban MCP OAuth — client setup (Kiro & Claude Code)
 
-> **Status:** MCP-native OAuth step (a) of the Phase 5 plan
-> ([docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md)) — cainban is a spec-compliant
-> OAuth 2.1 **resource server** (MCP authorization spec **2026-07-28**, RFC 9728
-> + RFC 8707) and now also serves a small **RFC 8414 authorization-server
-> metadata shim** so a PKCE-strict MCP client (Claude Code) can complete the
-> flow against Cognito.
+> **Status:** MCP-native OAuth step (a) of the Phase 5 plan — cainban is a
+> spec-compliant OAuth 2.1 **resource server** (MCP authorization spec
+> **2026-07-28**, RFC 9728 + RFC 8707) and now also serves a small **RFC 8414
+> authorization-server metadata shim** so a PKCE-strict MCP client (Claude Code)
+> can complete the flow against Cognito.
 >
 > **Not built (step b), on purpose:** the DCR/CIMD OAuth-proxy façade. DCR
 > (RFC 7591) is deprecated per the 2026-07-28 spec and CIMD is the forward path,
 > but **neither works against raw Cognito**, so both wait for the step-(b) proxy.
 > The two clients below (Kiro via a header token, Claude Code via pre-registered
-> PKCE) need no proxy. See [docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md) §3–§4.
+> PKCE) need no proxy.
 
 ## The PKCE-advertisement gap (why the shim exists)
 
@@ -223,7 +222,7 @@ and check the port against the list above.
   authorization server.
 - **Intentionally NOT built (step b):** the DCR/CIMD OAuth-proxy + consent UI.
   Neither DCR nor CIMD works against raw Cognito, and the two clients above do
-  not need it. See [docs/phase5-mcp-oauth.md](phase5-mcp-oauth.md).
+  not need it.
 
 ## Scope note
 

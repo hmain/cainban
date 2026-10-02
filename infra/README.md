@@ -69,8 +69,8 @@ AWS CDK (Go) app that provisions the serverless stack for cainban:
 > DynamoDB access (defense in depth + repo/tenant resolution the authorizer does
 > not do). The client sends `Authorization: Bearer <jwt>` with **no SigV4**. A
 > missing/invalid token is **401**; a valid token without access to the target
-> repo is **403**. See [`docs/serverless-multiuser-plan.md`](../docs/serverless-multiuser-plan.md)
-> (Phase 3) for the auth design and the isolation proof.
+> repo is **403**. See the Authentication section below for the auth design and
+> the isolation model.
 
 Go CDK (not TypeScript) is used so the whole repo stays single-language: the
 Lambda handler and the infrastructure are both Go.

@@ -109,9 +109,7 @@ cainban includes a built-in Model Context Protocol (MCP) server using the offici
 > `Authorization: Bearer <Cognito JWT>` (no request signing). A GitHub App
 > "connect" flow verifies a user's repo access before granting it. See
 > [`infra/README.md`](infra/README.md) for the deployed stack and IAM surface,
-> [`docs/github-app-setup.md`](docs/github-app-setup.md) to connect a repo, and
-> [`docs/serverless-multiuser-plan.md`](docs/serverless-multiuser-plan.md) for
-> the full design.
+> and [`docs/github-app-setup.md`](docs/github-app-setup.md) to connect a repo.
 
 1. **For Amazon Q CLI** (recommended):
    
@@ -169,7 +167,7 @@ Once configured, you can manage your kanban board through natural conversation:
 
 For a bit more advanced usage:
 
-- Start working on the next tasks in the **Cainban** to-do list or backlog. If a task has subtasks, begin with those (get_task_links). Update the **next-steps.md** file with a clear plan for how to solve the problem. Follow good Git practices, like using branches and other Git tools. Use the "default" **Cainban** board for your tasks. If you find any issues, create new tasks for them. Break down tasks into smaller subtasks so you can focus on one small problem at a time.
+- Start working on the next tasks in the **Cainban** to-do list or backlog. If a task has subtasks, begin with those (get_task_links). Follow good Git practices, like using branches and other Git tools. Use the "default" **Cainban** board for your tasks. If you find any issues, create new tasks for them. Break down tasks into smaller subtasks so you can focus on one small problem at a time.
 
 
 ## Key Features
@@ -564,8 +562,6 @@ Related guides:
 - [`docs/agent-via-mcp.md`](docs/agent-via-mcp.md) — using cainban as an AI agent's task backend over MCP
 - [`docs/github-app-setup.md`](docs/github-app-setup.md) — register the GitHub App and connect a repo
 - [`docs/mcp-oauth-setup.md`](docs/mcp-oauth-setup.md) — MCP OAuth client setup
-- [`docs/serverless-multiuser-plan.md`](docs/serverless-multiuser-plan.md) — the full design + isolation proof
-- [`docs/rfc-security-review.md`](docs/rfc-security-review.md) — security review findings + remediation plan
 
 ## Troubleshooting
 
@@ -592,7 +588,7 @@ ls -la ~/.cainban/cainban.db
 
 **Serverless (multi-user)**: live — stateless MCP on Lambda behind a Cognito JWT authorizer, DynamoDB with repo-scoped tenancy, atomic per-board id counter, optimistic-concurrency `version` guard, an append-only activity feed (`list_activity`), and the GitHub-App connect flow + React/Vite connect SPA. A gated `make deploy` → `make verify-deploy` pipeline guards the live edge.
 
-See [`docs/`](docs/) for the phase plans and the [security RFC](docs/rfc-security-review.md).
+See [`docs/`](docs/) for the MCP, agent, and GitHub-App setup guides.
 
 
 ## Contributing
