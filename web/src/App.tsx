@@ -417,7 +417,7 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
   const [copied, setCopied] = useState<string>("");
 
   const addCmd = claudeAddCommand(MCP_API, clientId);
-  const oauthConfig = mcpOAuthConfigSnippet(MCP_API, clientId, repo);
+  const oauthConfig = mcpOAuthConfigSnippet(MCP_API, clientId);
   const setupUrl =
     typeof window !== "undefined"
       ? `${window.location.origin}/cainban-mcp-setup.md`
@@ -484,15 +484,14 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
           <p className="hint">
             {selectedRepo ? (
               <>
-                Where the client supports custom headers, keep{" "}
-                <code>X-Cainban-Repo: {repo}</code>; otherwise your token’s
-                <code> default_repo</code> selects the repo. The header is a
-                non-secret repo selector, so if your client masks it as{" "}
-                <code>[REDACTED]</code> in its settings, that’s cosmetic — leave
-                it as-is.
+                No <code>X-Cainban-Repo</code> header needed — your token’s{" "}
+                <code>default_repo</code> selects <code>{repo}</code>. To use a
+                second repo in the same client, pin it with a{" "}
+                <code>X-Cainban-Repo</code> header (see the setup guide’s
+                multi-repo section).
               </>
             ) : (
-              <>Select a repo above to fill in the repo header.</>
+              <>Select a repo above to fill in the config.</>
             )}
           </p>
         </details>
@@ -509,9 +508,9 @@ function McpConfig({ selectedRepo }: { selectedRepo: string }) {
         </div>
         <p className="hint">
           Paste this to your AI coding agent to point it at this repo’s cainban
-          board over MCP. It carries everything the agent needs — the server URL,
-          the OAuth client id, and the repo header — so it can set itself up
-          without asking you for anything but the one browser sign-in.
+          board over MCP. It carries everything the agent needs — the server URL
+          and the OAuth client id — so it can set itself up without asking you
+          for anything but the one browser sign-in.
         </p>
         <pre className="code-block">
           <code>{prompt}</code>
@@ -732,11 +731,12 @@ function claudeAddCommand(mcpApi: string, clientId: string): string {
 
 // mcpOAuthConfigSnippet is the JSON config form for clients configured by file
 // (Kiro/VS Code/etc.) that CAN run OAuth: it carries the client_id and NO token.
-function mcpOAuthConfigSnippet(
-  mcpApi: string,
-  clientId: string,
-  repo: string,
-): string {
+// It is header-free: the single granted repo is selected by the token's
+// default_repo claim (set when the repo was connected), so no X-Cainban-Repo
+// header — and no credential-shaped field for a host to mask — is needed. A
+// multi-repo user who wants to pin a specific repo adds the header manually (see
+// the setup guide's multi-repo section).
+function mcpOAuthConfigSnippet(mcpApi: string, clientId: string): string {
   const url = mcpApi || "https://<MCP_API>";
   return JSON.stringify(
     {
@@ -745,9 +745,6 @@ function mcpOAuthConfigSnippet(
           type: "http",
           url,
           client_id: clientId,
-          headers: {
-            "X-Cainban-Repo": repo,
-          },
         },
       },
     },
@@ -792,17 +789,19 @@ function agentPrompt(
     ``,
     `  URL:        ${url}`,
     `  OAuth client_id: ${cid}   (public, not a secret — safe to put in config)`,
-    `  Header:     X-Cainban-Repo: ${repo}`,
+    ``,
+    `The repo is selected by your token's default_repo claim (set when ${repo} was`,
+    `connected), so NO X-Cainban-Repo header is needed — don't add one or go`,
+    `looking for one.`,
     ``,
     `For Claude Code that is:`,
     `  claude mcp add --transport http --client-id ${cid} cainban ${url}`,
     `For a JSON-config client (Kiro, Cursor, VS Code), add under mcpServers:`,
-    `  "cainban": { "type": "http", "url": "${url}", "client_id": "${cid}",`,
-    `               "headers": { "X-Cainban-Repo": "${repo}" } }`,
+    `  "cainban": { "type": "http", "url": "${url}", "client_id": "${cid}" }`,
     `If you register through the Kiro Crew dashboard's Add-Custom-Server paste box,`,
     `use "clientId" (camelCase) and omit "type" — that surface rejects "type" and`,
-    `"client_id" with "unknown spec key". The on-disk mcp.json form above is fine`,
-    `for file-config clients.`,
+    `"client_id" with "unknown spec key":`,
+    `  "cainban": { "url": "${url}", "clientId": "${cid}" }`,
     ``,
     `Then authenticate (the browser sign-in is the one step I have to do myself —`,
     `pause and let me complete it), and note that a newly-added MCP server usually`,

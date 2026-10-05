@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -71,6 +72,12 @@ type GrantStore interface {
 	// (Option A). GetRefreshToken reads + decrypts it (returns "" when none).
 	PutIdentityWithRefresh(ctx context.Context, crypter grants.Crypter, subject, githubLogin, refreshToken string) error
 	GetRefreshToken(ctx context.Context, crypter grants.Crypter, subject string) (string, error)
+	// GetDefaultRepo / SetDefaultRepo read and write the subject's default repo
+	// (the grants table META item). The connect API sets the default to the
+	// FIRST repo a subject grants, so a single-repo user's MCP config can omit
+	// the X-Cainban-Repo header (the token's default_repo claim names the repo).
+	GetDefaultRepo(ctx context.Context, subject string) (string, error)
+	SetDefaultRepo(ctx context.Context, subject, repo string) error
 }
 
 // Handler serves the /connect/* routes. It holds only interfaces, so it is
@@ -398,7 +405,31 @@ func (h *Handler) handleRepoPost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not write grant")
 		return
 	}
+	// Make the first granted repo the subject's default, so a single-repo user's
+	// MCP config can omit the X-Cainban-Repo header (the token's default_repo
+	// claim then names the repo). Best-effort relative to the grant — the grant
+	// already landed and must not be undone by a default-set failure.
+	h.setDefaultIfUnset(r.Context(), id.Subject, canon)
 	writeJSON(w, http.StatusOK, map[string]any{"granted": canon})
+}
+
+// setDefaultIfUnset sets the subject's default repo to canon ONLY when they have
+// no default yet. It is best-effort: every failure path is logged and swallowed,
+// because the grant has already succeeded and a missing default degrades to
+// header-required behavior, never a failed grant. It never overrides a default a
+// multi-repo user already chose (the FIRST repo connected stays the default).
+func (h *Handler) setDefaultIfUnset(ctx context.Context, subject, canon string) {
+	current, err := h.grants.GetDefaultRepo(ctx, subject)
+	if err != nil {
+		log.Printf("connect: could not read default repo for sub=%q, leaving unset: %v", subject, err)
+		return
+	}
+	if strings.TrimSpace(current) != "" {
+		return // already has a default; never clobber it
+	}
+	if err := h.grants.SetDefaultRepo(ctx, subject, canon); err != nil {
+		log.Printf("connect: could not set default repo for sub=%q (grant still succeeded): %v", subject, err)
+	}
 }
 
 // handleRepoDelete (DELETE /connect/repo {owner,repo}) revokes a grant for the

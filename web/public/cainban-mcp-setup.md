@@ -18,15 +18,14 @@ them. Don't stop to ask the user for them, and never ask for a token or secret.
 - **client_id** — the public OAuth client id (`<CLIENT_ID>`). It is public and
   authorizes nothing on its own, so it is safe in config. It is not a secret;
   don't treat it as one.
-- **repo** — the target repository as `<owner>/<repo>`, sent as the
-  `X-Cainban-Repo` header so cainban picks the right board. This is a plain
-  owner/repo string, not a secret: it only names which repo you want, and
-  authorization comes from the token's `repos` claim, never the header. Some
-  clients mask header values in their settings view (they assume a header holds a
-  token) — so you may see it shown as `[REDACTED]`. That's cosmetic display only;
-  the stored value is intact. Leave it as you set it; don't try to "fix" the mask.
-  If the client can't set custom headers, the token's `default_repo` claim selects
-  the repo instead.
+- **repo** — the target repository as `<owner>/<repo>`. For a single-repo user
+  you do NOT put this in the config: when you connected the repo, cainban set it
+  as your token's `default_repo`, so the server picks the right board from your
+  token with no header. You only need to name the repo explicitly — with an
+  `X-Cainban-Repo` header — to pin a *different* repo in a multi-repo setup (see
+  "Multi-repo: pin a repo with a header" below). The repo string is a plain
+  owner/repo selector, never a secret: authorization always comes from the
+  token's `repos` claim.
 
 If one of the three genuinely wasn't given to you, it's on the connect page —
 ask for that one thing in a single message, then carry on without further
@@ -97,8 +96,7 @@ other servers):
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>",
-      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+      "client_id": "<CLIENT_ID>"
     }
   }
 }
@@ -107,9 +105,36 @@ other servers):
 **Success:** the server is registered and the client shows it as needing
 authentication. Proceed to Step 3.
 
-If the client's settings later show the `X-Cainban-Repo` value as `[REDACTED]`,
-that's the client masking header values on display — the value is a non-secret
-repo selector and the stored config is unchanged. Leave it be.
+Your token's `default_repo` (set when you connected the repo) picks the board, so
+no `X-Cainban-Repo` header is needed here. To pin a *different* repo in a
+multi-repo setup, add the header — see "Multi-repo: pin a repo with a header".
+
+### Multi-repo: pin a repo with a header
+
+If you have connected MORE than one repo and want this connection to act on a
+specific one (not your `default_repo`), name it with the `X-Cainban-Repo` header.
+One header pins one connection to one repo:
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "type": "http",
+      "url": "<MCP_API>",
+      "client_id": "<CLIENT_ID>",
+      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+    }
+  }
+}
+```
+
+The repo string is a plain selector, not a secret — authorization is still your
+token's `repos` claim, never the header. Some clients (including the KiroCrew
+dashboard) mask every header value as `[REDACTED]` on display, because headers
+usually hold tokens. For `X-Cainban-Repo` that mask is **cosmetic**: the stored
+value is intact and the connection works. Leave it as you set it; don't try to
+"fix" the mask. Single-repo users don't hit this at all, because they send no
+header.
 
 ### Per-agent quick setup
 
@@ -126,11 +151,13 @@ One command — Claude Code runs the OAuth itself:
 claude mcp add --transport http --client-id <CLIENT_ID> cainban <MCP_API>
 ```
 
-Set the repo by adding `"headers": { "X-Cainban-Repo": "<owner>/<repo>" }` to the
-entry it wrote, or rely on your token's `default_repo`. Authenticate with
-`/mcp → cainban → Authenticate` and finish the browser sign-in. Verify with
-`list_tasks`. If the callback page won't load but its URL has `?code=…`, relaunch
-with `MCP_OAUTH_CALLBACK_PORT=3118 claude` and retry.
+Your token's `default_repo` selects the board, so Claude Code's entry needs no
+header. (To pin a *different* repo in a multi-repo setup, add `"headers": {
+"X-Cainban-Repo": "<owner>/<repo>" }` to the entry — see "Multi-repo: pin a repo
+with a header".) Authenticate with `/mcp → cainban → Authenticate` and finish the
+browser sign-in. Verify with `list_tasks`. If the callback page won't load but
+its URL has `?code=…`, relaunch with `MCP_OAUTH_CALLBACK_PORT=3118 claude` and
+retry.
 
 #### Kiro Crew dashboard (Add Custom Server)
 
@@ -146,16 +173,14 @@ with `unknown spec key 'client_id'`. Use the camelCase `clientId` and drop
   "mcpServers": {
     "cainban": {
       "url": "<MCP_API>",
-      "clientId": "<CLIENT_ID>",
-      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+      "clientId": "<CLIENT_ID>"
     }
   }
 }
 ```
 
-The dashboard shows the `headers` value masked after saving — that is display
-masking of a non-secret repo selector, not corruption. Then rebuild/restart and
-authenticate as in the runtime recipe below.
+Your token's `default_repo` selects the board, so no `headers` block is needed.
+Then rebuild/restart and authenticate as in the runtime recipe below.
 
 #### Kiro Crew runtime (this gateway, config file)
 
@@ -173,8 +198,7 @@ project it — never hand-edit the projection.
        "cainban": {
          "type": "http",
          "url": "<MCP_API>",
-         "client_id": "<CLIENT_ID>",
-         "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+         "client_id": "<CLIENT_ID>"
        }
      }
    }
@@ -214,8 +238,7 @@ Add the server to Kiro's MCP settings (`mcp.json`), merging into any existing
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>",
-      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+      "client_id": "<CLIENT_ID>"
     }
   }
 }
@@ -234,8 +257,7 @@ Same entry in `.cursor/mcp.json` (project) or Cursor's global MCP config:
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>",
-      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+      "client_id": "<CLIENT_ID>"
     }
   }
 }
@@ -254,8 +276,7 @@ Same entry in `.vscode/mcp.json`:
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>",
-      "headers": { "X-Cainban-Repo": "<owner>/<repo>" }
+      "client_id": "<CLIENT_ID>"
     }
   }
 }
