@@ -8,7 +8,7 @@ import (
 
 // sqliteBoardStore is the single-user (SQLite) implementation of BoardStore. It
 // is a thin adapter over the existing board.System, which scans the local
-// ~/.cainban tree. This preserves single-user behaviour exactly: the list and
+// ~/.cainban tree. This preserves single-user behavior exactly: the list and
 // resolution logic is board.System's, unchanged.
 //
 // board.System has no persistent numeric board id (the filesystem scan leaves

@@ -150,7 +150,7 @@ var (
 
 // OpenBoardForTenant returns a BoardStore for the configured backend, scoped to
 // a tenant's DynamoDB partition prefix, plus a close func the caller MUST call.
-// It mirrors OpenTaskForTenant: the DynamoDB backend honours the prefix (so a
+// It mirrors OpenTaskForTenant: the DynamoDB backend honors the prefix (so a
 // request authorized for repo A never sees repo B's boards); the SQLite backend
 // ignores the prefix and serves the local ~/.cainban tree (single-user mode).
 //
