@@ -37,6 +37,21 @@ func New() *System {
 	}
 }
 
+// NewWithConfigDir creates a board system rooted at an explicit config
+// directory instead of ~/.cainban. It is used by the store-layer SQLite board
+// adapter (which can be pointed at a temp dir in tests) and anywhere a caller
+// must control the board tree location.
+func NewWithConfigDir(configDir string) *System {
+	return &System{
+		configDir: configDir,
+	}
+}
+
+// ConfigDir returns the directory this board system is rooted at.
+func (s *System) ConfigDir() string {
+	return s.configDir
+}
+
 // GetBoardPath returns the database path for a board
 func (s *System) GetBoardPath(boardName string) string {
 	if boardName == "" || boardName == "default" {

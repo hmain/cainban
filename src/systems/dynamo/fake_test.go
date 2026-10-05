@@ -54,7 +54,15 @@ func (f *fakeDDB) PutItem(_ context.Context, in *dynamodb.PutItemInput, _ ...fun
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	pk, sk := s(in.Item["PK"]), s(in.Item["SK"])
-	f.items[keyOf(pk, sk)] = cloneItem(in.Item)
+	k := keyOf(pk, sk)
+	// Honor the only conditional PutItem the store issues: a lazy
+	// attribute_not_exists(PK) upsert that must not overwrite an existing row.
+	if in.ConditionExpression != nil && strings.Contains(*in.ConditionExpression, "attribute_not_exists(PK)") {
+		if _, ok := f.items[k]; ok {
+			return nil, &ddbtypes.ConditionalCheckFailedException{}
+		}
+	}
+	f.items[k] = cloneItem(in.Item)
 	return &dynamodb.PutItemOutput{}, nil
 }
 

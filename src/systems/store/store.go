@@ -95,3 +95,33 @@ type TaskStore interface {
 
 // Compile-time assertion that the SQLite implementation satisfies the contract
 // lives in the task package's own test to avoid an import cycle here.
+
+// BoardSummary is the backend-neutral view of a board as the board tools
+// (list_boards, change_board) expose it. The canonical type lives in package
+// task (store imports task, and dynamo returns task.BoardSummary without
+// importing store — this alias keeps store callers using store.BoardSummary).
+type BoardSummary = task.BoardSummary
+
+// ErrBoardNotFound is returned by BoardStore.ResolveBoard when the selector
+// matches no board in the current scope. Handlers use errors.Is to format a
+// scope-aware "not found" message. Alias of the canonical value in package
+// task so a not-found from either backend matches.
+var ErrBoardNotFound = task.ErrBoardNotFound
+
+// BoardStore lists and resolves the boards visible to a SINGLE request. It is
+// scoped the same way TaskStore is: the DynamoDB implementation is constructed
+// with the request's tenant partition prefix, so a request authorized for repo
+// A can never see repo B's boards. The SQLite implementation ignores the prefix
+// and serves the local ~/.cainban tree (single-user mode).
+//
+// Both backends satisfy this interface and callers depend only on it, so the
+// two board tools behave correctly in both deployments with no handler-level
+// branch on CAINBAN_BACKEND — mirroring the TaskStore design.
+type BoardStore interface {
+	// ListBoards returns every board in the current scope.
+	ListBoards() ([]BoardSummary, error)
+	// ResolveBoard maps a selector (a board name, or a numeric id as a string)
+	// to a concrete board, or ErrBoardNotFound when nothing matches. Used by
+	// change_board.
+	ResolveBoard(selector string) (BoardSummary, error)
+}

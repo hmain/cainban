@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
 
+	"github.com/hmain/cainban/src/systems/board"
 	"github.com/hmain/cainban/src/systems/dynamo"
 	"github.com/hmain/cainban/src/systems/storage"
 	"github.com/hmain/cainban/src/systems/task"
@@ -139,3 +141,53 @@ var (
 	_ TaskStore = (*task.System)(nil)
 	_ TaskStore = (*dynamo.Store)(nil)
 )
+
+// Compile-time assertions that both backends satisfy BoardStore.
+var (
+	_ BoardStore = (*sqliteBoardStore)(nil)
+	_ BoardStore = (*dynamo.Store)(nil)
+)
+
+// OpenBoardForTenant returns a BoardStore for the configured backend, scoped to
+// a tenant's DynamoDB partition prefix, plus a close func the caller MUST call.
+// It mirrors OpenTaskForTenant: the DynamoDB backend honours the prefix (so a
+// request authorized for repo A never sees repo B's boards); the SQLite backend
+// ignores the prefix and serves the local ~/.cainban tree (single-user mode).
+//
+// sqlitePath selects which board DATABASE FILE the SQLite backend's board.System
+// is rooted at via its parent config dir; under DynamoDB it is ignored.
+func OpenBoardForTenant(ctx context.Context, sqlitePath, partitionPrefix string) (BoardStore, func() error, error) {
+	switch Selected() {
+	case BackendDynamoDB:
+		return openDynamoBoardWithPrefix(ctx, partitionPrefix)
+	case BackendSQLite:
+		return openSQLiteBoard(sqlitePath)
+	default:
+		return nil, nil, fmt.Errorf("unknown %s=%q (want %q or %q)",
+			EnvBackend, Selected(), BackendSQLite, BackendDynamoDB)
+	}
+}
+
+// openSQLiteBoard builds a BoardStore over the local board.System. The board
+// tree is rooted at the parent directory of sqlitePath (the ~/.cainban config
+// dir), so it matches whatever the server's own boardSystem uses. The close
+// func is a no-op (board.System holds no open handle).
+func openSQLiteBoard(sqlitePath string) (BoardStore, func() error, error) {
+	configDir := filepath.Dir(sqlitePath)
+	bs := newSQLiteBoardStore(board.NewWithConfigDir(configDir))
+	return bs, func() error { return nil }, nil
+}
+
+// openDynamoBoardWithPrefix builds a DynamoDB-backed BoardStore scoped to
+// partitionPrefix, reusing the cached process-wide client and table resolution.
+func openDynamoBoardWithPrefix(ctx context.Context, partitionPrefix string) (BoardStore, func() error, error) {
+	client, err := dynamoClient(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	table := strings.TrimSpace(os.Getenv(EnvDDBTable))
+	if table == "" {
+		table = dynamo.DefaultTableName
+	}
+	return dynamo.NewWithPrefix(client, table, partitionPrefix), func() error { return nil }, nil
+}
