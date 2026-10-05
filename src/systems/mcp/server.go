@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hmain/cainban/src/systems/auth"
@@ -317,6 +318,11 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 		Name:        "list_activity",
 		Description: "List recent task activity (who changed what), newest first",
 	}, s.handleListActivity)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "whoami",
+		Description: "Report the repo and board scope the current token resolves to",
+	}, s.handleWhoami)
 }
 
 // actorFromCtx returns the human-readable caller (email, else sub) recorded on
@@ -327,6 +333,30 @@ func actorFromCtx(ctx context.Context) string {
 		return t.Actor
 	}
 	return ""
+}
+
+// repoFromCtx returns the resolved, AUTHORIZED repo for the request, or "" when
+// the request carries no scoped tenant (the local CLI path, or an unscoped
+// authenticated tenant). The value is the repo the caller's signed token
+// authorized — never the raw untrusted header/arg.
+func repoFromCtx(ctx context.Context) string {
+	if t, ok := tenantFromContext(ctx); ok && t != nil && !t.Unscoped {
+		return t.Repo
+	}
+	return ""
+}
+
+// scopeLine builds the one-line "where am I?" header prefixed to list_tasks /
+// list_boards output so the caller can see the scope on calls they already
+// make. The board is always id 1 today (single board per tenant). In single-user
+// mode (no tenant) the repo reads "(local)". This and handleWhoami share this
+// one formatter so their wording cannot drift.
+func scopeLine(ctx context.Context) string {
+	repo := repoFromCtx(ctx)
+	if repo == "" {
+		repo = "(local)"
+	}
+	return fmt.Sprintf("Scope — repo: %s · board: default (id 1)", repo)
 }
 
 // Tool handler argument types.
@@ -367,6 +397,10 @@ type UpdateTaskArgs struct {
 }
 
 type ListBoardsArgs struct{}
+
+// WhoamiArgs is empty: the scope is derived entirely from the authenticated
+// request, never from caller input.
+type WhoamiArgs struct{}
 
 type ChangeBoardArgs struct {
 	BoardName string `json:"board_name" jsonschema:"the name of the board to switch to"`
@@ -452,6 +486,7 @@ func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, 
 	if len(tasks) == 0 {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
+				&mcp.TextContent{Text: scopeLine(ctx)},
 				&mcp.TextContent{Text: "No tasks found in current board"},
 			},
 		}, tasks, nil
@@ -464,6 +499,7 @@ func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, 
 	}
 
 	var content []mcp.Content
+	content = append(content, &mcp.TextContent{Text: scopeLine(ctx)})
 	statuses := []task.Status{task.StatusTodo, task.StatusDoing, task.StatusDone}
 	for _, status := range statuses {
 		if statusTasks, exists := tasksByStatus[status]; exists && len(statusTasks) > 0 {
@@ -678,12 +714,14 @@ func (s *Server) handleListBoards(ctx context.Context, req *mcp.CallToolRequest,
 	if len(boards) == 0 {
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{
+				&mcp.TextContent{Text: scopeLine(ctx)},
 				&mcp.TextContent{Text: "No boards found"},
 			},
 		}, boards, nil
 	}
 
 	var content []mcp.Content
+	content = append(content, &mcp.TextContent{Text: scopeLine(ctx)})
 	content = append(content, &mcp.TextContent{Text: "Available boards:"})
 	for _, b := range boards {
 		content = append(content, &mcp.TextContent{
@@ -733,6 +771,81 @@ func (s *Server) handleChangeBoard(ctx context.Context, req *mcp.CallToolRequest
 			},
 		},
 	}, b, nil
+}
+
+// whoamiResult is the structured content of the whoami tool: the resolved repo
+// and board scope the current token maps to, plus the human-readable actor. All
+// fields come from the already-AUTHORIZED tenant and the per-request board
+// store — nothing new is authorized here.
+type whoamiResult struct {
+	Repo         string              `json:"repo"`
+	Actor        string              `json:"actor,omitempty"`
+	Boards       []task.BoardSummary `json:"boards"`
+	DefaultBoard *task.BoardSummary  `json:"default_board,omitempty"`
+}
+
+// handleWhoami reports the repo + board scope the current token resolves to, so
+// a caller can answer "where am I?" without inferring the repo from their token
+// and the board from list_tasks output. Read-only; adds no authorization.
+//
+// On an UNSCOPED tenant (authenticated but no repo named and no default_repo) it
+// returns the no-scope message as NORMAL content (not isError): asking where you
+// are with no scope is a valid question whose answer is "nowhere yet". It opens
+// no store in that case, mirroring the fail-closed data path.
+func (s *Server) handleWhoami(ctx context.Context, req *mcp.CallToolRequest, args WhoamiArgs) (*mcp.CallToolResult, any, error) {
+	repo := repoFromCtx(ctx)
+	actor := actorFromCtx(ctx)
+
+	// Unscoped (or an authenticated tenant that named no repo): report the gap
+	// and the remedy, open no store.
+	if _, ok := tenantFromContext(ctx); ok && repo == "" {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{
+				&mcp.TextContent{Text: fmt.Sprintf("No repo in scope. Set the %s header or a default_repo claim before calling a tool.", auth.HeaderTargetRepo)},
+			},
+		}, nil, nil
+	}
+
+	// Local CLI (no tenant) reports a local scope; scoped multi-user reports the
+	// resolved repo. Either way the board list comes from the per-request store.
+	bs, closeFn, err := s.resolveBoardStore(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boards, err := bs.ListBoards()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list boards: %w", err)
+	}
+
+	shownRepo := repo
+	if shownRepo == "" {
+		shownRepo = "(local)"
+	}
+
+	res := whoamiResult{Repo: shownRepo, Actor: actor, Boards: boards}
+	if len(boards) > 0 {
+		res.DefaultBoard = &boards[0]
+	}
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Repo: %s", shownRepo)
+	if actor != "" {
+		fmt.Fprintf(&sb, " · Actor: %s", actor)
+	}
+	if len(boards) > 0 {
+		sb.WriteString(" · Boards:")
+		for _, b := range boards {
+			fmt.Fprintf(&sb, " %s (id %d)", b.Name, b.ID)
+		}
+	} else {
+		sb.WriteString(" · Boards: none yet")
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+	}, res, nil
 }
 
 // handleListActivity returns the append-only activity feed for the current
