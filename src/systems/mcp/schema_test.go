@@ -93,6 +93,54 @@ func TestToolInputSchemasPresent(t *testing.T) {
 	}
 }
 
+// TestToolAnnotationsClassified asserts every tool carries annotations and that
+// each is classified correctly: the six read-only tools set ReadOnlyHint, the
+// four writers do not, and every tool declares a closed interaction world
+// (OpenWorldHint false). This is the regression guard that a NEW tool must be
+// classified — an unannotated or mis-annotated tool fails here.
+func TestToolAnnotationsClassified(t *testing.T) {
+	readOnlyTools := map[string]bool{
+		"list_tasks":    true,
+		"get_task":      true,
+		"list_boards":   true,
+		"list_activity": true,
+		"whoami":        true,
+		"change_board":  true,
+	}
+	writers := map[string]bool{
+		"create_task":          true,
+		"update_task":          true,
+		"update_task_status":   true,
+		"update_task_priority": true,
+	}
+
+	for _, tl := range listToolsWire(t) {
+		a := tl.Annotations
+		if a == nil {
+			t.Errorf("tool %q has no annotations", tl.Name)
+			continue
+		}
+		if a.OpenWorldHint == nil || *a.OpenWorldHint {
+			t.Errorf("tool %q OpenWorldHint = %v, want false (closed world)", tl.Name, a.OpenWorldHint)
+		}
+		switch {
+		case readOnlyTools[tl.Name]:
+			if !a.ReadOnlyHint {
+				t.Errorf("tool %q should be ReadOnlyHint=true", tl.Name)
+			}
+		case writers[tl.Name]:
+			if a.ReadOnlyHint {
+				t.Errorf("tool %q should be ReadOnlyHint=false (it writes)", tl.Name)
+			}
+			if a.DestructiveHint == nil {
+				t.Errorf("tool %q (writer) should set DestructiveHint", tl.Name)
+			}
+		default:
+			t.Errorf("tool %q is not classified read-only or writer; classify it", tl.Name)
+		}
+	}
+}
+
 func TestLoopbackOnly(t *testing.T) {
 	cases := []struct {
 		in      string
