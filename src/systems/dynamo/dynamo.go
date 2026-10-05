@@ -201,6 +201,10 @@ func (s *Store) CreateWithPriority(boardID int, title, description string, prior
 	if err != nil {
 		return nil, fmt.Errorf("failed to create task: %w", err)
 	}
+	// Lazily ensure the board's META row exists so list_boards returns this
+	// board for a tenant that has tasks but no explicit board row. Best-effort:
+	// a failure here must not fail the task create.
+	_ = s.ensureBoardMeta(ctx, boardID, "")
 	return t, nil
 }
 

@@ -243,7 +243,35 @@ func (s *Server) resolveTaskSystem(ctx context.Context, boardName string) (store
 	return ts, closeFn, nil
 }
 
-// registerTools registers all cainban tools on the given SDK server.
+// resolveBoardStore opens the per-request BoardStore, mirroring
+// resolveTaskSystem EXACTLY — including the single most important rule: an
+// UNSCOPED tenant (authenticated but naming no repo, with no default_repo) must
+// fail closed BEFORE any store opens, or list_boards on an empty partition
+// prefix would enumerate every tenant's boards. The guard here is identical to
+// the task path's; the two must never drift.
+//
+// The board tools take no repo argument (list_boards takes nothing;
+// change_board's board_name is a board selector), so this helper reads only the
+// resolved tenant from context and passes its partition prefix. The repo was
+// authorized once upstream in AuthMiddleware; no board-specific auth is added.
+func (s *Server) resolveBoardStore(ctx context.Context) (store.BoardStore, func(), error) {
+	dbPath := s.boardSystem.GetBoardPath("default")
+
+	partitionPrefix := ""
+	if t, ok := tenantFromContext(ctx); ok && t != nil {
+		if t.Unscoped {
+			return nil, nil, fmt.Errorf("no target repo for this request: set the %s header or a default_repo claim before calling a tool", auth.HeaderTargetRepo)
+		}
+		partitionPrefix = t.PartitionPrefix
+	}
+
+	bs, closer, err := store.OpenBoardForTenant(context.Background(), dbPath, partitionPrefix)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to open board store: %w", err)
+	}
+	closeFn := func() { _ = closer() }
+	return bs, closeFn, nil
+}
 func (s *Server) registerTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "create_task",
@@ -636,7 +664,13 @@ func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest,
 }
 
 func (s *Server) handleListBoards(ctx context.Context, req *mcp.CallToolRequest, args ListBoardsArgs) (*mcp.CallToolResult, any, error) {
-	boards, err := s.boardSystem.ListBoards()
+	bs, closeFn, err := s.resolveBoardStore(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boards, err := bs.ListBoards()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list boards: %w", err)
 	}
@@ -660,27 +694,45 @@ func (s *Server) handleListBoards(ctx context.Context, req *mcp.CallToolRequest,
 	return &mcp.CallToolResult{Content: content}, boards, nil
 }
 
-// handleChangeBoard is now a NO-OP with respect to server-side state.
+// handleChangeBoard validates that the requested board exists in the caller's
+// scope and reports it. It resolves through the per-request BoardStore (the
+// RIGHT backend), so it works on the deployed server instead of always failing
+// against the local filesystem.
 //
-// In the stateful design it wrote ~/.cainban/current-board, a process-wide,
-// cross-client global side effect that made request routing depend on ambient
-// state. In the stateless design each request selects its own board, so this
-// handler only VALIDATES that the requested board exists and reports success;
-// it does NOT mutate any shared state. The tool is retained (rather than
-// removed) so the tools/list schema is unchanged. Board selection per request
-// is deferred to Phase 3 (auth-scoped, repo-keyed tenancy).
+// In multi-user mode it is a NO-OP with respect to shared state — board
+// selection is per-request, so it validates and reports, never mutating. In
+// single-user mode it may additionally set the local current board for CLI/TUI
+// parity, reached through a SetCurrent type assertion that only the SQLite
+// adapter satisfies (so the DynamoDB store never mutates shared state and the
+// handler needs no CAINBAN_BACKEND branch).
 func (s *Server) handleChangeBoard(ctx context.Context, req *mcp.CallToolRequest, args ChangeBoardArgs) (*mcp.CallToolResult, any, error) {
-	if _, err := s.boardSystem.GetBoard(args.BoardName); err != nil {
-		return nil, nil, fmt.Errorf("board '%s' not found", args.BoardName)
+	bs, closeFn, err := s.resolveBoardStore(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	b, err := bs.ResolveBoard(args.BoardName)
+	if err != nil {
+		if errors.Is(err, store.ErrBoardNotFound) {
+			return nil, nil, fmt.Errorf("board %q not found in this scope", args.BoardName)
+		}
+		return nil, nil, fmt.Errorf("failed to resolve board %q: %w", args.BoardName, err)
+	}
+
+	// Single-user parity only: set the local current board if the backend
+	// supports it. Best-effort — a failure must not fail the tool.
+	if sbs, ok := bs.(interface{ SetCurrent(string) error }); ok {
+		_ = sbs.SetCurrent(b.Name)
 	}
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
-				Text: fmt.Sprintf("Board '%s' exists. Note: board selection is now per-request (change_board no longer changes global state); pass the board explicitly on each call.", args.BoardName),
+				Text: fmt.Sprintf("Board %q (id %d) exists. Note: board selection is now per-request (change_board no longer changes global state); pass the board explicitly on each call.", b.Name, b.ID),
 			},
 		},
-	}, nil, nil
+	}, b, nil
 }
 
 // handleListActivity returns the append-only activity feed for the current
