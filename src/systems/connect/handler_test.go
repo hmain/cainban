@@ -267,16 +267,19 @@ func (f *fakeVerifier) VerifyRepoAccess(_ context.Context, _, _ string, _ github
 
 // fakeStore is an in-memory GrantStore keyed by subject.
 type fakeStore struct {
-	grants     map[string]map[string]bool // subject -> repo -> present
-	identities map[string]string          // subject -> github login
-	refresh    map[string][]byte          // subject -> encrypted refresh token
-	putErr     error
-	getIDErr   error
-	listErr    error
+	grants        map[string]map[string]bool // subject -> repo -> present
+	identities    map[string]string          // subject -> github login
+	refresh       map[string][]byte          // subject -> encrypted refresh token
+	defaults      map[string]string          // subject -> default repo (META item)
+	putErr        error
+	getIDErr      error
+	listErr       error
+	getDefaultErr error
+	setDefaultErr error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{grants: map[string]map[string]bool{}, identities: map[string]string{}, refresh: map[string][]byte{}}
+	return &fakeStore{grants: map[string]map[string]bool{}, identities: map[string]string{}, refresh: map[string][]byte{}, defaults: map[string]string{}}
 }
 
 func (s *fakeStore) PutGrant(_ context.Context, subject, repo string) error {
@@ -339,6 +342,19 @@ func (s *fakeStore) GetRefreshToken(ctx context.Context, crypter grants.Crypter,
 		return "", err
 	}
 	return string(pt), nil
+}
+func (s *fakeStore) GetDefaultRepo(_ context.Context, subject string) (string, error) {
+	if s.getDefaultErr != nil {
+		return "", s.getDefaultErr
+	}
+	return s.defaults[subject], nil
+}
+func (s *fakeStore) SetDefaultRepo(_ context.Context, subject, repo string) error {
+	if s.setDefaultErr != nil {
+		return s.setDefaultErr
+	}
+	s.defaults[subject] = repo
+	return nil
 }
 
 // --- tests -----------------------------------------------------------------
@@ -515,6 +531,75 @@ func TestRepoPost_VerifyTrue_GrantWritten(t *testing.T) {
 	}
 	if !e.store.grants[subA]["acme/widgets"] {
 		t.Error("grant must be written on verify-true")
+	}
+}
+
+// POST /connect/repo on a subject with NO default -> the granted repo becomes
+// their default (so a single-repo user's config can be header-free).
+func TestRepoPost_SetsDefaultOnFirstGrant(t *testing.T) {
+	e := newEnv(t)
+	e.store.identities[subA] = "octocat"
+	e.verify.allow = true
+	w := e.do(t, "POST", "/connect/repo", e.token(t, subA), `{"owner":"acme","repo":"widgets"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("first-grant POST status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if got := e.store.defaults[subA]; got != "acme/widgets" {
+		t.Errorf("default repo = %q, want acme/widgets", got)
+	}
+}
+
+// POST /connect/repo when the subject ALREADY has a default -> the existing
+// default is NOT clobbered (the first repo connected stays the default).
+func TestRepoPost_DoesNotClobberExistingDefault(t *testing.T) {
+	e := newEnv(t)
+	e.store.identities[subA] = "octocat"
+	e.verify.allow = true
+	e.store.defaults[subA] = "acme/first" // pre-existing default
+	w := e.do(t, "POST", "/connect/repo", e.token(t, subA), `{"owner":"acme","repo":"second"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("second-grant POST status = %d, want 200 (body=%s)", w.Code, w.Body.String())
+	}
+	if got := e.store.defaults[subA]; got != "acme/first" {
+		t.Errorf("default repo = %q, want acme/first (must not be clobbered)", got)
+	}
+	if !e.store.grants[subA]["acme/second"] {
+		t.Error("the second grant must still be written")
+	}
+}
+
+// A SetDefaultRepo error must NOT fail the grant: the grant already landed, so
+// the response is still 200 and the grant item is present.
+func TestRepoPost_SetDefaultError_StillGrants(t *testing.T) {
+	e := newEnv(t)
+	e.store.identities[subA] = "octocat"
+	e.verify.allow = true
+	e.store.setDefaultErr = errors.New("ddb put failed")
+	w := e.do(t, "POST", "/connect/repo", e.token(t, subA), `{"owner":"acme","repo":"widgets"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200 despite a SetDefaultRepo error (body=%s)", w.Code, w.Body.String())
+	}
+	if !e.store.grants[subA]["acme/widgets"] {
+		t.Error("the grant must be written even when setting the default fails")
+	}
+}
+
+// A GetDefaultRepo error must NOT fail the grant: the grant still 200s and no
+// default is written (the default-set step is skipped on the read error).
+func TestRepoPost_GetDefaultError_StillGrants(t *testing.T) {
+	e := newEnv(t)
+	e.store.identities[subA] = "octocat"
+	e.verify.allow = true
+	e.store.getDefaultErr = errors.New("ddb get failed")
+	w := e.do(t, "POST", "/connect/repo", e.token(t, subA), `{"owner":"acme","repo":"widgets"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200 despite a GetDefaultRepo error (body=%s)", w.Code, w.Body.String())
+	}
+	if !e.store.grants[subA]["acme/widgets"] {
+		t.Error("the grant must be written even when reading the default fails")
+	}
+	if got := e.store.defaults[subA]; got != "" {
+		t.Errorf("default repo = %q, want empty (set step skipped on read error)", got)
 	}
 }
 
