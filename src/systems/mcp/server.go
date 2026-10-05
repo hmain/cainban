@@ -277,52 +277,96 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "create_task",
 		Description: "Create a new task in the kanban board",
+		Annotations: writer("Create task", false /*idempotent*/, false /*destructive*/),
 	}, s.handleCreateTask)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_tasks",
 		Description: "List tasks from the kanban board",
+		Annotations: readOnly("List tasks"),
 	}, s.handleListTasks)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "update_task_status",
 		Description: "Update the status of a task",
+		Annotations: writer("Update task status", true /*idempotent*/, true /*destructive*/),
 	}, s.handleUpdateTaskStatus)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "get_task",
 		Description: "Get a specific task by ID",
+		Annotations: readOnly("Get task"),
 	}, s.handleGetTask)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "update_task_priority",
 		Description: "Update the priority of a task",
+		Annotations: writer("Update task priority", true /*idempotent*/, true /*destructive*/),
 	}, s.handleUpdateTaskPriority)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "update_task",
 		Description: "Update a task's title and description",
+		Annotations: writer("Update task", true /*idempotent*/, true /*destructive*/),
 	}, s.handleUpdateTask)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_boards",
 		Description: "List all available kanban boards",
+		Annotations: readOnly("List boards"),
 	}, s.handleListBoards)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "change_board",
 		Description: "Change the active kanban board",
+		// Read-only in the multi-user design: it validates that a board exists
+		// in scope and reports it, but board selection is per-request so it
+		// mutates no shared state.
+		Annotations: readOnly("Change board"),
 	}, s.handleChangeBoard)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_activity",
 		Description: "List recent task activity (who changed what), newest first",
+		Annotations: readOnly("List activity"),
 	}, s.handleListActivity)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "whoami",
 		Description: "Report the repo and board scope the current token resolves to",
+		Annotations: readOnly("Who am I (current scope)"),
 	}, s.handleWhoami)
+}
+
+// ptrBool returns a pointer to b, for the SDK annotation fields that are
+// *bool (DestructiveHint, OpenWorldHint) and distinguish "unset" from "false".
+func ptrBool(b bool) *bool { return &b }
+
+// readOnly builds the annotations for a tool that does not modify its
+// environment: ReadOnlyHint true and a closed interaction world (no external
+// entities). DestructiveHint/IdempotentHint are meaningful only when a tool is
+// NOT read-only, so they are left unset here.
+func readOnly(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		Title:         title,
+		ReadOnlyHint:  true,
+		OpenWorldHint: ptrBool(false),
+	}
+}
+
+// writer builds the annotations for a tool that modifies its environment:
+// ReadOnlyHint false, with explicit idempotent/destructive hints and a closed
+// interaction world. create_task is non-idempotent (mints a new id each call)
+// and additive (non-destructive); the update_* tools are idempotent (re-applying
+// the same field value has no further effect) and destructive (they overwrite).
+func writer(title string, idempotent, destructive bool) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		Title:           title,
+		ReadOnlyHint:    false,
+		IdempotentHint:  idempotent,
+		DestructiveHint: ptrBool(destructive),
+		OpenWorldHint:   ptrBool(false),
+	}
 }
 
 // actorFromCtx returns the human-readable caller (email, else sub) recorded on
@@ -473,7 +517,7 @@ func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, 
 	var tasks []*task.Task
 	if args.Status != "" {
 		if !task.IsValidStatus(args.Status) {
-			return nil, nil, fmt.Errorf("invalid status: %s", args.Status)
+			return toolError("invalid status %q; valid values are todo, doing, done", args.Status), nil, nil
 		}
 		tasks, err = taskSystem.ListByStatus(boardID, task.Status(args.Status))
 	} else {
@@ -523,7 +567,7 @@ func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, 
 
 func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskStatusArgs) (*mcp.CallToolResult, any, error) {
 	if !task.IsValidStatus(args.Status) {
-		return nil, nil, fmt.Errorf("invalid status: %s", args.Status)
+		return toolError("invalid status %q; valid values are todo, doing, done", args.Status), nil, nil
 	}
 
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
@@ -537,7 +581,7 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 
 	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
+		return toolError("task #%d not found; call list_tasks to see valid task ids", args.ID), nil, nil
 	}
 
 	if args.ExpectedVersion > 0 {
@@ -583,6 +627,22 @@ func versionConflictResult(id int) *mcp.CallToolResult {
 	}
 }
 
+// toolError returns an MCP tool RESULT flagged isError (not a transport/JSON-RPC
+// error) for an EXPECTED, model-recoverable domain outcome — a task that does
+// not exist, an invalid status/priority value, a board not in scope. The model
+// sees the message in the content stream and can recover (re-read, pick a valid
+// value) instead of the call surfacing as a protocol fault. Reserve a transport
+// error (return nil, nil, err) for true faults the model cannot fix by retrying
+// with different args, e.g. a store/DynamoDB failure.
+func toolError(format string, args ...any) *mcp.CallToolResult {
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf(format, args...)},
+		},
+	}
+}
+
 func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, any, error) {
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
@@ -594,7 +654,7 @@ func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, ar
 
 	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to get task #%d: %w", args.ID, err)
+		return toolError("task #%d not found; call list_tasks to see valid task ids", args.ID), nil, nil
 	}
 
 	return &mcp.CallToolResult{
@@ -608,7 +668,7 @@ func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, ar
 
 func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskPriorityArgs) (*mcp.CallToolResult, any, error) {
 	if !task.IsValidPriority(args.Priority) {
-		return nil, nil, fmt.Errorf("invalid priority level")
+		return toolError("invalid priority; valid values are none, low, medium, high, critical (or 0-4)"), nil, nil
 	}
 
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
@@ -621,7 +681,7 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 
 	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
+		return toolError("task #%d not found; call list_tasks to see valid task ids", args.ID), nil, nil
 	}
 
 	if args.ExpectedVersion > 0 {
@@ -667,7 +727,7 @@ func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest,
 
 	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to find task #%d: %w", args.ID, err)
+		return toolError("task #%d not found; call list_tasks to see valid task ids", args.ID), nil, nil
 	}
 
 	if args.ExpectedVersion > 0 {
@@ -753,7 +813,7 @@ func (s *Server) handleChangeBoard(ctx context.Context, req *mcp.CallToolRequest
 	b, err := bs.ResolveBoard(args.BoardName)
 	if err != nil {
 		if errors.Is(err, store.ErrBoardNotFound) {
-			return nil, nil, fmt.Errorf("board %q not found in this scope", args.BoardName)
+			return toolError("board %q not found in this scope; call list_boards to see valid boards", args.BoardName), nil, nil
 		}
 		return nil, nil, fmt.Errorf("failed to resolve board %q: %w", args.BoardName, err)
 	}
