@@ -5,7 +5,7 @@ import {
   fetchAuthSession,
 } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
-import { ENTRA_PROVIDER_NAME, MCP_API, MCP_CLI_CLIENT_ID, MCP_OAUTH_CALLBACK_PORT } from "./amplify";
+import { ENTRA_PROVIDER_NAME, MCP_API, MCP_CLI_CLIENT_ID, MCP_OAUTH_CALLBACK_PORT, MCP_OAUTH_REDIRECT_URI } from "./amplify";
 import {
   connectRepo,
   listRepos,
@@ -736,6 +736,14 @@ function claudeAddCommand(mcpApi: string, clientId: string): string {
 // header — and no credential-shaped field for a host to mask — is needed. A
 // multi-repo user who wants to pin a specific repo adds the header manually (see
 // the setup guide's multi-repo section).
+//
+// It pins oauth.redirectUri. Kiro's loopback OAuth listener serves
+// /oauth/callback and, when the redirect is unpinned, picks a RANDOM port that
+// Cognito rejects with redirect_mismatch (the "An error was encountered with the
+// requested page" failure). The pinned value matches a callback registered on
+// the Cognito client (see infra/stack.go mcpCliCallbackUrls). clientId is also
+// nested under oauth, the shape Kiro documents; the top-level client_id is kept
+// for clients that read it there.
 function mcpOAuthConfigSnippet(mcpApi: string, clientId: string): string {
   const url = mcpApi || "https://<MCP_API>";
   return JSON.stringify(
@@ -745,6 +753,10 @@ function mcpOAuthConfigSnippet(mcpApi: string, clientId: string): string {
           type: "http",
           url,
           client_id: clientId,
+          oauth: {
+            clientId,
+            redirectUri: MCP_OAUTH_REDIRECT_URI,
+          },
         },
       },
     },
@@ -780,6 +792,7 @@ function agentPrompt(
 ): string {
   const url = mcpApi || "https://<MCP_API>";
   const cid = clientId || "<CLIENT_ID>";
+  const redirectUri = MCP_OAUTH_REDIRECT_URI;
   return [
     `Set up the cainban MCP server as your task backend for ${repo}, then start`,
     `using it. Everything you need is here — don't ask me for a token or an id.`,
@@ -796,12 +809,16 @@ function agentPrompt(
     ``,
     `For Claude Code that is:`,
     `  claude mcp add --transport http --client-id ${cid} cainban ${url}`,
-    `For a JSON-config client (Kiro, Cursor, VS Code), add under mcpServers:`,
-    `  "cainban": { "type": "http", "url": "${url}", "client_id": "${cid}" }`,
+    `For a JSON-config client (Kiro, Cursor, VS Code), add under mcpServers —`,
+    `pin oauth.redirectUri or the browser sign-in fails with redirect_mismatch`,
+    `(Kiro picks a random callback port otherwise, which Cognito rejects):`,
+    `  "cainban": { "type": "http", "url": "${url}", "client_id": "${cid}",`,
+    `    "oauth": { "clientId": "${cid}", "redirectUri": "${redirectUri}" } }`,
     `If you register through the Kiro Crew dashboard's Add-Custom-Server paste box,`,
     `use "clientId" (camelCase) and omit "type" — that surface rejects "type" and`,
     `"client_id" with "unknown spec key":`,
-    `  "cainban": { "url": "${url}", "clientId": "${cid}" }`,
+    `  "cainban": { "url": "${url}", "clientId": "${cid}",`,
+    `    "oauth": { "clientId": "${cid}", "redirectUri": "${redirectUri}" } }`,
     ``,
     `Then authenticate (the browser sign-in is the one step I have to do myself —`,
     `pause and let me complete it), and note that a newly-added MCP server usually`,
