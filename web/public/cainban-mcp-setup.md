@@ -96,11 +96,23 @@ other servers):
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>"
+      "client_id": "<CLIENT_ID>",
+      "oauth": {
+        "clientId": "<CLIENT_ID>",
+        "redirectUri": "http://127.0.0.1:3334/oauth/callback"
+      }
     }
   }
 }
 ```
+
+**Pin `oauth.redirectUri`.** Kiro serves its OAuth loopback callback on
+`/oauth/callback` and, when the redirect is unpinned, picks a *random* port.
+Cognito registers callbacks exactly and cannot wildcard ports, so an unpinned
+flow fails with `redirect_mismatch` — the browser shows "An error was
+encountered with the requested page." The value above is registered on
+cainban's Cognito client; `127.0.0.1` and `localhost` are not interchangeable to
+Cognito, so keep the spelling exactly.
 
 **Success:** the server is registered and the client shows it as needing
 authentication. Proceed to Step 3.
@@ -173,14 +185,21 @@ with `unknown spec key 'client_id'`. Use the camelCase `clientId` and drop
   "mcpServers": {
     "cainban": {
       "url": "<MCP_API>",
-      "clientId": "<CLIENT_ID>"
+      "clientId": "<CLIENT_ID>",
+      "oauth": {
+        "clientId": "<CLIENT_ID>",
+        "redirectUri": "http://127.0.0.1:3334/oauth/callback"
+      }
     }
   }
 }
 ```
 
 Your token's `default_repo` selects the board, so no `headers` block is needed.
-Then rebuild/restart and authenticate as in the runtime recipe below.
+The `oauth.redirectUri` pin is required here too — the paste box forwards the
+`oauth` block to the runtime verbatim, and without the pin the sign-in fails with
+`redirect_mismatch`. Then rebuild/restart and authenticate as in the runtime
+recipe below.
 
 #### Kiro Crew runtime (this gateway, config file)
 
@@ -198,7 +217,11 @@ project it — never hand-edit the projection.
        "cainban": {
          "type": "http",
          "url": "<MCP_API>",
-         "client_id": "<CLIENT_ID>"
+         "client_id": "<CLIENT_ID>",
+         "oauth": {
+           "clientId": "<CLIENT_ID>",
+           "redirectUri": "http://127.0.0.1:3334/oauth/callback"
+         }
        }
      }
    }
@@ -238,7 +261,11 @@ Add the server to Kiro's MCP settings (`mcp.json`), merging into any existing
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>"
+      "client_id": "<CLIENT_ID>",
+      "oauth": {
+        "clientId": "<CLIENT_ID>",
+        "redirectUri": "http://127.0.0.1:3334/oauth/callback"
+      }
     }
   }
 }
@@ -257,7 +284,11 @@ Same entry in `.cursor/mcp.json` (project) or Cursor's global MCP config:
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>"
+      "client_id": "<CLIENT_ID>",
+      "oauth": {
+        "clientId": "<CLIENT_ID>",
+        "redirectUri": "http://127.0.0.1:3334/oauth/callback"
+      }
     }
   }
 }
@@ -276,7 +307,11 @@ Same entry in `.vscode/mcp.json`:
     "cainban": {
       "type": "http",
       "url": "<MCP_API>",
-      "client_id": "<CLIENT_ID>"
+      "client_id": "<CLIENT_ID>",
+      "oauth": {
+        "clientId": "<CLIENT_ID>",
+        "redirectUri": "http://127.0.0.1:3334/oauth/callback"
+      }
     }
   }
 }

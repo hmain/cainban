@@ -346,9 +346,19 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// both localhost and 127.0.0.1. Operators can add more via
 	// -c mcpCliCallbackUrls=... (CSV) if a build uses a different port. The exact
 	// resolved behavior is documented in docs/mcp-oauth-setup.md.
+	//
+	// Kiro (kiro-cli / the Kiro Crew dashboard Authorize banner) uses a DIFFERENT
+	// loopback path from Claude Code: its callback listener serves /oauth/callback
+	// (Claude Code uses /callback). With oauth.redirectUri unset Kiro picks a
+	// random port, which Cognito rejects (redirect_mismatch) — so cainban's setup
+	// pins oauth.redirectUri=http://127.0.0.1:3334/oauth/callback, and that exact
+	// pair MUST stay registered here or a flagless deploy reverts it and breaks the
+	// Kiro Authorize flow. See docs/rfc-mcp-oauth-callback-pinning.md.
 	mcpCliCallbacks := splitCsv(ctxOr("mcpCliCallbackUrls", strings.Join([]string{
 		"http://localhost:3118/callback",
 		"http://127.0.0.1:3118/callback",
+		"http://localhost:3334/oauth/callback",
+		"http://127.0.0.1:3334/oauth/callback",
 		"http://localhost:41842/callback",
 		"http://127.0.0.1:41842/callback",
 		"http://localhost/callback",

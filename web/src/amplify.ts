@@ -63,3 +63,12 @@ export const MCP_CLI_CLIENT_ID = String(
 // redirect-mismatch (Cognito can't wildcard loopback ports). Shown in the setup
 // instructions as MCP_OAUTH_CALLBACK_PORT.
 export const MCP_OAUTH_CALLBACK_PORT = "3118";
+
+// Kiro's oauth.redirectUri pin. Kiro (kiro-cli / the Kiro Crew dashboard
+// Authorize banner) serves its OAuth loopback callback on the path
+// /oauth/callback and, when redirectUri is unset, picks a RANDOM port that
+// Cognito rejects (redirect_mismatch — the "An error was encountered with the
+// requested page" failure). This exact value is registered on the cainban-mcp-cli
+// Cognito client (infra/stack.go mcpCliCallbackUrls); 127.0.0.1 and localhost are
+// not interchangeable to Cognito, so the spelling must match the registered one.
+export const MCP_OAUTH_REDIRECT_URI = "http://127.0.0.1:3334/oauth/callback";
