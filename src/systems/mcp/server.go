@@ -572,7 +572,7 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest,
 	}, createdTask, nil
 }
 
-func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, args ListTasksArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, args ListTasksArgs) (*mcp.CallToolResult, []*task.Task, error) {
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
@@ -713,7 +713,7 @@ func toolError(format string, args ...any) *mcp.CallToolResult {
 	}
 }
 
-func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, *task.Task, error) {
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
@@ -838,7 +838,7 @@ func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest,
 	}, nil, nil
 }
 
-func (s *Server) handleListBoards(ctx context.Context, req *mcp.CallToolRequest, args ListBoardsArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleListBoards(ctx context.Context, req *mcp.CallToolRequest, args ListBoardsArgs) (*mcp.CallToolResult, []task.BoardSummary, error) {
 	bs, closeFn, err := s.resolveBoardStore(ctx)
 	if err != nil {
 		return nil, nil, err
@@ -931,7 +931,7 @@ type whoamiResult struct {
 // returns the no-scope message as NORMAL content (not isError): asking where you
 // are with no scope is a valid question whose answer is "nowhere yet". It opens
 // no store in that case, mirroring the fail-closed data path.
-func (s *Server) handleWhoami(ctx context.Context, req *mcp.CallToolRequest, args WhoamiArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleWhoami(ctx context.Context, req *mcp.CallToolRequest, args WhoamiArgs) (*mcp.CallToolResult, *whoamiResult, error) {
 	repo := repoFromCtx(ctx)
 	actor := actorFromCtx(ctx)
 
@@ -984,13 +984,13 @@ func (s *Server) handleWhoami(ctx context.Context, req *mcp.CallToolRequest, arg
 
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
-	}, res, nil
+	}, &res, nil
 }
 
 // handleListActivity returns the append-only activity feed for the current
 // board (or a single task when task_id is given), newest first. The event store
 // is pure audit and is never used to derive task/board state.
-func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolRequest, args ListActivityArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolRequest, args ListActivityArgs) (*mcp.CallToolResult, []task.ActivityEvent, error) {
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
@@ -1109,7 +1109,7 @@ func (s *Server) handleRestoreTask(ctx context.Context, req *mcp.CallToolRequest
 // handleSearchTasks fuzzy-matches tasks by title within the current board.
 // Read-only; prepends the same scope header as list_tasks so the caller sees
 // which repo/board the results belong to.
-func (s *Server) handleSearchTasks(ctx context.Context, req *mcp.CallToolRequest, args SearchTasksArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleSearchTasks(ctx context.Context, req *mcp.CallToolRequest, args SearchTasksArgs) (*mcp.CallToolResult, []*task.Task, error) {
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
@@ -1234,7 +1234,7 @@ func (s *Server) handleUnlinkTasks(ctx context.Context, req *mcp.CallToolRequest
 }
 
 // handleGetTaskLinks returns all links referencing a task in both directions.
-func (s *Server) handleGetTaskLinks(ctx context.Context, req *mcp.CallToolRequest, args GetTaskLinksArgs) (*mcp.CallToolResult, any, error) {
+func (s *Server) handleGetTaskLinks(ctx context.Context, req *mcp.CallToolRequest, args GetTaskLinksArgs) (*mcp.CallToolResult, []task.TaskLink, error) {
 	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
 	if err != nil {
 		return nil, nil, err
