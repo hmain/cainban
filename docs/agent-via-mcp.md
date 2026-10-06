@@ -90,22 +90,33 @@ argument below was verified against the handler argument structs in that file.
 | `update_task` | `id` (int, required), `title` (string, required), `description` (string, optional) | Update a task's title/description. |
 | `update_task_status` | `id` (int, required), `status` (string, required: `todo`/`doing`/`done`) | Move a task between columns. |
 | `update_task_priority` | `id` (int, required), `priority` (required: `none`/`low`/`medium`/`high`/`critical` or `0`–`4`) | Change a task's priority. |
+| `search_tasks` | `query` (string, required, fuzzy title substring), `board_id` (int, optional, defaults to 1) | Fuzzy-search tasks by title in the board. |
+| `delete_task` | `id` (int, required), `hard` (bool, optional, default false) | Soft-delete a task (recoverable); `hard: true` permanently removes it and its links. |
+| `restore_task` | `id` (int, required) | Restore a soft-deleted task; no-op on one never deleted or hard-deleted. |
+| `link_tasks` | `from_id` (int, required), `to_id` (int, required), `type` (string, required: `blocks`/`blocked_by`/`related`/`depends_on`) | Create a directional link between two tasks. |
+| `unlink_tasks` | `from_id` (int, required), `to_id` (int, required), `type` (string, required) | Remove a specific link between two tasks. |
+| `get_task_links` | `id` (int, required) | List all links referencing a task (both directions). |
 | `list_boards` | *(none)* | List available boards. |
 | `change_board` | `board_name` (string, required) | Validate a board exists. **No-op for routing:** board selection is per-request now, so this only confirms the board exists; it does not change any server-side "current board". |
+| `list_activity` | `task_id` (int, optional — scope to one task), `limit` (int, optional, default 50, max 200) | Append-only activity feed (who changed what), newest first. Read-only audit. |
+| `whoami` | *(none)* | Report the repo + board scope the current token resolves to. |
 
 A few things worth knowing if you're writing an agent:
 
-- There are no task-link MCP tools. The data model has task links
-  (`from_task_id`/`to_task_id` columns and fields exist in
-  `src/systems/storage` / `src/systems/task` / `src/systems/dynamo`), but no link
-  tool is registered on the MCP server. Don't call `get_task_links`,
-  `create_link`, or similar over MCP; they are not exposed. (README prose that
-  mentions `get_task_links` refers to the data model / CLI history, not an MCP
-  tool.)
-- The `id` that `get_task`/`update_*` take is the board-scoped task id (the `#N`
-  shown by `create_task`/`list_tasks`), not an internal row id.
+- **Task-link tools ARE exposed.** `link_tasks`, `unlink_tasks`, and
+  `get_task_links` are registered on the MCP server and work against the
+  serverless endpoint. Link types are `blocks`, `blocked_by`, `related`,
+  `depends_on`. (Earlier versions of this guide said no link tools existed; that
+  is no longer true.)
+- The `id` that `get_task`/`update_*`/`delete_task`/`restore_task`/`get_task_links`
+  take is the board-scoped task id (the `#N` shown by `create_task`/`list_tasks`),
+  not an internal row id. `link_tasks`/`unlink_tasks` take two of them
+  (`from_id`, `to_id`).
 - Statuses are exactly `todo`, `doing`, `done`. Priorities are `none`, `low`,
   `medium`, `high`, `critical` (or the integers `0`–`4`).
+- `list_activity` is a read-only audit feed and is never used to derive task or
+  board state. `whoami` answers "which repo/board does my token resolve to?"
+  without inferring it from a tool call.
 
 ## Worked example
 
