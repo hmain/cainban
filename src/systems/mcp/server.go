@@ -336,6 +336,28 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 		Description: "Report the repo and board scope the current token resolves to",
 		Annotations: readOnly("Who am I (current scope)"),
 	}, s.handleWhoami)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "delete_task",
+		Description: "Delete a task. Soft-delete by default (recoverable with restore_task); pass hard=true to permanently remove it.",
+		// Destructive (removes a task) and idempotent (deleting an already-
+		// deleted task converges to the same state).
+		Annotations: writer("Delete task", true /*idempotent*/, true /*destructive*/),
+	}, s.handleDeleteTask)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "restore_task",
+		Description: "Restore a soft-deleted task so it is visible again. Has no effect on a task that was never deleted or was hard-deleted.",
+		// Non-destructive (brings a task back) and idempotent (restoring an
+		// already-visible task converges to the same state).
+		Annotations: writer("Restore task", true /*idempotent*/, false /*destructive*/),
+	}, s.handleRestoreTask)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "search_tasks",
+		Description: "Fuzzy-search tasks in the current board by title substring. Returns matching tasks newest-first.",
+		Annotations: readOnly("Search tasks"),
+	}, s.handleSearchTasks)
 }
 
 // ptrBool returns a pointer to b, for the SDK annotation fields that are
@@ -453,6 +475,20 @@ type ChangeBoardArgs struct {
 type ListActivityArgs struct {
 	TaskID int `json:"task_id,omitempty" jsonschema:"optional: only show activity for this board task ID; omit for the whole board"`
 	Limit  int `json:"limit,omitempty" jsonschema:"max events to return, newest first (default 50, max 200)"`
+}
+
+type DeleteTaskArgs struct {
+	ID   int  `json:"id" jsonschema:"the board task ID to delete"`
+	Hard bool `json:"hard,omitempty" jsonschema:"permanently delete instead of soft-delete; a hard delete cannot be restored (default false)"`
+}
+
+type RestoreTaskArgs struct {
+	ID int `json:"id" jsonschema:"the board task ID to restore"`
+}
+
+type SearchTasksArgs struct {
+	Query   string `json:"query" jsonschema:"title substring to fuzzy-match against tasks in the board"`
+	BoardID int    `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
 }
 
 // Tool handlers. Each resolves its board database per request.
@@ -942,4 +978,122 @@ func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolReques
 	}
 
 	return &mcp.CallToolResult{Content: content}, events, nil
+}
+
+// handleDeleteTask removes a task from the current board. By default it
+// soft-deletes (recoverable via restore_task); hard=true permanently removes it
+// and its links. A missing task is an EXPECTED outcome returned as an isError
+// tool result, not a transport error, so the model can recover.
+func (s *Server) handleDeleteTask(ctx context.Context, req *mcp.CallToolRequest, args DeleteTaskArgs) (*mcp.CallToolResult, any, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := 1
+
+	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
+	if err != nil {
+		return toolError("task #%d not found; call list_tasks to see valid task ids", args.ID), nil, nil
+	}
+
+	if args.Hard {
+		if err := taskSystem.HardDelete(t.ID); err != nil {
+			return nil, nil, fmt.Errorf("failed to hard-delete task: %w", err)
+		}
+	} else if err := taskSystem.SoftDelete(t.ID); err != nil {
+		return nil, nil, fmt.Errorf("failed to delete task: %w", err)
+	}
+
+	kind := "deleted"
+	detail := "soft delete"
+	if args.Hard {
+		kind = "permanently deleted"
+		detail = "hard delete"
+	}
+
+	// Best-effort append-only audit (success path only).
+	_ = taskSystem.RecordActivity(task.ActivityEvent{
+		BoardID:     boardID,
+		BoardTaskID: args.ID,
+		Action:      task.ActivityDeleted,
+		Actor:       actorFromCtx(ctx),
+		Detail:      detail,
+	})
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf("Task #%d %s (%q)", args.ID, kind, t.Title)},
+		},
+	}, nil, nil
+}
+
+// handleRestoreTask brings a soft-deleted task back into view. Because a
+// soft-deleted task is excluded from GetByBoardTaskID, the restore is addressed
+// by board task id and resolved through the store's own RestoreTask, which
+// no-ops cleanly on a task that was never deleted.
+func (s *Server) handleRestoreTask(ctx context.Context, req *mcp.CallToolRequest, args RestoreTaskArgs) (*mcp.CallToolResult, any, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := 1
+
+	if err := taskSystem.RestoreTask(args.ID); err != nil {
+		// A not-found / already-hard-deleted task is an expected outcome.
+		return toolError("task #%d could not be restored; it may have been hard-deleted or never existed", args.ID), nil, nil
+	}
+
+	// Best-effort append-only audit (success path only).
+	_ = taskSystem.RecordActivity(task.ActivityEvent{
+		BoardID:     boardID,
+		BoardTaskID: args.ID,
+		Action:      task.ActivityRestored,
+		Actor:       actorFromCtx(ctx),
+		Detail:      "restored",
+	})
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf("Task #%d restored", args.ID)},
+		},
+	}, nil, nil
+}
+
+// handleSearchTasks fuzzy-matches tasks by title within the current board.
+// Read-only; prepends the same scope header as list_tasks so the caller sees
+// which repo/board the results belong to.
+func (s *Server) handleSearchTasks(ctx context.Context, req *mcp.CallToolRequest, args SearchTasksArgs) (*mcp.CallToolResult, any, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := args.BoardID
+	if boardID == 0 {
+		boardID = 1
+	}
+
+	results, err := taskSystem.SearchTasks(boardID, args.Query)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to search tasks: %w", err)
+	}
+
+	content := []mcp.Content{&mcp.TextContent{Text: scopeLine(ctx)}}
+	if len(results) == 0 {
+		content = append(content, &mcp.TextContent{Text: fmt.Sprintf("No tasks matching %q", args.Query)})
+		return &mcp.CallToolResult{Content: content}, results, nil
+	}
+
+	for _, t := range results {
+		content = append(content, &mcp.TextContent{
+			Text: fmt.Sprintf("• #%d [%s] %s", t.BoardTaskID, t.Status, t.Title),
+		})
+	}
+
+	return &mcp.CallToolResult{Content: content}, results, nil
 }

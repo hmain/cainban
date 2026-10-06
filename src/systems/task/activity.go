@@ -18,6 +18,10 @@ const (
 	ActivityUpdated ActivityAction = "updated"
 	// ActivityPriorityChanged records a priority change.
 	ActivityPriorityChanged ActivityAction = "priority_changed"
+	// ActivityDeleted records a task deletion (soft or hard).
+	ActivityDeleted ActivityAction = "deleted"
+	// ActivityRestored records a soft-deleted task being restored.
+	ActivityRestored ActivityAction = "restored"
 )
 
 // ActivityEvent is one append-only audit record of a task mutation. It is
