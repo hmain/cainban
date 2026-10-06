@@ -74,3 +74,6 @@ coverage.html
 /cainban-pretoken
 /cainban-connect
 /cainban
+
+# RFC design docs (kept local, not committed)
+docs/rfc*.md
