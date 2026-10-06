@@ -136,3 +136,97 @@ func TestSearchTasks_PrependsScopeAndMatches(t *testing.T) {
 		t.Errorf("search results = %q, want the matching task", joined)
 	}
 }
+
+// TestLinkTasks_InvalidType_IsErrorResult proves an invalid link type is an
+// isError tool result that names the valid types. Validation runs before any
+// store access, so this needs no database.
+func TestLinkTasks_InvalidType_IsErrorResult(t *testing.T) {
+	s := NewStateless()
+	res, _, err := s.handleLinkTasks(context.Background(), nil, LinkTasksArgs{FromID: 1, ToID: 2, LinkType: "bogus"})
+	if err != nil {
+		t.Fatalf("expected a tool result, got transport error: %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatal("invalid link type should be an isError tool result")
+	}
+	text := textOf(t, res.Content[0])
+	if !strings.Contains(text, "blocks") || !strings.Contains(text, "blocked_by") {
+		t.Errorf("invalid-type message = %q, want it to name the valid link types", text)
+	}
+}
+
+// TestLinkTasks_FromNotFound_IsErrorResult proves linking from a missing task is
+// an isError tool result (valid type, but no such task on the empty board).
+func TestLinkTasks_FromNotFound_IsErrorResult(t *testing.T) {
+	s := NewStateless()
+	res, _, err := s.handleLinkTasks(context.Background(), nil, LinkTasksArgs{FromID: 999, ToID: 998, LinkType: "blocks"})
+	if err != nil {
+		t.Fatalf("expected a tool result, got transport error: %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatal("link from a missing task should be an isError tool result")
+	}
+	text := textOf(t, res.Content[0])
+	if !strings.Contains(text, "999") || !strings.Contains(text, "list_tasks") {
+		t.Errorf("from-not-found message = %q, want id + list_tasks pointer", text)
+	}
+}
+
+// TestLinkRoundTrip exercises link -> get_task_links -> get_task(shows links) ->
+// unlink against the default SQLite board.
+func TestLinkRoundTrip(t *testing.T) {
+	s := NewStateless()
+	ctx := context.Background()
+
+	for _, title := range []string{"blocker", "blocked"} {
+		if _, _, err := s.handleCreateTask(ctx, nil, CreateTaskArgs{Title: title}); err != nil {
+			t.Fatalf("create %q failed: %v", title, err)
+		}
+	}
+
+	// Link #1 blocks #2.
+	lres, _, err := s.handleLinkTasks(ctx, nil, LinkTasksArgs{FromID: 1, ToID: 2, LinkType: "blocks"})
+	if err != nil {
+		t.Fatalf("link transport error: %v", err)
+	}
+	if lres == nil || lres.IsError {
+		t.Fatalf("link should succeed, got %+v", lres)
+	}
+
+	// get_task_links on #1 should show the link.
+	glres, _, err := s.handleGetTaskLinks(ctx, nil, GetTaskLinksArgs{ID: 1})
+	if err != nil {
+		t.Fatalf("get_task_links transport error: %v", err)
+	}
+	joined := ""
+	for _, c := range glres.Content {
+		joined += textOf(t, c) + "\n"
+	}
+	if !strings.Contains(joined, "blocks") {
+		t.Errorf("get_task_links output = %q, want the blocks link", joined)
+	}
+
+	// get_task on #1 should include a Links section.
+	gres, _, _ := s.handleGetTask(ctx, nil, GetTaskArgs{ID: 1})
+	gtext := textOf(t, gres.Content[0])
+	if !strings.Contains(gtext, "Links:") || !strings.Contains(gtext, "blocks") {
+		t.Errorf("get_task output = %q, want a Links section naming the blocks link", gtext)
+	}
+
+	// Unlink and confirm it is gone from get_task_links.
+	ures, _, err := s.handleUnlinkTasks(ctx, nil, UnlinkTasksArgs{FromID: 1, ToID: 2, LinkType: "blocks"})
+	if err != nil {
+		t.Fatalf("unlink transport error: %v", err)
+	}
+	if ures == nil || ures.IsError {
+		t.Fatalf("unlink should succeed, got %+v", ures)
+	}
+	glres2, _, _ := s.handleGetTaskLinks(ctx, nil, GetTaskLinksArgs{ID: 1})
+	joined2 := ""
+	for _, c := range glres2.Content {
+		joined2 += textOf(t, c) + "\n"
+	}
+	if !strings.Contains(joined2, "no links") {
+		t.Errorf("after unlink, get_task_links = %q, want 'no links'", joined2)
+	}
+}

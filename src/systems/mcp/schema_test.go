@@ -33,24 +33,28 @@ func listToolsWire(t *testing.T) []*mcp.Tool {
 	return res.Tools
 }
 
-// TestToolsListStable asserts that the MCP server advertises exactly the thirteen
+// TestToolsListStable asserts that the MCP server advertises exactly the sixteen
 // cainban tools. This is the regression guard for the "tool schema unchanged"
 // exit criterion of the stateless refactor: if a tool is added, removed, or
 // renamed, this test fails. P5A.4 added the read-only list_activity tool
 // (8 -> 9); the repo/board scope RFC added the read-only whoami tool (9 -> 10);
 // the CRUD-completeness pass added delete_task, restore_task, search_tasks
-// (10 -> 13).
+// (10 -> 13); the task-links pass added link_tasks, unlink_tasks,
+// get_task_links (13 -> 16).
 func TestToolsListStable(t *testing.T) {
 	want := []string{
 		"change_board",
 		"create_task",
 		"delete_task",
 		"get_task",
+		"get_task_links",
+		"link_tasks",
 		"list_activity",
 		"list_boards",
 		"list_tasks",
 		"restore_task",
 		"search_tasks",
+		"unlink_tasks",
 		"update_task",
 		"update_task_priority",
 		"update_task_status",
@@ -105,13 +109,14 @@ func TestToolInputSchemasPresent(t *testing.T) {
 // classified — an unannotated or mis-annotated tool fails here.
 func TestToolAnnotationsClassified(t *testing.T) {
 	readOnlyTools := map[string]bool{
-		"list_tasks":    true,
-		"get_task":      true,
-		"list_boards":   true,
-		"list_activity": true,
-		"whoami":        true,
-		"change_board":  true,
-		"search_tasks":  true,
+		"list_tasks":     true,
+		"get_task":       true,
+		"list_boards":    true,
+		"list_activity":  true,
+		"whoami":         true,
+		"change_board":   true,
+		"search_tasks":   true,
+		"get_task_links": true,
 	}
 	writers := map[string]bool{
 		"create_task":          true,
@@ -120,6 +125,8 @@ func TestToolAnnotationsClassified(t *testing.T) {
 		"update_task_priority": true,
 		"delete_task":          true,
 		"restore_task":         true,
+		"link_tasks":           true,
+		"unlink_tasks":         true,
 	}
 
 	for _, tl := range listToolsWire(t) {

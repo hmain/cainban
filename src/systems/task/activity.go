@@ -22,6 +22,10 @@ const (
 	ActivityDeleted ActivityAction = "deleted"
 	// ActivityRestored records a soft-deleted task being restored.
 	ActivityRestored ActivityAction = "restored"
+	// ActivityLinked records a link created between two tasks.
+	ActivityLinked ActivityAction = "linked"
+	// ActivityUnlinked records a link removed between two tasks.
+	ActivityUnlinked ActivityAction = "unlinked"
 )
 
 // ActivityEvent is one append-only audit record of a task mutation. It is
