@@ -378,7 +378,9 @@ Once connected, use cainban as the task backend for `<owner>/<repo>`:
    repo's work.
 
 **Available tools:** `list_boards`, `change_board`, `list_tasks`, `get_task`,
-`create_task`, `update_task`, `update_task_status`, `update_task_priority`.
+`create_task`, `update_task`, `update_task_status`, `update_task_priority`,
+`search_tasks`, `delete_task`, `restore_task`, `link_tasks`, `unlink_tasks`,
+`get_task_links`, `list_activity`, `whoami`.
 
 End by telling the user: cainban is set up for `<owner>/<repo>`. Your agent will
 list, create, and move tasks on the board as it works.
