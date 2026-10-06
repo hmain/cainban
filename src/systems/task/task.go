@@ -132,6 +132,15 @@ const (
 	LinkTypeDependsOn LinkType = "depends_on" // Task A depends on Task B
 )
 
+// IsValidLinkType reports whether lt is one of the recognized link types.
+func IsValidLinkType(lt string) bool {
+	switch LinkType(lt) {
+	case LinkTypeBlocks, LinkTypeBlockedBy, LinkTypeRelated, LinkTypeDependsOn:
+		return true
+	}
+	return false
+}
+
 // TaskLink represents a relationship between two tasks
 type TaskLink struct {
 	ID         int       `json:"id"`

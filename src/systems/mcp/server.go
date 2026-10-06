@@ -358,6 +358,24 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 		Description: "Fuzzy-search tasks in the current board by title substring. Returns matching tasks newest-first.",
 		Annotations: readOnly("Search tasks"),
 	}, s.handleSearchTasks)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "link_tasks",
+		Description: "Create a directional link between two tasks (blocks, blocked_by, related, depends_on).",
+		Annotations: writer("Link tasks", false /*idempotent — link already exists is an error*/, false /*destructive*/),
+	}, s.handleLinkTasks)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "unlink_tasks",
+		Description: "Remove a link between two tasks.",
+		Annotations: writer("Unlink tasks", true /*idempotent*/, true /*destructive*/),
+	}, s.handleUnlinkTasks)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "get_task_links",
+		Description: "List all links referencing a task (both directions).",
+		Annotations: readOnly("Get task links"),
+	}, s.handleGetTaskLinks)
 }
 
 // ptrBool returns a pointer to b, for the SDK annotation fields that are
@@ -489,6 +507,22 @@ type RestoreTaskArgs struct {
 type SearchTasksArgs struct {
 	Query   string `json:"query" jsonschema:"title substring to fuzzy-match against tasks in the board"`
 	BoardID int    `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
+}
+
+type LinkTasksArgs struct {
+	FromID   int    `json:"from_id" jsonschema:"board task ID of the source task"`
+	ToID     int    `json:"to_id" jsonschema:"board task ID of the target task"`
+	LinkType string `json:"type" jsonschema:"link type: blocks, blocked_by, related, depends_on"`
+}
+
+type UnlinkTasksArgs struct {
+	FromID   int    `json:"from_id" jsonschema:"board task ID of the source task"`
+	ToID     int    `json:"to_id" jsonschema:"board task ID of the target task"`
+	LinkType string `json:"type" jsonschema:"link type: blocks, blocked_by, related, depends_on"`
+}
+
+type GetTaskLinksArgs struct {
+	ID int `json:"id" jsonschema:"the board task ID to list links for"`
 }
 
 // Tool handlers. Each resolves its board database per request.
@@ -693,11 +727,20 @@ func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, ar
 		return toolError("task #%d not found; call list_tasks to see valid task ids", args.ID), nil, nil
 	}
 
+	text := fmt.Sprintf("#%d [%s] %s\n%s", t.BoardTaskID, t.Status, t.Title, t.Description)
+
+	// Best-effort: append links if any exist. A link-read failure is not
+	// worth failing the whole get_task call.
+	if links, err := taskSystem.GetTaskLinks(t.ID); err == nil && len(links) > 0 {
+		text += "\nLinks:"
+		for _, l := range links {
+			text += fmt.Sprintf("\n  • #%d %s #%d", l.FromTaskID, l.LinkType, l.ToTaskID)
+		}
+	}
+
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
-			&mcp.TextContent{
-				Text: fmt.Sprintf("#%d [%s] %s\n%s", t.BoardTaskID, t.Status, t.Title, t.Description),
-			},
+			&mcp.TextContent{Text: text},
 		},
 	}, t, nil
 }
@@ -1096,4 +1139,131 @@ func (s *Server) handleSearchTasks(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	return &mcp.CallToolResult{Content: content}, results, nil
+}
+
+// validLinkTypes lists the recognized link types for error messages.
+const validLinkTypes = "blocks, blocked_by, related, depends_on"
+
+// handleLinkTasks creates a directional link between two tasks.
+func (s *Server) handleLinkTasks(ctx context.Context, req *mcp.CallToolRequest, args LinkTasksArgs) (*mcp.CallToolResult, any, error) {
+	if !task.IsValidLinkType(args.LinkType) {
+		return toolError("invalid link type %q; valid values are %s", args.LinkType, validLinkTypes), nil, nil
+	}
+
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := 1
+
+	from, err := taskSystem.GetByBoardTaskID(boardID, args.FromID)
+	if err != nil {
+		return toolError("from task #%d not found; call list_tasks to see valid task ids", args.FromID), nil, nil
+	}
+	to, err := taskSystem.GetByBoardTaskID(boardID, args.ToID)
+	if err != nil {
+		return toolError("to task #%d not found; call list_tasks to see valid task ids", args.ToID), nil, nil
+	}
+
+	if err := taskSystem.LinkTasks(from.ID, to.ID, task.LinkType(args.LinkType)); err != nil {
+		return toolError("failed to link: %s", err), nil, nil
+	}
+
+	// Best-effort audit on both tasks.
+	for _, id := range []int{args.FromID, args.ToID} {
+		_ = taskSystem.RecordActivity(task.ActivityEvent{
+			BoardID:     boardID,
+			BoardTaskID: id,
+			Action:      task.ActivityLinked,
+			Actor:       actorFromCtx(ctx),
+			Detail:      fmt.Sprintf("#%d %s #%d", args.FromID, args.LinkType, args.ToID),
+		})
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf("Linked: #%d %s #%d", args.FromID, args.LinkType, args.ToID)},
+		},
+	}, nil, nil
+}
+
+// handleUnlinkTasks removes a specific link between two tasks.
+func (s *Server) handleUnlinkTasks(ctx context.Context, req *mcp.CallToolRequest, args UnlinkTasksArgs) (*mcp.CallToolResult, any, error) {
+	if !task.IsValidLinkType(args.LinkType) {
+		return toolError("invalid link type %q; valid values are %s", args.LinkType, validLinkTypes), nil, nil
+	}
+
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := 1
+
+	from, err := taskSystem.GetByBoardTaskID(boardID, args.FromID)
+	if err != nil {
+		return toolError("from task #%d not found; call list_tasks to see valid task ids", args.FromID), nil, nil
+	}
+	to, err := taskSystem.GetByBoardTaskID(boardID, args.ToID)
+	if err != nil {
+		return toolError("to task #%d not found; call list_tasks to see valid task ids", args.ToID), nil, nil
+	}
+
+	if err := taskSystem.UnlinkTasks(from.ID, to.ID, task.LinkType(args.LinkType)); err != nil {
+		return toolError("no %s link found between #%d and #%d", args.LinkType, args.FromID, args.ToID), nil, nil
+	}
+
+	for _, id := range []int{args.FromID, args.ToID} {
+		_ = taskSystem.RecordActivity(task.ActivityEvent{
+			BoardID:     boardID,
+			BoardTaskID: id,
+			Action:      task.ActivityUnlinked,
+			Actor:       actorFromCtx(ctx),
+			Detail:      fmt.Sprintf("#%d %s #%d", args.FromID, args.LinkType, args.ToID),
+		})
+	}
+
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{
+			&mcp.TextContent{Text: fmt.Sprintf("Unlinked: #%d %s #%d", args.FromID, args.LinkType, args.ToID)},
+		},
+	}, nil, nil
+}
+
+// handleGetTaskLinks returns all links referencing a task in both directions.
+func (s *Server) handleGetTaskLinks(ctx context.Context, req *mcp.CallToolRequest, args GetTaskLinksArgs) (*mcp.CallToolResult, any, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := 1
+
+	t, err := taskSystem.GetByBoardTaskID(boardID, args.ID)
+	if err != nil {
+		return toolError("task #%d not found; call list_tasks to see valid task ids", args.ID), nil, nil
+	}
+
+	links, err := taskSystem.GetTaskLinks(t.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get task links: %w", err)
+	}
+
+	content := []mcp.Content{&mcp.TextContent{Text: scopeLine(ctx)}}
+	if len(links) == 0 {
+		content = append(content, &mcp.TextContent{Text: fmt.Sprintf("Task #%d has no links", args.ID)})
+		return &mcp.CallToolResult{Content: content}, links, nil
+	}
+
+	for _, l := range links {
+		content = append(content, &mcp.TextContent{
+			Text: fmt.Sprintf("• #%d %s #%d", l.FromTaskID, l.LinkType, l.ToTaskID),
+		})
+	}
+
+	return &mcp.CallToolResult{Content: content}, links, nil
 }
