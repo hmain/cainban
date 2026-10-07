@@ -36,6 +36,23 @@ export interface ListActivityResult {
   empty: boolean;
 }
 
+/** One task as the MCP list_tasks tool returns it. The Go task.Task struct
+ * marshals exact field names (no JSON tags), so field casing is PascalCase. */
+export interface Task {
+  BoardTaskID: number;
+  Title: string;
+  Status: "todo" | "doing" | "done";
+  Priority: number; // 0..4 (none..critical)
+  Description?: string;
+  UpdatedAt?: string;
+}
+
+export interface ListTasksResult {
+  tasks: Task[];
+  /** True when the server replied "No tasks found" (empty but valid). */
+  empty: boolean;
+}
+
 // A monotonically increasing JSON-RPC id for this page's MCP calls.
 let rpcId = 0;
 
@@ -45,7 +62,7 @@ let rpcId = 0;
  */
 export async function listActivity(
   repo: string,
-  opts: { taskId?: number; limit?: number } = {},
+  opts: { taskId?: number; limit?: number; since?: string } = {},
 ): Promise<ListActivityResult> {
   if (!MCP_API) {
     throw new Error("MCP API URL is not configured (VITE_MCP_API).");
@@ -55,6 +72,7 @@ export async function listActivity(
   const args: Record<string, unknown> = {};
   if (opts.taskId && opts.taskId > 0) args.task_id = opts.taskId;
   if (opts.limit && opts.limit > 0) args.limit = opts.limit;
+  if (opts.since) args.since = opts.since;
 
   const body = {
     jsonrpc: "2.0",
@@ -116,6 +134,117 @@ export async function listActivity(
     .map(parseTextLine)
     .filter((e): e is ActivityEvent => e !== null);
   return { events: parsed, empty: parsed.length === 0 };
+}
+
+/**
+ * Call the MCP `list_tasks` tool for `repo` and return the current board tasks.
+ * Reuses the exact transport listActivity uses (POST tools/call, bearer ID
+ * token, X-Cainban-Repo, SSE-or-JSON response). Prefers structuredContent (the
+ * handler's typed []*task.Task second return value); throws on auth/transport
+ * errors with the same 401/403 mapping so the board can show a reason.
+ */
+export async function listTasks(
+  repo: string,
+  opts: { status?: "todo" | "doing" | "done" } = {},
+): Promise<ListTasksResult> {
+  if (!MCP_API) {
+    throw new Error("MCP API URL is not configured (VITE_MCP_API).");
+  }
+  const token = await getIdToken();
+
+  const args: Record<string, unknown> = {};
+  if (opts.status) args.status = opts.status;
+
+  const body = {
+    jsonrpc: "2.0",
+    id: ++rpcId,
+    method: "tools/call",
+    params: { name: "list_tasks", arguments: args },
+  };
+
+  const res = await fetch(MCP_API, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${token}`,
+      "X-Cainban-Repo": repo,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 401) {
+    throw new Error(
+      "Unauthorized (401) — your session token may have expired. Try reloading.",
+    );
+  }
+  if (res.status === 403) {
+    throw new Error(
+      `Forbidden (403) — your token does not authorize ${repo}. Connect the repo first.`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(`MCP request failed (${res.status}).`);
+  }
+
+  const payload = await parseMcpResponse(res);
+  if (payload.error) {
+    throw new Error(payload.error.message || "MCP tool call returned an error.");
+  }
+  const result = payload.result;
+  if (!result) {
+    throw new Error("MCP response had no result.");
+  }
+
+  const structured = extractStructuredTasks(result);
+  if (structured) {
+    return { tasks: structured, empty: structured.length === 0 };
+  }
+
+  // Fallback: the text content starts with a scope line, then either
+  // "No tasks found in current board" or grouped "• #N [pri] title" lines.
+  // Without structuredContent we cannot reliably recover status, so treat as
+  // empty rather than guess (the real server always emits structuredContent).
+  const texts = extractTextLines(result);
+  const empty = texts.some((t) => /no tasks found/i.test(t));
+  return { tasks: [], empty };
+}
+
+// extractStructuredTasks reads result.structuredContent as the typed task list
+// the list_tasks handler returns ([]*task.Task). Accepts an array directly, or
+// an object whose first array-valued field holds the tasks (mirrors the
+// activity extractor's tolerance of SDK wrapping).
+function extractStructuredTasks(result: McpToolResult): Task[] | null {
+  const sc = result.structuredContent;
+  if (sc == null) return null;
+  const arr = asTaskArray(sc);
+  if (arr) return arr;
+  if (typeof sc === "object") {
+    for (const v of Object.values(sc as Record<string, unknown>)) {
+      const inner = asTaskArray(v);
+      if (inner) return inner;
+    }
+  }
+  return null;
+}
+
+function asTaskArray(v: unknown): Task[] | null {
+  if (!Array.isArray(v)) return null;
+  return v.map((raw) => {
+    const o = (raw ?? {}) as Record<string, unknown>;
+    const status = str(o.Status);
+    return {
+      BoardTaskID: num(o.BoardTaskID),
+      Title: str(o.Title),
+      Status:
+        status === "doing" || status === "done"
+          ? (status as Task["Status"])
+          : "todo",
+      Priority: num(o.Priority),
+      Description: o.Description == null ? undefined : str(o.Description),
+      UpdatedAt: o.UpdatedAt == null ? undefined : str(o.UpdatedAt),
+    };
+  });
 }
 
 interface McpEnvelope {

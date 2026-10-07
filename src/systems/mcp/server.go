@@ -491,8 +491,9 @@ type ChangeBoardArgs struct {
 }
 
 type ListActivityArgs struct {
-	TaskID int `json:"task_id,omitempty" jsonschema:"optional: only show activity for this board task ID; omit for the whole board"`
-	Limit  int `json:"limit,omitempty" jsonschema:"max events to return, newest first (default 50, max 200)"`
+	TaskID int    `json:"task_id,omitempty" jsonschema:"optional: only show activity for this board task ID; omit for the whole board"`
+	Limit  int    `json:"limit,omitempty" jsonschema:"max events to return, newest first (default 50, max 200)"`
+	Since  string `json:"since,omitempty" jsonschema:"optional RFC3339 timestamp; return only events strictly newer than this (for delta polling a live board)"`
 }
 
 type DeleteTaskArgs struct {
@@ -999,7 +1000,16 @@ func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolReques
 
 	boardID := 1
 
-	events, err := taskSystem.ListActivity(boardID, args.TaskID, args.Limit)
+	var since time.Time
+	if args.Since != "" {
+		parsed, perr := time.Parse(time.RFC3339, args.Since)
+		if perr != nil {
+			return toolError("invalid since %q; pass an RFC3339 timestamp like 2026-01-02T15:04:05Z", args.Since), nil, nil
+		}
+		since = parsed
+	}
+
+	events, err := taskSystem.ListActivity(boardID, args.TaskID, args.Limit, since)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list activity: %w", err)
 	}

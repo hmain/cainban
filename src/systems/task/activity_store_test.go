@@ -2,6 +2,7 @@ package task
 
 import (
 	"testing"
+	"time"
 
 	"github.com/hmain/cainban/src/systems/storage"
 )
@@ -31,7 +32,7 @@ func TestSystem_RecordAndListActivity(t *testing.T) {
 	}
 
 	// Whole board, newest first (by insertion id).
-	all, err := s.ListActivity(1, 0, 0)
+	all, err := s.ListActivity(1, 0, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(board): %v", err)
 	}
@@ -49,7 +50,7 @@ func TestSystem_RecordAndListActivity(t *testing.T) {
 	}
 
 	// Task filter.
-	t1, err := s.ListActivity(1, 1, 0)
+	t1, err := s.ListActivity(1, 1, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(task 1): %v", err)
 	}
@@ -66,7 +67,7 @@ func TestSystem_RecordAndListActivity(t *testing.T) {
 	}
 
 	// Limit is respected.
-	limited, err := s.ListActivity(1, 0, 1)
+	limited, err := s.ListActivity(1, 0, 1, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(limit 1): %v", err)
 	}
@@ -80,11 +81,80 @@ func TestSystem_RecordAndListActivity(t *testing.T) {
 
 func TestSystem_ListActivity_EmptyBoard(t *testing.T) {
 	s := newActivityTestSystem(t)
-	got, err := s.ListActivity(1, 0, 0)
+	got, err := s.ListActivity(1, 0, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity: %v", err)
 	}
 	if len(got) != 0 {
 		t.Fatalf("expected no events on a fresh board, got %d", len(got))
+	}
+}
+
+// TestSystem_ListActivity_Since verifies the delta-polling cursor: with a since
+// timestamp only strictly-newer events are returned, and omitting since is
+// behaviour-preserving. created_at is a second-granular SQLite DATETIME, so the
+// test inserts rows with explicit UTC timestamps to control the boundary.
+func TestSystem_ListActivity_Since(t *testing.T) {
+	db, err := storage.NewMemory()
+	if err != nil {
+		t.Fatalf("NewMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	s := New(db.Conn())
+
+	// Three events at distinct seconds, plus a second event sharing t2's second.
+	t1 := "2026-01-01 12:00:01"
+	t2 := "2026-01-01 12:00:02"
+	t3 := "2026-01-01 12:00:03"
+	insert := func(taskID int, detail, ts string) {
+		if _, err := db.Conn().Exec(
+			"INSERT INTO activity (board_id, board_task_id, action, actor, detail, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+			1, taskID, string(ActivityCreated), "a@example.com", detail, ts,
+		); err != nil {
+			t.Fatalf("insert %s: %v", detail, err)
+		}
+	}
+	insert(1, "e1", t1)
+	insert(2, "e2a", t2)
+	insert(3, "e2b", t2) // shares t2's second
+	insert(4, "e3", t3)
+
+	// since = t1 -> everything strictly after 12:00:01 (e2a, e2b, e3).
+	parse := func(ts string) time.Time {
+		p, perr := time.Parse(sqliteTimeLayout, ts)
+		if perr != nil {
+			t.Fatalf("parse %s: %v", ts, perr)
+		}
+		return p.UTC()
+	}
+	after1, err := s.ListActivity(1, 0, 0, parse(t1))
+	if err != nil {
+		t.Fatalf("ListActivity(since t1): %v", err)
+	}
+	if len(after1) != 3 {
+		t.Fatalf("since t1: expected 3 strictly-newer events, got %d: %+v", len(after1), after1)
+	}
+	for _, ev := range after1 {
+		if ev.Detail == "e1" {
+			t.Fatalf("since t1 leaked the boundary event e1: %+v", ev)
+		}
+	}
+
+	// since = t3 -> nothing strictly newer.
+	after3, err := s.ListActivity(1, 0, 0, parse(t3))
+	if err != nil {
+		t.Fatalf("ListActivity(since t3): %v", err)
+	}
+	if len(after3) != 0 {
+		t.Fatalf("since t3: expected 0 events, got %d", len(after3))
+	}
+
+	// Omitted since (zero) returns all four, behaviour-preserving.
+	all, err := s.ListActivity(1, 0, 0, time.Time{})
+	if err != nil {
+		t.Fatalf("ListActivity(no since): %v", err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("no since: expected 4 events, got %d", len(all))
 	}
 }

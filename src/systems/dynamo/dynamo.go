@@ -858,24 +858,45 @@ func (s *Store) RecordActivity(ev task.ActivityEvent) error {
 }
 
 // ListActivity returns recent events for a board, newest first, capped at
-// limit. When boardTaskID > 0 only that task's events are returned. Ordering is
+// limit. When boardTaskID > 0 only that task's events are returned. When since
+// is non-zero, only events strictly newer than since are returned. Ordering is
 // enforced in Go (sort by timestamp desc) so it is correct regardless of the
 // underlying Query's scan direction.
-func (s *Store) ListActivity(boardID, boardTaskID, limit int) ([]task.ActivityEvent, error) {
+func (s *Store) ListActivity(boardID, boardTaskID, limit int, since time.Time) ([]task.ActivityEvent, error) {
 	limit = clampActivityLimit(limit)
 	ctx := context.TODO()
 	var events []task.ActivityEvent
 	var startKey map[string]ddbtypes.AttributeValue
+
+	// Narrow the Query with a sort-key range when a since cursor is given. The
+	// event SK is "EVENT#<RFC3339Nano>#<id>", so events strictly newer than
+	// since are those whose SK sorts after "EVENT#<since-nano>#\uffff" (the
+	// \uffff suffix pushes the lower bound past every id sharing that exact
+	// timestamp, giving strict ">"). The upper bound keeps the Query inside the
+	// EVENT# range. A zero since falls back to the begins_with prefix.
+	keyCond := "PK = :pk AND begins_with(SK, :prefix)"
+	exprVals := map[string]ddbtypes.AttributeValue{
+		":pk":     &ddbtypes.AttributeValueMemberS{Value: s.boardPK(boardID)},
+		":prefix": &ddbtypes.AttributeValueMemberS{Value: eventSKPrefix},
+	}
+	if !since.IsZero() {
+		lo := fmt.Sprintf("%s%s#\uffff", eventSKPrefix, since.UTC().Format(time.RFC3339Nano))
+		hi := eventSKPrefix + "\uffff"
+		keyCond = "PK = :pk AND SK BETWEEN :lo AND :hi"
+		exprVals = map[string]ddbtypes.AttributeValue{
+			":pk": &ddbtypes.AttributeValueMemberS{Value: s.boardPK(boardID)},
+			":lo": &ddbtypes.AttributeValueMemberS{Value: lo},
+			":hi": &ddbtypes.AttributeValueMemberS{Value: hi},
+		}
+	}
+
 	for {
 		out, err := s.client.Query(ctx, &dynamodb.QueryInput{
-			TableName:              aws.String(s.table),
-			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :prefix)"),
-			ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
-				":pk":     &ddbtypes.AttributeValueMemberS{Value: s.boardPK(boardID)},
-				":prefix": &ddbtypes.AttributeValueMemberS{Value: eventSKPrefix},
-			},
-			ScanIndexForward:  aws.Bool(false), // newest first at the source
-			ExclusiveStartKey: startKey,
+			TableName:                 aws.String(s.table),
+			KeyConditionExpression:    aws.String(keyCond),
+			ExpressionAttributeValues: exprVals,
+			ScanIndexForward:          aws.Bool(false), // newest first at the source
+			ExclusiveStartKey:         startKey,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to list activity: %w", err)
@@ -889,6 +910,13 @@ func (s *Store) ListActivity(boardID, boardTaskID, limit int) ([]task.ActivityEv
 				continue
 			}
 			ts, _ := time.Parse(time.RFC3339Nano, it.EventTS)
+			// Correctness backstop for since: the SK range narrows the Query,
+			// but a strict comparison here guarantees "strictly newer" holds
+			// even for a test fake that does not honour KeyConditionExpression
+			// ranges.
+			if !since.IsZero() && !ts.After(since) {
+				continue
+			}
 			events = append(events, task.ActivityEvent{
 				BoardID:     it.BoardID,
 				BoardTaskID: it.BoardTaskID,

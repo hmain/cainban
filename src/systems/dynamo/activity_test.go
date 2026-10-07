@@ -51,7 +51,7 @@ func TestStore_RecordAndListActivity(t *testing.T) {
 	}
 
 	// Whole board, newest first.
-	all, err := s.ListActivity(1, 0, 0)
+	all, err := s.ListActivity(1, 0, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(board): %v", err)
 	}
@@ -71,7 +71,7 @@ func TestStore_RecordAndListActivity(t *testing.T) {
 	}
 
 	// Task filter: only task 1's two events.
-	t1, err := s.ListActivity(1, 1, 0)
+	t1, err := s.ListActivity(1, 1, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(task 1): %v", err)
 	}
@@ -89,7 +89,7 @@ func TestStore_RecordAndListActivity(t *testing.T) {
 	}
 
 	// Limit is respected.
-	limited, err := s.ListActivity(1, 0, 1)
+	limited, err := s.ListActivity(1, 0, 1, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(limit 1): %v", err)
 	}
@@ -98,6 +98,66 @@ func TestStore_RecordAndListActivity(t *testing.T) {
 	}
 	if limited[0].Detail != "Second" {
 		t.Fatalf("expected newest event under limit, got %+v", limited[0])
+	}
+}
+
+// TestStore_ListActivity_Since verifies the delta-polling cursor on the
+// DynamoDB backend: with a since timestamp only strictly-newer events are
+// returned (via the SK BETWEEN range + the Go post-filter), and omitting since
+// is behaviour-preserving.
+func TestStore_ListActivity_Since(t *testing.T) {
+	fake := newFakeDDB()
+	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	s := newStoreWithClock(fake, start, time.Second)
+
+	// Four events at t0, t0+1s, t0+2s, t0+3s.
+	events := []task.ActivityEvent{
+		{BoardID: 1, BoardTaskID: 1, Action: task.ActivityCreated, Actor: "a@example.com", Detail: "e0"},
+		{BoardID: 1, BoardTaskID: 2, Action: task.ActivityCreated, Actor: "a@example.com", Detail: "e1"},
+		{BoardID: 1, BoardTaskID: 3, Action: task.ActivityCreated, Actor: "a@example.com", Detail: "e2"},
+		{BoardID: 1, BoardTaskID: 4, Action: task.ActivityCreated, Actor: "a@example.com", Detail: "e3"},
+	}
+	for i := range events {
+		if err := s.RecordActivity(events[i]); err != nil {
+			t.Fatalf("RecordActivity[%d]: %v", i, err)
+		}
+	}
+
+	// since = t0+1s -> strictly newer events are e2, e3 (not the boundary e1).
+	since := start.Add(time.Second) // the timestamp e1 was written at
+	after, err := s.ListActivity(1, 0, 0, since)
+	if err != nil {
+		t.Fatalf("ListActivity(since): %v", err)
+	}
+	if len(after) != 2 {
+		t.Fatalf("since: expected 2 strictly-newer events, got %d: %+v", len(after), after)
+	}
+	for _, ev := range after {
+		if ev.Detail == "e0" || ev.Detail == "e1" {
+			t.Fatalf("since leaked a boundary/older event: %+v", ev)
+		}
+	}
+	// Newest-first ordering preserved under since.
+	if after[0].Detail != "e3" {
+		t.Fatalf("since: expected newest-first (e3), got %+v", after[0])
+	}
+
+	// since past the newest -> empty.
+	none, err := s.ListActivity(1, 0, 0, start.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ListActivity(since future): %v", err)
+	}
+	if len(none) != 0 {
+		t.Fatalf("since future: expected 0 events, got %d", len(none))
+	}
+
+	// Omitted since -> all four (behaviour-preserving).
+	all, err := s.ListActivity(1, 0, 0, time.Time{})
+	if err != nil {
+		t.Fatalf("ListActivity(no since): %v", err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("no since: expected 4 events, got %d", len(all))
 	}
 }
 
@@ -110,7 +170,7 @@ func TestStore_RecordActivity_DefaultsTimestamp(t *testing.T) {
 	if err := s.RecordActivity(task.ActivityEvent{BoardID: 1, BoardTaskID: 3, Action: task.ActivityUpdated, Actor: "x", Detail: "New title"}); err != nil {
 		t.Fatalf("RecordActivity: %v", err)
 	}
-	got, err := s.ListActivity(1, 0, 0)
+	got, err := s.ListActivity(1, 0, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity: %v", err)
 	}

@@ -234,12 +234,20 @@ func (f *fakeDDB) Query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*d
 	defer f.mu.Unlock()
 	pk := s(in.ExpressionAttributeValues[":pk"])
 	prefix := s(in.ExpressionAttributeValues[":prefix"])
+	// Support the since-cursor path's "SK BETWEEN :lo AND :hi" range in addition
+	// to the "begins_with(SK, :prefix)" path. Only one is set per call.
+	lo := s(in.ExpressionAttributeValues[":lo"])
+	hi := s(in.ExpressionAttributeValues[":hi"])
 	var out []map[string]ddbtypes.AttributeValue
 	for _, item := range f.items {
 		if s(item["PK"]) != pk {
 			continue
 		}
-		if prefix != "" && !strings.HasPrefix(s(item["SK"]), prefix) {
+		sk := s(item["SK"])
+		if prefix != "" && !strings.HasPrefix(sk, prefix) {
+			continue
+		}
+		if lo != "" && !(sk > lo && sk <= hi) {
 			continue
 		}
 		out = append(out, cloneItem(item))
