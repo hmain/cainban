@@ -253,3 +253,319 @@ code {
   color: var(--muted);
   font-size: 0.8rem;
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 1 live board: app shell, repo rail, board, cards, chip.       */
+/* All colours come from the :root design tokens above.                */
+/* ------------------------------------------------------------------ */
+
+.app-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--card);
+}
+
+.app-header .brand {
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.app-header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.app-main {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Repo rail — a left column on wide screens. */
+.repo-rail {
+  width: 15rem;
+  flex: 0 0 15rem;
+  border-right: 1px solid var(--border);
+  padding: 1rem;
+  background: var(--card);
+}
+
+.repo-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.repo-rail-title {
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+}
+
+.repo-rail-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.repo-rail-link {
+  display: block;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  word-break: break-word;
+}
+
+.repo-rail-link:hover {
+  background: var(--bg);
+}
+
+.repo-rail-link.selected {
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  color: var(--text);
+}
+
+/* The narrow-screen dropdown is hidden on wide screens. */
+.repo-rail-select {
+  display: none;
+}
+
+.repo-rail-select select {
+  width: 100%;
+  font: inherit;
+  padding: 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Board layout. */
+.board-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.board-head h2 {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.board-columns {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.board-column {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.75rem;
+  min-height: 6rem;
+}
+
+.board-column-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.6rem;
+}
+
+.board-column-title {
+  font-weight: 600;
+}
+
+.board-column-count {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.board-column-empty {
+  color: var(--muted);
+  font-size: 0.85rem;
+  margin: 0.25rem 0;
+}
+
+.board-column-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Cards. */
+.board-card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+}
+
+.board-card.working {
+  border-color: var(--accent);
+  animation: card-pulse 1.4s ease-in-out infinite;
+}
+
+.board-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.board-card-id {
+  color: var(--muted);
+}
+
+.board-card-title {
+  margin-top: 0.3rem;
+  font-size: 0.95rem;
+  word-break: break-word;
+}
+
+.board-card-foot {
+  margin-top: 0.4rem;
+}
+
+.agent-badge {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
+/* Priority pills. */
+.pill {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-radius: 999px;
+  padding: 0.08rem 0.45rem;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.pill-low { color: var(--muted); border-color: var(--border); }
+.pill-medium { color: var(--accent); border-color: var(--accent); }
+.pill-high { color: #f5b14c; border-color: #f5b14c; }
+.pill-critical { color: var(--error); border-color: var(--error); }
+
+/* Connection chip — distinguishable by icon + label, not colour alone. */
+.conn-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.15rem 0.6rem;
+  color: var(--muted);
+}
+
+.conn-chip .conn-dot {
+  font-size: 0.75rem;
+}
+
+.conn-chip.live { color: var(--ok); border-color: var(--ok); }
+.conn-chip.connecting,
+.conn-chip.reconnecting { color: var(--accent); border-color: var(--accent); }
+.conn-chip.paused { color: var(--muted); }
+.conn-chip.stale { color: var(--error); border-color: var(--error); }
+.conn-chip.degraded { color: #f5b14c; border-color: #f5b14c; }
+
+.conn-chip.live .conn-dot {
+  animation: card-pulse 1.6s ease-in-out infinite;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@keyframes card-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+/* Card entering / landing cues (Stage E). */
+.board-card.enter { animation: card-enter 0.35s ease; }
+.board-card.done-landed { animation: card-landed 0.6s ease; }
+
+@keyframes card-enter {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes card-landed {
+  0% { box-shadow: 0 0 0 0 var(--ok); }
+  40% { box-shadow: 0 0 0 3px var(--ok); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+/* Narrow screens: rail becomes a top dropdown, columns stack. */
+@media (max-width: 760px) {
+  .app-body { flex-direction: column; }
+  .repo-rail {
+    width: auto;
+    flex: none;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .repo-rail-list { display: none; }
+  .repo-rail-select { display: block; }
+  .board-columns { grid-template-columns: 1fr; }
+}
+
+/* Respect reduced motion: no pulses, no glides, instant state. */
+@media (prefers-reduced-motion: reduce) {
+  .board-card,
+  .board-card.working,
+  .board-card.enter,
+  .board-card.done-landed,
+  .conn-chip.live .conn-dot {
+    animation: none !important;
+    transition: none !important;
+  }
+}

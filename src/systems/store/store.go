@@ -14,6 +14,8 @@
 package store
 
 import (
+	"time"
+
 	"github.com/hmain/cainban/src/systems/task"
 )
 
@@ -89,8 +91,10 @@ type TaskStore interface {
 	RecordActivity(ev task.ActivityEvent) error
 	// ListActivity returns recent events for a board, newest first, capped at
 	// limit (<=0 or >200 means a sane default of 50). If boardTaskID > 0, only
-	// events for that task are returned.
-	ListActivity(boardID, boardTaskID, limit int) ([]task.ActivityEvent, error)
+	// events for that task are returned. When since is non-zero, only events
+	// strictly newer than since are returned (for SPA delta polling); a zero
+	// since (time.Time{}) means "no filter" and is behavior-preserving.
+	ListActivity(boardID, boardTaskID, limit int, since time.Time) ([]task.ActivityEvent, error)
 }
 
 // Compile-time assertion that the SQLite implementation satisfies the contract
