@@ -92,7 +92,7 @@ func TestSystem_ListActivity_EmptyBoard(t *testing.T) {
 
 // TestSystem_ListActivity_Since verifies the delta-polling cursor: with a since
 // timestamp only strictly-newer events are returned, and omitting since is
-// behaviour-preserving. created_at is a second-granular SQLite DATETIME, so the
+// behavior-preserving. created_at is a second-granular SQLite DATETIME, so the
 // test inserts rows with explicit UTC timestamps to control the boundary.
 func TestSystem_ListActivity_Since(t *testing.T) {
 	db, err := storage.NewMemory()
@@ -149,7 +149,7 @@ func TestSystem_ListActivity_Since(t *testing.T) {
 		t.Fatalf("since t3: expected 0 events, got %d", len(after3))
 	}
 
-	// Omitted since (zero) returns all four, behaviour-preserving.
+	// Omitted since (zero) returns all four, behavior-preserving.
 	all, err := s.ListActivity(1, 0, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(no since): %v", err)

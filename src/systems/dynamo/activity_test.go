@@ -104,7 +104,7 @@ func TestStore_RecordAndListActivity(t *testing.T) {
 // TestStore_ListActivity_Since verifies the delta-polling cursor on the
 // DynamoDB backend: with a since timestamp only strictly-newer events are
 // returned (via the SK BETWEEN range + the Go post-filter), and omitting since
-// is behaviour-preserving.
+// is behavior-preserving.
 func TestStore_ListActivity_Since(t *testing.T) {
 	fake := newFakeDDB()
 	start := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
@@ -151,7 +151,7 @@ func TestStore_ListActivity_Since(t *testing.T) {
 		t.Fatalf("since future: expected 0 events, got %d", len(none))
 	}
 
-	// Omitted since -> all four (behaviour-preserving).
+	// Omitted since -> all four (behavior-preserving).
 	all, err := s.ListActivity(1, 0, 0, time.Time{})
 	if err != nil {
 		t.Fatalf("ListActivity(no since): %v", err)

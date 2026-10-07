@@ -93,7 +93,7 @@ type TaskStore interface {
 	// limit (<=0 or >200 means a sane default of 50). If boardTaskID > 0, only
 	// events for that task are returned. When since is non-zero, only events
 	// strictly newer than since are returned (for SPA delta polling); a zero
-	// since (time.Time{}) means "no filter" and is behaviour-preserving.
+	// since (time.Time{}) means "no filter" and is behavior-preserving.
 	ListActivity(boardID, boardTaskID, limit int, since time.Time) ([]task.ActivityEvent, error)
 }
 
