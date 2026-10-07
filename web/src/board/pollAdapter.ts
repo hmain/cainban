@@ -87,12 +87,28 @@ export class PollAdapter {
   private async snapshot(): Promise<void> {
     try {
       const res = await listTasks(this.repo);
-      // A fresh snapshot resets the cursor to "now" so the first delta poll
-      // only picks up events after this point.
+      // Seed the delta cursor from the newest SERVER-stamped activity event, not
+      // the client wall-clock. The server filters `since` against its own clock,
+      // so a client clock even slightly ahead of the server would make the first
+      // poll ask for events in the server's future and silently drop every move
+      // until a re-snapshot — the live-move-not-applied bug. Reading the newest
+      // event's own timestamp keeps `since` in the server's time base. null (no
+      // events yet) means the first poll fetches recent activity and the
+      // idempotent reducer dedupes anything the snapshot already reflected.
+      let cursor: string | null = null;
+      try {
+        const act = await listActivity(this.repo, { limit: 1 });
+        cursor = act.events.length > 0 ? act.events[0].Timestamp : null;
+      } catch {
+        // A failed cursor-seed is non-fatal: fall back to null (fetch recent
+        // deltas next poll; the reducer dedupes). Do NOT fall back to the client
+        // clock — that reintroduces the skew bug.
+        cursor = null;
+      }
       this.dispatch({
         type: "snapshot",
         tasks: res.tasks,
-        cursor: new Date().toISOString(),
+        cursor,
       });
       this.backoff = POLL_INTERVAL_MS;
     } catch {
