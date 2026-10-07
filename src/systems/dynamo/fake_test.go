@@ -247,7 +247,7 @@ func (f *fakeDDB) Query(_ context.Context, in *dynamodb.QueryInput, _ ...func(*d
 		if prefix != "" && !strings.HasPrefix(sk, prefix) {
 			continue
 		}
-		if lo != "" && !(sk > lo && sk <= hi) {
+		if lo != "" && (sk <= lo || sk > hi) {
 			continue
 		}
 		out = append(out, cloneItem(item))

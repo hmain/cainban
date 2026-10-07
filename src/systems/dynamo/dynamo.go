@@ -912,7 +912,7 @@ func (s *Store) ListActivity(boardID, boardTaskID, limit int, since time.Time) (
 			ts, _ := time.Parse(time.RFC3339Nano, it.EventTS)
 			// Correctness backstop for since: the SK range narrows the Query,
 			// but a strict comparison here guarantees "strictly newer" holds
-			// even for a test fake that does not honour KeyConditionExpression
+			// even for a test fake that does not honor KeyConditionExpression
 			// ranges.
 			if !since.IsZero() && !ts.After(since) {
 				continue
