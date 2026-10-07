@@ -232,17 +232,24 @@ function asTaskArray(v: unknown): Task[] | null {
   if (!Array.isArray(v)) return null;
   return v.map((raw) => {
     const o = (raw ?? {}) as Record<string, unknown>;
-    const status = str(o.Status);
+    // task.Task marshals with snake_case JSON tags (board_task_id, title,
+    // status, priority, description, updated_at) — see src/systems/task/task.go.
+    // Read those; keep a PascalCase fallback so a tagless build still parses.
+    const pick = (snake: string, pascal: string): unknown =>
+      o[snake] !== undefined ? o[snake] : o[pascal];
+    const status = str(pick("status", "Status"));
+    const description = pick("description", "Description");
+    const updatedAt = pick("updated_at", "UpdatedAt");
     return {
-      BoardTaskID: num(o.BoardTaskID),
-      Title: str(o.Title),
+      BoardTaskID: num(pick("board_task_id", "BoardTaskID")),
+      Title: str(pick("title", "Title")),
       Status:
         status === "doing" || status === "done"
           ? (status as Task["Status"])
           : "todo",
-      Priority: num(o.Priority),
-      Description: o.Description == null ? undefined : str(o.Description),
-      UpdatedAt: o.UpdatedAt == null ? undefined : str(o.UpdatedAt),
+      Priority: num(pick("priority", "Priority")),
+      Description: description == null ? undefined : str(description),
+      UpdatedAt: updatedAt == null ? undefined : str(updatedAt),
     };
   });
 }
