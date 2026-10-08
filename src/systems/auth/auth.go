@@ -38,6 +38,7 @@ package auth
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -116,6 +117,19 @@ func (id *Identity) authorizes(repo string) bool {
 	return ok
 }
 
+// sortedRepos returns the authorized repos as a sorted slice, for stable
+// reporting (change_repo / whoami) and logging. It never returns nil (an empty
+// grant set returns an empty, non-nil slice) so a caller can range over it
+// unconditionally.
+func (id *Identity) sortedRepos() []string {
+	out := make([]string, 0, len(id.Repos))
+	for r := range id.Repos {
+		out = append(out, r)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Tenant is the resolved, AUTHORIZED tenant for a request: the repo the caller
 // targeted AND is allowed to touch, plus the DynamoDB partition prefix that
 // isolates it. PartitionPrefix is what gets passed to dynamo.NewWithPrefix.
@@ -130,6 +144,13 @@ type Tenant struct {
 	Subject string
 	// Actor is the human-readable caller for the activity feed: email if present, else Subject.
 	Actor string
+	// AuthorizedRepos is the full set of repos the validated token grants,
+	// sorted for stable output. It is surfaced here so a tool (change_repo /
+	// whoami) can report which repos the caller may target per request WITHOUT
+	// re-reading the token — the single stateless source of truth is still the
+	// signed `repos` claim. It carries the SAME repos the authorizer checks a
+	// per-call target against; it is informational and grants nothing on its own.
+	AuthorizedRepos []string
 	// Unscoped is true when the request authenticated successfully but named no
 	// target repo and the token carried no default_repo. Such a tenant is valid
 	// ONLY for non-tenant operations (the MCP handshake: initialize, tools/list,
