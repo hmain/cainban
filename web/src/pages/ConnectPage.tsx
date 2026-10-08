@@ -127,6 +127,29 @@ function Repos() {
     void load();
   }, [load]);
 
+  // Refresh when the page regains visibility or focus. The grant set can change
+  // on ANOTHER screen (the repo rail's Remove, or a second tab), leaving this
+  // list's `already_granted` flags stale — a removed repo would still read
+  // "Connected" until a manual Reload. Reloading on visibilitychange/focus
+  // makes navigating back to /connect (or refocusing the tab) show live state.
+  // The custom event covers the in-page case: the rail is always mounted, so a
+  // removal while already on /connect fires no visibility/focus change.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void load();
+    };
+    const onFocus = () => void load();
+    const onReposChanged = () => void load();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("cainban:repos-changed", onReposChanged);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("cainban:repos-changed", onReposChanged);
+    };
+  }, [load]);
+
   const doConnect = async (owner: string, repo: string, key: string) => {
     setBusyRepo(key);
     setMsg(null);
