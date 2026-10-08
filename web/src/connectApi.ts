@@ -55,6 +55,42 @@ export async function connectRepo(
   return { status: res.status, granted: body.granted, error: body.error };
 }
 
+export interface DisconnectRepoResult {
+  status: number;
+  /** Canonical owner/repo revoked, on 200. */
+  revoked?: string;
+  /** Server error message, on non-200. */
+  error?: string;
+}
+
+/**
+ * DELETE /connect/repo {owner,repo} — revoke THIS user's grant for a repo.
+ * Per-user only: the backend removes just the caller's grant (and re-points
+ * their default_repo if needed); it never deletes the shared board/tasks and
+ * never affects another user. Re-connecting restores the board.
+ * Maps the handler responses:
+ *   200 -> { revoked }
+ *   4xx/5xx -> { error }
+ */
+export async function disconnectRepo(
+  owner: string,
+  repo: string,
+): Promise<DisconnectRepoResult> {
+  const res = await fetch(`${CONNECT_API}/connect/repo`, {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+      ...(await authHeader()),
+    },
+    body: JSON.stringify({ owner, repo }),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    revoked?: string;
+    error?: string;
+  };
+  return { status: res.status, revoked: body.revoked, error: body.error };
+}
+
 export interface ReposList {
   repos: string[];
   github_login: string | null;
