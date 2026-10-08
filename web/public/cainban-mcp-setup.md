@@ -55,6 +55,38 @@ Two things that trip people up, so expect them:
 If a step fails for another reason, check Troubleshooting at the end; if it's
 not covered there, report the full output and stop.
 
+## Fast path: auto-configure (try this first)
+
+Before doing any of the manual steps below, try the one-command path. It fetches
+the correct MCP URL, OAuth client id and authorize host **from the server
+itself**, so it cannot pick the wrong URL — the single most common setup
+mistake (the Connect API URL and the MCP API URL look alike, and only the MCP
+API serves OAuth discovery).
+
+If the `cainban` CLI is available, run (substitute `<MCP_API>`):
+
+```
+cainban connect-agent --mcp-url <MCP_API> --format kirocrew
+```
+
+Pick the `--format` for your tool: `kirocrew`, `claude`, `kiro-ide`, `cursor`,
+or `vscode`. It prints the exact config to merge (add `--output <path>` to write
+it directly). For Kiro Crew, if the Authorize banner later fails with an
+exfiltration-pattern error, also run `--format kirocrew-exfil-gate` and merge
+that into `~/.kiro/crew/oauth_endpoints.json`.
+
+**No CLI?** The same data is a public endpoint any agent can GET and parse —
+`<MCP_API>/.well-known/mcp-client-config`. It returns the MCP URL, the OAuth
+client id, the resolved authorize/token endpoints, and pre-built config snippets
+keyed by client (`configs.kirocrew`, `configs.claude_code_command`,
+`configs.kirocrew_exfil_gate`, `configs.kiro_ide`, `configs.cursor`,
+`configs.vscode`). Fetch it, pick your client's snippet, and write it verbatim.
+If that endpoint 404s/401s the server predates auto-config — fall back to the
+manual steps below.
+
+Either way you still do the one human step (the browser sign-in, Step 3) and the
+verify (Step 4). If auto-config isn't available, continue with the manual steps.
+
 ## Steps
 
 ### Step 1: Identify yourself, then use only your own recipe

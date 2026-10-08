@@ -30,6 +30,13 @@ const (
 	// authorize/token endpoints from it (Cognito's authorize/token live under
 	// the Hosted UI domain, NOT under the issuer host). Never hardcoded.
 	envHostedUIDomain = "CAINBAN_HOSTED_UI_DOMAIN"
+	// envMcpCliClientID is the public Cognito MCP CLI app client id
+	// (McpCliClientId stack output). The CDK stack sets it; the client-config
+	// auto-config document advertises it so an agent/connect-page can write a
+	// complete MCP config without the user looking the id up. Public PKCE client
+	// identifier — not a secret. Optional: when unset the document's client_id
+	// is empty and the Claude command/snippets degrade gracefully.
+	envMcpCliClientID = "CAINBAN_MCP_CLI_CLIENT_ID"
 )
 
 // resourceMetadataConfig builds the RFC 9728 protected-resource metadata config
@@ -62,6 +69,19 @@ func authServerMetadataConfig() mcp.AuthServerMetadataConfig {
 	return mcp.AuthServerMetadataConfig{
 		Issuer:         mcpAPIOrigin(),
 		CognitoIssuer:  strings.TrimSpace(os.Getenv(envAuthIssuer)),
+		HostedUIDomain: strings.TrimRight(strings.TrimSpace(os.Getenv(envHostedUIDomain)), "/"),
+	}
+}
+
+// clientConfigConfig builds the cainban MCP client auto-config document config
+// from env: the canonical MCP URL (CAINBAN_MCP_RESOURCE), the public MCP CLI
+// client id (CAINBAN_MCP_CLI_CLIENT_ID), and the Cognito Hosted UI domain
+// (CAINBAN_HOSTED_UI_DOMAIN) the authorize/token endpoints + exfil-gate host are
+// built from. All env, never hardcoded; each degrades gracefully when unset.
+func clientConfigConfig() mcp.ClientConfigConfig {
+	return mcp.ClientConfigConfig{
+		MCPURL:         strings.TrimRight(strings.TrimSpace(os.Getenv(envMcpResource)), "/"),
+		CLIClientID:    strings.TrimSpace(os.Getenv(envMcpCliClientID)),
 		HostedUIDomain: strings.TrimRight(strings.TrimSpace(os.Getenv(envHostedUIDomain)), "/"),
 	}
 }
