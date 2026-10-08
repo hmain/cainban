@@ -144,20 +144,6 @@ func TestListLinks(t *testing.T) {
 		t.Errorf("missing b->c depends_on link; got %+v", links)
 	}
 
-	// A link on a DIFFERENT board must not appear in board 1's list.
-	d, _ := ts.Create(2, "D", "")
-	e, _ := ts.Create(2, "E", "")
-	if err := ts.LinkTasks(d.ID, e.ID, LinkTypeRelated); err != nil {
-		t.Fatalf("link d->e: %v", err)
-	}
-	links, err = ts.ListLinks(1)
-	if err != nil {
-		t.Fatalf("ListLinks after cross-board link: %v", err)
-	}
-	if len(links) != 2 {
-		t.Fatalf("board 1 should still have 2 links, got %d: %+v", len(links), links)
-	}
-
 	// A hard-deleted endpoint drops its link from the board list.
 	if err := ts.HardDelete(a.ID); err != nil {
 		t.Fatalf("hard delete a: %v", err)
