@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { listTasks } from "../mcpApi";
+import { listTasks, listLinks, type TaskLink } from "../mcpApi";
 import {
   boardReducer,
   initialBoardState,
@@ -11,6 +11,7 @@ import { PollAdapter } from "../board/pollAdapter";
 import { STATUS_ORDER, type Status } from "../board/types";
 import { Column } from "./Column";
 import { ConnectionChip } from "./ConnectionChip";
+import { DependencyOverlay } from "./DependencyOverlay";
 
 type Gate =
   | { kind: "checking" }
@@ -69,11 +70,56 @@ export function Board({ owner, repo }: { owner: string; repo: string }) {
   const agents = agentTaskIds(state);
   const working = workingTaskIds(state);
 
+  // Dependency links (board-wide). Fetched out of the hot poll path: once the
+  // gate is ok, on mount and on a slow interval, plus whenever the set of cards
+  // changes (a new/removed card usually coincides with a link change). The
+  // overlay re-anchors to card positions on its own via ResizeObserver, so this
+  // only needs to supply fresh link DATA, not drive layout.
+  const [links, setLinks] = useState<TaskLink[]>([]);
+  const [showLinks, setShowLinks] = useState(true);
+  const columnsRef = useRef<HTMLDivElement | null>(null);
+  const taskKey = Object.keys(state.tasksById).sort().join(",");
+
+  useEffect(() => {
+    if (gate.kind !== "ok") return;
+    let cancelled = false;
+    const fetchLinks = async () => {
+      try {
+        const { links } = await listLinks(full);
+        if (!cancelled) setLinks(links);
+      } catch {
+        // Non-fatal: leave the last-known links; the overlay just goes stale,
+        // never blocks the board.
+      }
+    };
+    void fetchLinks();
+    const t = setInterval(() => void fetchLinks(), 8000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+    // Re-run (immediate refetch) when the gate opens, the repo changes, or the
+    // card set changes.
+  }, [gate.kind, full, taskKey]);
+
+  const hasLinks = links.length > 0;
+
   return (
     <section className="board" aria-label={`Board for ${full}`}>
       <header className="board-head">
         <h2>{full} — board</h2>
         <div className="board-head-right">
+          {hasLinks && (
+            <button
+              type="button"
+              className="link dep-toggle"
+              aria-pressed={showLinks}
+              onClick={() => setShowLinks((v) => !v)}
+              title="Toggle dependency lines"
+            >
+              {showLinks ? "Hide links" : "Show links"}
+            </button>
+          )}
           <ConnectionChip
             state={state.connectionState}
             degraded={state.degraded}
@@ -92,19 +138,44 @@ export function Board({ owner, repo }: { owner: string; repo: string }) {
       )}
 
       {gate.kind === "ok" && (
-        <div className="board-columns">
-          {STATUS_ORDER.map((s: Status) => (
-            <Column
-              key={s}
-              status={s}
-              tasks={state.columns[s].map((id) => state.tasksById[id]).filter(Boolean)}
-              agentTasks={agents}
-              workingTasks={working}
+        <>
+          {hasLinks && showLinks && <DepLegend />}
+          <div className="board-columns" ref={columnsRef}>
+            {STATUS_ORDER.map((s: Status) => (
+              <Column
+                key={s}
+                status={s}
+                tasks={state.columns[s].map((id) => state.tasksById[id]).filter(Boolean)}
+                agentTasks={agents}
+                workingTasks={working}
+              />
+            ))}
+            <DependencyOverlay
+              containerRef={columnsRef}
+              links={links}
+              visible={showLinks}
             />
-          ))}
-        </div>
+          </div>
+        </>
       )}
     </section>
+  );
+}
+
+// DepLegend explains the line styles. Terse by design: one row of swatches.
+function DepLegend() {
+  return (
+    <div className="dep-legend" aria-label="Dependency line legend">
+      <span className="dep-legend-item">
+        <span className="dep-swatch dep-swatch-block" /> blocks
+      </span>
+      <span className="dep-legend-item">
+        <span className="dep-swatch dep-swatch-dep" /> depends on
+      </span>
+      <span className="dep-legend-item">
+        <span className="dep-swatch dep-swatch-related" /> related
+      </span>
+    </div>
   );
 }
 
