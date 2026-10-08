@@ -53,6 +53,21 @@ export interface ListTasksResult {
   empty: boolean;
 }
 
+/** The four directional link types the backend supports. */
+export type LinkType = "blocks" | "blocked_by" | "related" | "depends_on";
+
+/** One link between two tasks, in BOARD-SCOPED task ids (matching card ids).
+ * Mirrors task.TaskLinkView from the list_links tool's structured output. */
+export interface TaskLink {
+  from: number; // from_board_task_id
+  to: number; // to_board_task_id
+  type: LinkType;
+}
+
+export interface ListLinksResult {
+  links: TaskLink[];
+}
+
 // A monotonically increasing JSON-RPC id for this page's MCP calls.
 let rpcId = 0;
 
@@ -208,6 +223,108 @@ export async function listTasks(
   const texts = extractTextLines(result);
   const empty = texts.some((t) => /no tasks found/i.test(t));
   return { tasks: [], empty };
+}
+
+/**
+ * Call the MCP `list_links` tool for `repo` and return every link on the board
+ * in board-scoped task ids (matching the ids list_tasks returns). Same
+ * transport/auth as listTasks. Prefers structuredContent (the handler's typed
+ * []task.TaskLinkView); throws on auth/transport errors with the shared 401/403
+ * mapping. A build without the tool yields an empty list rather than throwing,
+ * so the overlay simply draws nothing on an older backend.
+ */
+export async function listLinks(repo: string): Promise<ListLinksResult> {
+  if (!MCP_API) {
+    throw new Error("MCP API URL is not configured (VITE_MCP_API).");
+  }
+  const token = await getIdToken();
+
+  const body = {
+    jsonrpc: "2.0",
+    id: ++rpcId,
+    method: "tools/call",
+    params: { name: "list_links", arguments: {} },
+  };
+
+  const res = await fetch(MCP_API, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json, text/event-stream",
+      Authorization: `Bearer ${token}`,
+      "X-Cainban-Repo": repo,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (res.status === 401) {
+    throw new Error(
+      "Unauthorized (401) — your session token may have expired. Try reloading.",
+    );
+  }
+  if (res.status === 403) {
+    throw new Error(
+      `Forbidden (403) — your token does not authorize ${repo}. Connect the repo first.`,
+    );
+  }
+  if (!res.ok) {
+    throw new Error(`MCP request failed (${res.status}).`);
+  }
+
+  const payload = await parseMcpResponse(res);
+  if (payload.error) {
+    // An older backend without list_links reports "method not found" / tool
+    // error; treat that as "no links" so the board still renders.
+    return { links: [] };
+  }
+  const result = payload.result;
+  if (!result) return { links: [] };
+
+  const structured = extractStructuredLinks(result);
+  return { links: structured ?? [] };
+}
+
+// extractStructuredLinks reads result.structuredContent as the typed link list
+// the list_links handler returns ([]task.TaskLinkView). Accepts an array
+// directly or an object whose first array-valued field holds the links.
+function extractStructuredLinks(result: McpToolResult): TaskLink[] | null {
+  const sc = result.structuredContent;
+  if (sc == null) return null;
+  const arr = asLinkArray(sc);
+  if (arr) return arr;
+  if (typeof sc === "object") {
+    for (const v of Object.values(sc as Record<string, unknown>)) {
+      const inner = asLinkArray(v);
+      if (inner) return inner;
+    }
+  }
+  return null;
+}
+
+const LINK_TYPES: ReadonlySet<string> = new Set([
+  "blocks",
+  "blocked_by",
+  "related",
+  "depends_on",
+]);
+
+function asLinkArray(v: unknown): TaskLink[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: TaskLink[] = [];
+  for (const raw of v) {
+    const o = (raw ?? {}) as Record<string, unknown>;
+    // task.TaskLinkView marshals snake_case: from_board_task_id,
+    // to_board_task_id, link_type. Keep a camel/Pascal fallback for safety.
+    const from = num(
+      o.from_board_task_id ?? o.fromBoardTaskID ?? o.FromBoardTaskID,
+    );
+    const to = num(o.to_board_task_id ?? o.toBoardTaskID ?? o.ToBoardTaskID);
+    const type = str(o.link_type ?? o.linkType ?? o.LinkType);
+    if (from > 0 && to > 0 && LINK_TYPES.has(type)) {
+      out.push({ from, to, type: type as LinkType });
+    }
+  }
+  return out;
 }
 
 // extractStructuredTasks reads result.structuredContent as the typed task list

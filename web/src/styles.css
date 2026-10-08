@@ -386,6 +386,7 @@ code {
   grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
   align-items: start;
+  position: relative;
 }
 
 .board-column {
@@ -568,4 +569,91 @@ code {
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* --- Dependency lines overlay -------------------------------------------- */
+
+/* The SVG layer sits above the columns but ignores pointer events so cards stay
+   interactive. Colors are theme tokens (never fixed hex) so lines read in both
+   light and dark schemes. */
+.dep-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: visible;
+  z-index: 2;
+}
+
+.dep-line {
+  fill: none;
+  stroke-width: 2;
+  opacity: 0.75;
+}
+
+/* blocks / blocked_by: a warm, attention-carrying tone (reuse the error token,
+   which is the theme's "watch out" color). depends_on: the accent. related: a
+   muted dashed line, no direction. */
+.dep-line.dep-blocks,
+.dep-line.dep-blocked_by {
+  stroke: var(--error);
+}
+.dep-line.dep-depends_on {
+  stroke: var(--accent);
+}
+.dep-line.dep-related {
+  stroke: var(--muted);
+  stroke-dasharray: 5 4;
+  opacity: 0.6;
+}
+
+.dep-arrowhead.dep-block {
+  fill: var(--error);
+}
+.dep-arrowhead.dep-dep {
+  fill: var(--accent);
+}
+
+/* Legend: one terse row of swatches. */
+.dep-legend {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.dep-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.dep-swatch {
+  display: inline-block;
+  width: 1.4rem;
+  height: 0;
+  border-top-width: 2px;
+  border-top-style: solid;
+}
+.dep-swatch-block {
+  border-top-color: var(--error);
+}
+.dep-swatch-dep {
+  border-top-color: var(--accent);
+}
+.dep-swatch-related {
+  border-top-color: var(--muted);
+  border-top-style: dashed;
+}
+
+.dep-toggle {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.dep-toggle[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
 }

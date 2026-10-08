@@ -150,6 +150,17 @@ type TaskLink struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// TaskLinkView is a link expressed in BOARD-SCOPED task ids (the 1..N ids the
+// SPA and CLI show), rather than the internal global ids TaskLink carries. The
+// list_links MCP tool returns these so a client can match each endpoint to a
+// card by its board_task_id without a second lookup.
+type TaskLinkView struct {
+	FromBoardTaskID int       `json:"from_board_task_id"`
+	ToBoardTaskID   int       `json:"to_board_task_id"`
+	LinkType        LinkType  `json:"link_type"`
+	CreatedAt       time.Time `json:"created_at"`
+}
+
 // Task represents a kanban task
 type Task struct {
 	ID          int        `json:"id"`            // Internal global ID
@@ -818,6 +829,45 @@ func (s *System) GetTaskLinks(taskID int) ([]TaskLink, error) {
 			return nil, fmt.Errorf("failed to scan task link: %w", err)
 		}
 		links = append(links, link)
+	}
+
+	return links, nil
+}
+
+// ListLinks returns every link on a board (both directions), newest first. It
+// is the board-wide counterpart to GetTaskLinks: callers that need the whole
+// dependency graph (the SPA board overlay) get it in one query rather than one
+// per task. Links are scoped to the board by joining both endpoints to tasks on
+// the board, so a link whose endpoints live on another board is excluded.
+func (s *System) ListLinks(boardID int) ([]TaskLink, error) {
+	query := `
+		SELECT l.id, l.from_task_id, l.to_task_id, l.link_type, l.created_at
+		FROM task_links l
+		JOIN tasks tf ON tf.id = l.from_task_id
+		JOIN tasks tt ON tt.id = l.to_task_id
+		WHERE tf.board_id = ? AND tt.board_id = ?
+		  AND tf.deleted_at IS NULL AND tt.deleted_at IS NULL
+		ORDER BY l.created_at DESC
+	`
+
+	rows, err := s.db.Query(query, boardID, boardID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query links: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var links []TaskLink
+	for rows.Next() {
+		var link TaskLink
+		err := rows.Scan(&link.ID, &link.FromTaskID, &link.ToTaskID, &link.LinkType, &link.CreatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan task link: %w", err)
+		}
+		links = append(links, link)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating links: %w", err)
 	}
 
 	return links, nil

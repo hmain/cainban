@@ -376,6 +376,12 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 		Description: "List all links referencing a task (both directions).",
 		Annotations: readOnly("Get task links"),
 	}, s.handleGetTaskLinks)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "list_links",
+		Description: "List every task link on the board (both directions), in board-scoped task ids. Use to render the dependency graph.",
+		Annotations: readOnly("List links"),
+	}, s.handleListLinks)
 }
 
 // ptrBool returns a pointer to b, for the SDK annotation fields that are
@@ -524,6 +530,10 @@ type UnlinkTasksArgs struct {
 
 type GetTaskLinksArgs struct {
 	ID int `json:"id" jsonschema:"the board task ID to list links for"`
+}
+
+type ListLinksArgs struct {
+	BoardID int `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
 }
 
 // Tool handlers. Each resolves its board database per request.
@@ -1276,4 +1286,66 @@ func (s *Server) handleGetTaskLinks(ctx context.Context, req *mcp.CallToolReques
 	}
 
 	return &mcp.CallToolResult{Content: content}, links, nil
+}
+
+// handleListLinks returns every link on the board, expressed in board-scoped
+// task ids. The stored link endpoints are internal global ids; this handler
+// maps each to its board_task_id via the board's task list so the structured
+// output matches what list_tasks returns (and what the SPA cards are keyed by).
+// A link whose endpoint no longer resolves to a live task on the board is
+// skipped (e.g. a hard-deleted task), so the returned graph never dangles.
+func (s *Server) handleListLinks(ctx context.Context, req *mcp.CallToolRequest, args ListLinksArgs) (*mcp.CallToolResult, []task.TaskLinkView, error) {
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer closeFn()
+
+	boardID := args.BoardID
+	if boardID == 0 {
+		boardID = 1
+	}
+
+	links, err := taskSystem.ListLinks(boardID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list links: %w", err)
+	}
+
+	// Build internal-id -> board_task_id map from the live board.
+	tasks, err := taskSystem.List(boardID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to list tasks: %w", err)
+	}
+	boardIDByInternal := make(map[int]int, len(tasks))
+	for _, t := range tasks {
+		boardIDByInternal[t.ID] = t.BoardTaskID
+	}
+
+	views := make([]task.TaskLinkView, 0, len(links))
+	for _, l := range links {
+		from, okFrom := boardIDByInternal[l.FromTaskID]
+		to, okTo := boardIDByInternal[l.ToTaskID]
+		if !okFrom || !okTo {
+			continue // endpoint not a live task on this board; skip dangling link
+		}
+		views = append(views, task.TaskLinkView{
+			FromBoardTaskID: from,
+			ToBoardTaskID:   to,
+			LinkType:        l.LinkType,
+			CreatedAt:       l.CreatedAt,
+		})
+	}
+
+	content := []mcp.Content{&mcp.TextContent{Text: scopeLine(ctx)}}
+	if len(views) == 0 {
+		content = append(content, &mcp.TextContent{Text: "No links on this board"})
+		return &mcp.CallToolResult{Content: content}, views, nil
+	}
+	for _, v := range views {
+		content = append(content, &mcp.TextContent{
+			Text: fmt.Sprintf("• #%d %s #%d", v.FromBoardTaskID, v.LinkType, v.ToBoardTaskID),
+		})
+	}
+
+	return &mcp.CallToolResult{Content: content}, views, nil
 }

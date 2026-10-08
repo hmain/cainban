@@ -805,6 +805,49 @@ func (s *Store) GetTaskLinks(taskID int) ([]task.TaskLink, error) {
 	return links, nil
 }
 
+// ListLinks returns every link on a board (both directions), newest first. It
+// is the board-wide counterpart to GetTaskLinks: it queries the board
+// partition's LINK# items once and returns them all, so the SPA overlay can
+// fetch the whole dependency graph in a single call. Links are stored under
+// boardPK(1) today (single board per tenant), mirroring LinkTasks.
+func (s *Store) ListLinks(boardID int) ([]task.TaskLink, error) {
+	ctx := context.TODO()
+	var links []task.TaskLink
+	var startKey map[string]ddbtypes.AttributeValue
+	for {
+		out, err := s.client.Query(ctx, &dynamodb.QueryInput{
+			TableName:              aws.String(s.table),
+			KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :prefix)"),
+			ExpressionAttributeValues: map[string]ddbtypes.AttributeValue{
+				":pk":     &ddbtypes.AttributeValueMemberS{Value: s.boardPK(boardID)},
+				":prefix": &ddbtypes.AttributeValueMemberS{Value: "LINK#"},
+			},
+			ExclusiveStartKey: startKey,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to query links: %w", err)
+		}
+		for _, raw := range out.Items {
+			var it item
+			if err := attributevalue.UnmarshalMap(raw, &it); err != nil {
+				return nil, fmt.Errorf("failed to scan link: %w", err)
+			}
+			links = append(links, task.TaskLink{
+				FromTaskID: it.FromTaskID,
+				ToTaskID:   it.ToTaskID,
+				LinkType:   task.LinkType(it.LinkType),
+				CreatedAt:  it.CreatedAt,
+			})
+		}
+		if len(out.LastEvaluatedKey) == 0 {
+			break
+		}
+		startKey = out.LastEvaluatedKey
+	}
+	sort.SliceStable(links, func(i, j int) bool { return links[i].CreatedAt.After(links[j].CreatedAt) })
+	return links, nil
+}
+
 // --- activity feed (append-only audit) -------------------------------------
 
 // defaultActivityLimit / maxActivityLimit bound how many events ListActivity

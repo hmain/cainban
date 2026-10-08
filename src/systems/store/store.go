@@ -85,6 +85,10 @@ type TaskStore interface {
 	LinkTasks(fromTaskID, toTaskID int, linkType task.LinkType) error
 	UnlinkTasks(fromTaskID, toTaskID int, linkType task.LinkType) error
 	GetTaskLinks(taskID int) ([]task.TaskLink, error)
+	// ListLinks returns every link on a board (both directions), newest first.
+	// Unlike GetTaskLinks it is not scoped to one task, so a caller (e.g. the
+	// SPA board overlay) can fetch the whole dependency graph in one call.
+	ListLinks(boardID int) ([]task.TaskLink, error)
 
 	// RecordActivity appends an append-only audit event for a board. It is
 	// best-effort observability and MUST NOT be read for task/board state.

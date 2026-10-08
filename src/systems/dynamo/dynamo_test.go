@@ -209,6 +209,56 @@ func TestLinkUnlinkAndSelfLink(t *testing.T) {
 	}
 }
 
+func TestListLinks(t *testing.T) {
+	s := newTestStore()
+
+	// Empty board.
+	if links, err := s.ListLinks(1); err != nil || len(links) != 0 {
+		t.Fatalf("empty board ListLinks = %+v, %v", links, err)
+	}
+
+	a, _ := s.Create(1, "a", "")
+	b, _ := s.Create(1, "b", "")
+	c, _ := s.Create(1, "c", "")
+
+	if err := s.LinkTasks(a.ID, b.ID, task.LinkTypeBlocks); err != nil {
+		t.Fatalf("link a->b: %v", err)
+	}
+	if err := s.LinkTasks(b.ID, c.ID, task.LinkTypeDependsOn); err != nil {
+		t.Fatalf("link b->c: %v", err)
+	}
+
+	links, err := s.ListLinks(1)
+	if err != nil {
+		t.Fatalf("ListLinks: %v", err)
+	}
+	if len(links) != 2 {
+		t.Fatalf("expected 2 links, got %d: %+v", len(links), links)
+	}
+	seen := map[string]bool{}
+	for _, l := range links {
+		seen[string(l.LinkType)] = true
+		if l.FromTaskID == 0 || l.ToTaskID == 0 {
+			t.Errorf("link missing endpoints: %+v", l)
+		}
+	}
+	if !seen[string(task.LinkTypeBlocks)] || !seen[string(task.LinkTypeDependsOn)] {
+		t.Errorf("expected both link types present, got %+v", links)
+	}
+
+	// After unlink, only the remaining link is listed.
+	if err := s.UnlinkTasks(a.ID, b.ID, task.LinkTypeBlocks); err != nil {
+		t.Fatalf("unlink: %v", err)
+	}
+	links, err = s.ListLinks(1)
+	if err != nil {
+		t.Fatalf("ListLinks after unlink: %v", err)
+	}
+	if len(links) != 1 || links[0].LinkType != task.LinkTypeDependsOn {
+		t.Fatalf("expected 1 depends_on link, got %+v", links)
+	}
+}
+
 func TestSearchAndFuzzyFind(t *testing.T) {
 	s := newTestStore()
 	_, _ = s.Create(1, "write the parser", "")

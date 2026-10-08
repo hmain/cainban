@@ -33,14 +33,15 @@ func listToolsWire(t *testing.T) []*mcp.Tool {
 	return res.Tools
 }
 
-// TestToolsListStable asserts that the MCP server advertises exactly the sixteen
-// cainban tools. This is the regression guard for the "tool schema unchanged"
-// exit criterion of the stateless refactor: if a tool is added, removed, or
-// renamed, this test fails. P5A.4 added the read-only list_activity tool
-// (8 -> 9); the repo/board scope RFC added the read-only whoami tool (9 -> 10);
-// the CRUD-completeness pass added delete_task, restore_task, search_tasks
-// (10 -> 13); the task-links pass added link_tasks, unlink_tasks,
-// get_task_links (13 -> 16).
+// TestToolsListStable asserts that the MCP server advertises exactly the
+// seventeen cainban tools. This is the regression guard for the "tool schema
+// unchanged" exit criterion of the stateless refactor: if a tool is added,
+// removed, or renamed, this test fails. P5A.4 added the read-only list_activity
+// tool (8 -> 9); the repo/board scope RFC added the read-only whoami tool
+// (9 -> 10); the CRUD-completeness pass added delete_task, restore_task,
+// search_tasks (10 -> 13); the task-links pass added link_tasks, unlink_tasks,
+// get_task_links (13 -> 16); the dependency-graph pass added the read-only
+// list_links tool (16 -> 17).
 func TestToolsListStable(t *testing.T) {
 	want := []string{
 		"change_board",
@@ -51,6 +52,7 @@ func TestToolsListStable(t *testing.T) {
 		"link_tasks",
 		"list_activity",
 		"list_boards",
+		"list_links",
 		"list_tasks",
 		"restore_task",
 		"search_tasks",
@@ -102,7 +104,7 @@ func TestToolInputSchemasPresent(t *testing.T) {
 	}
 }
 
-// TestToolOutputSchemasPresent asserts that the seven read tools declare an
+// TestToolOutputSchemasPresent asserts that the eight read tools declare an
 // outputSchema (derived from their concrete Out type) and the nine write/control
 // tools do not. A new tool added without classification here fails the test.
 func TestToolOutputSchemasPresent(t *testing.T) {
@@ -114,6 +116,7 @@ func TestToolOutputSchemasPresent(t *testing.T) {
 		"search_tasks":   true,
 		"get_task_links": true,
 		"list_activity":  true,
+		"list_links":     true,
 	}
 	noSchemaTools := map[string]bool{
 		"create_task":          true,
@@ -259,6 +262,7 @@ func TestToolAnnotationsClassified(t *testing.T) {
 		"change_board":   true,
 		"search_tasks":   true,
 		"get_task_links": true,
+		"list_links":     true,
 	}
 	writers := map[string]bool{
 		"create_task":          true,
