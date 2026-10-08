@@ -786,6 +786,13 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			// deploy: -c connectSuccessUrl=https://<amplify-app>/ (empty => the
 			// callback returns a JSON {linked:true} confirmation instead).
 			"CAINBAN_CONNECT_SUCCESS_URL": jsii.String(ctxOr("connectSuccessUrl", "")),
+			// GitHub OAuth redirect_uri: the callback URL passed to GitHub's
+			// authorize endpoint so GitHub knows which of the App's registered
+			// callbacks to use. Required when the GitHub App has multiple callback
+			// URLs (e.g. dev + prod). Supplied at deploy:
+			// -c connectCallbackUrl=https://<api-gw>/connect/github/callback
+			// Empty => rely on the App's default callback (single-env only).
+			"CAINBAN_CONNECT_REDIRECT_URI": jsii.String(ctxOr("connectCallbackUrl", "")),
 		},
 		Code: awslambda.Code_FromAsset(jsii.String("../.build/connect"), nil),
 	})

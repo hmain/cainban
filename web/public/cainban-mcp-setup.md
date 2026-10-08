@@ -57,25 +57,33 @@ not covered there, report the full output and stop.
 
 ## Steps
 
-### Step 1: Identify the AI tool and its MCP config
+### Step 1: Identify yourself, then use only your own recipe
 
-Determine which tool is in use and where its MCP servers are configured (not
-exhaustive):
+**First, state which tool you are.** You are reading this as the agent being set
+up, so name yourself before doing anything: Claude Code, Kiro, Kiro IDE, Kiro
+Crew, Cursor, or VS Code. If you cannot tell from your own runtime, ask the user
+the single question "which tool am I running in?" and wait for the answer — do
+not guess, because each tool configures MCP differently and following the wrong
+recipe wastes a round trip.
+
+Each tool has a different MCP config target (not exhaustive):
 
 | Agent       | MCP config              | Location                     |
 | ----------- | ----------------------- | ---------------------------- |
 | Claude Code | `claude mcp add` / `.mcp.json` | CLI or project root   |
 | Kiro Crew   | `~/.kiro/crew/mcp.json` | gateway host (then `kirocrew restart`) |
-| Kiro        | `mcp.json`              | Kiro MCP settings            |
+| Kiro / Kiro IDE | `mcp.json`          | Kiro MCP settings            |
 | Cursor      | `.cursor/mcp.json`      | `.cursor/` directory         |
 | VS Code     | `.vscode/mcp.json`      | `.vscode/` directory         |
 
-**Success:** you know the tool and its MCP config target.
+**Once you know which tool you are, go straight to that tool's recipe in
+Per-agent quick setup and follow ONLY it.** Each recipe is self-contained
+(register → where it loads → the one human step → verify), so you do not read the
+other tools' sections, and you do not fall through to the generic Step 2a/2b —
+those are the fallback for a tool with no recipe of its own. Do the setup for
+your specific tool and nothing else.
 
-Prefer a ready-made recipe below over deriving the steps: **Per-agent quick
-setup** has an exact, ordered recipe for each tool. If your tool is listed there,
-follow its recipe and skip to Step 3; the generic Step 2a/2b below is the
-fallback for a tool with no recipe.
+**Success:** you have named your tool and found its recipe below.
 
 ### Step 2a (recommended): Register via OAuth — no token in config
 
@@ -240,14 +248,33 @@ project it — never hand-edit the projection.
 
 Runtime-specific gotcha: if the Authorize banner fails closed with "URL contained
 credential or exfiltration pattern," cainban's Cognito sign-in host isn't in the
-gateway's OAuth-endpoint allowlist. The gateway owner adds it to
-`~/.kiro/crew/oauth_endpoints.json` (hand-edit, no restart needed), using
-cainban's own Cognito domain and region:
+gateway's OAuth-endpoint allowlist. The host is **matched exactly** — it is
+cainban's full Cognito domain, including the account-scoped prefix and the
+region: `cainban-<org>-<account_id>.auth.<region>.amazoncognito.com`. You do not
+have to construct this string: **the exact value is already in the error message
+you are looking at — copy it from there verbatim.** (A real example is
+`cainban-emawiant-563329104476.auth.eu-central-1.amazoncognito.com`; a bare
+`.auth.amazoncognito.com` never matches and leaves the gate closed.)
+
+The gateway owner appends it to `additional_authorization_endpoints` in
+`~/.kiro/crew/oauth_endpoints.json` (hand-edit, no restart needed — just retry
+Authorize in a fresh chat). This list is **append-only**: add your entry without
+removing existing ones, or you drop other trusted IdPs.
 
 ```json
 { "additional_authorization_endpoints": [
-  { "host": "<cognito-domain>.auth.<region>.amazoncognito.com", "path": "/oauth2/authorize" }
+  { "host": "cainban-<org>-<account_id>.auth.<region>.amazoncognito.com", "path": "/oauth2/authorize" }
 ] }
+```
+
+One-liner that appends safely without clobbering existing entries (requires
+`jq`) — replace the host with the one from your error message:
+
+```sh
+HOST="cainban-<org>-<account_id>.auth.<region>.amazoncognito.com"
+F=~/.kiro/crew/oauth_endpoints.json
+[ -f "$F" ] || echo '{}' > "$F"
+jq --arg h "$HOST" '.additional_authorization_endpoints = ((.additional_authorization_endpoints // []) + [{host:$h, path:"/oauth2/authorize"}] | unique)' "$F" > "$F.tmp" && mv "$F.tmp" "$F"
 ```
 
 #### Kiro
