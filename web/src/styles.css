@@ -411,6 +411,21 @@ code {
   margin: 0.3rem 0 0;
 }
 
+/* Connect page: the Connected badge sits beside its Disconnect control. */
+.repo-list-connected {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.repo-list-disconnect {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.repo-list-disconnect:hover,
+.repo-list-disconnect:focus-visible {
+  color: var(--error);
+}
+
 /* On narrow screens the remove control is hidden (removal happens from the
    wide list); keep the dropdown clean. The @media rule that flips the rail to
    the dropdown form already hides .repo-rail-list. */

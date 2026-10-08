@@ -8,6 +8,8 @@ import {
 } from "../amplify";
 import {
   connectRepo,
+  disconnectRepo,
+  refreshIdToken,
   listRepos,
   linkGitHubIdentity,
   listAvailableRepos,
@@ -86,6 +88,9 @@ function Repos() {
   const [owner, setOwner] = useState("");
   const [manualRepo, setManualRepo] = useState("");
   const [manualBusy, setManualBusy] = useState(false);
+  // Disconnect flow: which repo is mid-confirm, and which is mid-DELETE.
+  const [confirmingRemove, setConfirmingRemove] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setState("loading");
@@ -157,6 +162,11 @@ function Repos() {
       const res = await connectRepo(owner, repo);
       const full = `${owner}/${repo}`;
       if (res.status === 200) {
+        // Re-mint the ID token so its `repos` claim includes the just-granted
+        // repo; otherwise the board authorizes against the stale pre-connect
+        // claim and 403s ("not authorized — connect it first") until the token
+        // refreshes on its own.
+        await refreshIdToken();
         setMsg({ kind: "ok", text: `Connected ${res.granted}.` });
         setRepos((prev) => {
           const next = prev.some((p) => p.full_name === (res.granted ?? full))
@@ -214,6 +224,47 @@ function Repos() {
     setManualBusy(false);
   };
 
+  // doDisconnect revokes THIS user's grant for a repo (DELETE /connect/repo).
+  // Per-user only: the shared board/tasks are kept and the repo stays listed as
+  // connectable (the App can still access it). Mirrors the rail's Remove and
+  // broadcasts cainban:repos-changed so the rail refreshes in lock-step.
+  const doDisconnect = async (fullName: string) => {
+    const slash = fullName.indexOf("/");
+    if (slash <= 0 || slash === fullName.length - 1) return;
+    const owner = fullName.slice(0, slash);
+    const repo = fullName.slice(slash + 1);
+    setDisconnecting(fullName);
+    setMsg(null);
+    try {
+      const res = await disconnectRepo(owner, repo);
+      if (res.status !== 200) {
+        setMsg({
+          kind: "err",
+          text: res.error || `Couldn’t disconnect ${fullName} (${res.status}).`,
+        });
+        setDisconnecting(null);
+        return;
+      }
+      // Flag the row as no longer granted (keep it listed — the App can still
+      // access it, so it stays connectable).
+      setRepos((prev) =>
+        prev.map((p) =>
+          p.full_name === fullName ? { ...p, already_granted: false } : p,
+        ),
+      );
+      setMsg({ kind: "ok", text: `Disconnected ${res.revoked ?? fullName}.` });
+      setConfirmingRemove(null);
+      setDisconnecting(null);
+      // Re-mint the token so its repos claim drops the removed repo, and keep
+      // the rail in sync.
+      await refreshIdToken();
+      window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
+    } catch (err) {
+      setMsg({ kind: "err", text: String(err) });
+      setDisconnecting(null);
+    }
+  };
+
   return (
     <section className="card" aria-labelledby="repos-heading">
       <div className="account-row">
@@ -253,7 +304,43 @@ function Repos() {
             <li key={r.full_name} className="account-row">
               <code>{r.full_name}</code>
               {r.already_granted ? (
-                <span className="ok">Connected</span>
+                <span className="repo-list-connected">
+                  <span className="ok">Connected</span>
+                  {confirmingRemove === r.full_name ? (
+                    <span className="repo-rail-confirm">
+                      <span className="repo-rail-confirm-q">Disconnect?</span>
+                      <button
+                        type="button"
+                        className="link repo-rail-confirm-yes"
+                        disabled={disconnecting === r.full_name}
+                        onClick={() => void doDisconnect(r.full_name)}
+                        title="Removes your access only; the board and its tasks stay for anyone else and return if you re-connect"
+                      >
+                        {disconnecting === r.full_name ? "Disconnecting…" : "Yes"}
+                      </button>
+                      <button
+                        type="button"
+                        className="link repo-rail-confirm-no"
+                        disabled={disconnecting === r.full_name}
+                        onClick={() => setConfirmingRemove(null)}
+                      >
+                        No
+                      </button>
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="link repo-list-disconnect"
+                      onClick={() => {
+                        setConfirmingRemove(r.full_name);
+                        setMsg(null);
+                      }}
+                      title={`Disconnect ${r.full_name} (your access only)`}
+                    >
+                      Disconnect
+                    </button>
+                  )}
+                </span>
               ) : (
                 <button
                   className="primary"
