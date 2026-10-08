@@ -63,7 +63,61 @@ itself**, so it cannot pick the wrong URL — the single most common setup
 mistake (the Connect API URL and the MCP API URL look alike, and only the MCP
 API serves OAuth discovery).
 
-If the `cainban` CLI is available, run (substitute `<MCP_API>`):
+### Step 0: get the `cainban` binary
+
+The one-command path runs the `cainban` CLI's `connect-agent` command. Get the
+binary first — in this order, stopping at the first that works:
+
+**1. Download the latest GitHub release** (no toolchain needed). Releases are
+published for every platform at
+[github.com/hmain/cainban/releases/latest](https://github.com/hmain/cainban/releases/latest).
+Pick the asset for your OS/arch and put it on your `PATH` as `cainban`:
+
+```sh
+# Linux x86_64 example — swap the asset name for your platform:
+#   cainban-linux-amd64 | cainban-linux-arm64 |
+#   cainban-darwin-amd64 | cainban-darwin-arm64 | cainban-windows-amd64.exe
+curl -fsSL -o cainban \
+  https://github.com/hmain/cainban/releases/latest/download/cainban-linux-amd64
+chmod +x cainban && sudo mv cainban /usr/local/bin/cainban   # or any PATH dir
+```
+
+**2. Confirm the release is recent enough.** `connect-agent` is a newer command,
+so an older release's binary won't have it. Check:
+
+```sh
+cainban connect-agent --help
+```
+
+If that prints usage, you're set — skip to the `connect-agent` command below. If
+it errors with an unknown-command / usage error, the release predates
+`connect-agent`; use option 3 or 4.
+
+**3. Build from source** (needs the Go toolchain, Go 1.26+). This always tracks
+the latest code, so it has `connect-agent`:
+
+```sh
+go install github.com/hmain/cainban/cmd/cainban@latest   # lands in $(go env GOPATH)/bin
+# …or in a checkout of the repo:  make build   # produces ./bin/cainban
+```
+
+**4. No toolchain and the release is stale — make GitHub build it.** The release
+workflow (`.github/workflows/release.yml`) builds all five platform binaries and
+publishes them whenever a `v*` tag is pushed. Cut a new tag to trigger it (needs
+push access to `hmain/cainban`):
+
+```sh
+git tag v0.2.3 && git push origin v0.2.3      # use the next version number
+```
+
+Watch it with `gh run watch` (or the repo's **Actions** tab); when the run
+finishes, the new binaries are on the
+[releases page](https://github.com/hmain/cainban/releases/latest) — go back to
+option 1 and download the fresh asset.
+
+### Run `connect-agent`
+
+With a `connect-agent`-capable binary on `PATH`, run (substitute `<MCP_API>`):
 
 ```
 cainban connect-agent --mcp-url <MCP_API> --format kirocrew
@@ -75,14 +129,18 @@ it directly). For Kiro Crew, if the Authorize banner later fails with an
 exfiltration-pattern error, also run `--format kirocrew-exfil-gate` and merge
 that into `~/.kiro/crew/oauth_endpoints.json`.
 
-**No CLI?** The same data is a public endpoint any agent can GET and parse —
-`<MCP_API>/.well-known/mcp-client-config`. It returns the MCP URL, the OAuth
-client id, the resolved authorize/token endpoints, and pre-built config snippets
-keyed by client (`configs.kirocrew`, `configs.claude_code_command`,
-`configs.kirocrew_exfil_gate`, `configs.kiro_ide`, `configs.cursor`,
-`configs.vscode`). Fetch it, pick your client's snippet, and write it verbatim.
-If that endpoint 404s/401s the server predates auto-config — fall back to the
-manual steps below.
+`connect-agent` first confirms `<MCP_API>` is really the MCP server (it must
+serve OAuth discovery) before writing anything — so if you accidentally hand it
+the Connect API URL, it fails with a clear message instead of a broken config.
+
+**Can't get the binary at all?** The same data is a public endpoint any agent can
+GET and parse — `<MCP_API>/.well-known/mcp-client-config`. It returns the MCP
+URL, the OAuth client id, the resolved authorize/token endpoints, and pre-built
+config snippets keyed by client (`configs.kirocrew`,
+`configs.claude_code_command`, `configs.kirocrew_exfil_gate`, `configs.kiro_ide`,
+`configs.cursor`, `configs.vscode`). Fetch it, pick your client's snippet, and
+write it verbatim. If that endpoint 404s/401s the server predates auto-config —
+fall back to the manual steps below.
 
 Either way you still do the one human step (the browser sign-in, Step 3) and the
 verify (Step 4). If auto-config isn't available, continue with the manual steps.
