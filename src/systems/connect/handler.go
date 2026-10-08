@@ -448,7 +448,46 @@ func (h *Handler) handleRepoDelete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not revoke grant")
 		return
 	}
+	// If the removed repo was this subject's default, the META default_repo now
+	// points at a repo they can no longer access — the pre-token trigger would
+	// mint a stale default_repo claim. Re-point it to a remaining grant, or
+	// clear it when none remain. Per-user only: this touches just THIS subject's
+	// grants partition, never another user's and never any board data. Best-
+	// effort, mirroring setDefaultIfUnset: the grant removal already succeeded
+	// and must not be undone by a default-cleanup failure.
+	h.repointDefaultAfterRemoval(r.Context(), id.Subject, canon)
 	writeJSON(w, http.StatusOK, map[string]any{"revoked": canon})
+}
+
+// repointDefaultAfterRemoval keeps the subject's default_repo consistent after a
+// grant is revoked. If the current default is NOT the removed repo it does
+// nothing. If it IS, it re-points the default to the first remaining grant, or
+// clears it (SetDefaultRepo with "") when the subject has no grants left. Every
+// failure path is logged and swallowed, because the revoke already succeeded and
+// a stale/missing default degrades to header-required MCP behavior, never a
+// failed removal.
+func (h *Handler) repointDefaultAfterRemoval(ctx context.Context, subject, removed string) {
+	current, err := h.grants.GetDefaultRepo(ctx, subject)
+	if err != nil {
+		log.Printf("connect: could not read default repo for sub=%q after removal (revoke still succeeded): %v", subject, err)
+		return
+	}
+	if strings.TrimSpace(current) == "" || current != removed {
+		return // no default, or the default was a different repo — nothing to do
+	}
+	// The removed repo WAS the default: pick a replacement from what remains.
+	remaining, err := h.grants.ListReposForSubject(ctx, subject)
+	if err != nil {
+		log.Printf("connect: could not list remaining repos for sub=%q to re-point default (revoke still succeeded): %v", subject, err)
+		return
+	}
+	replacement := "" // "" clears the META item
+	if len(remaining) > 0 {
+		replacement = remaining[0] // ListReposForSubject returns sorted, stable
+	}
+	if err := h.grants.SetDefaultRepo(ctx, subject, replacement); err != nil {
+		log.Printf("connect: could not re-point default repo for sub=%q after removal (revoke still succeeded): %v", subject, err)
+	}
 }
 
 // handleReposList (GET /connect/repos) lists ONLY the caller's granted repos
