@@ -247,14 +247,24 @@ project it — never hand-edit the projection.
    success.
 
 Runtime-specific gotcha: if the Authorize banner fails closed with "URL contained
-credential or exfiltration pattern," cainban's Cognito sign-in host isn't in the
-gateway's OAuth-endpoint allowlist. The host is **matched exactly** — it is
-cainban's full Cognito domain, including the account-scoped prefix and the
-region: `cainban-<org>-<account_id>.auth.<region>.amazoncognito.com`. You do not
-have to construct this string: **the exact value is already in the error message
-you are looking at — copy it from there verbatim.** (A real example is
-`cainban-emawiant-563329104476.auth.eu-central-1.amazoncognito.com`; a bare
-`.auth.amazoncognito.com` never matches and leaves the gate closed.)
+credential or exfiltration pattern," an OAuth host cainban redirects through isn't
+in the gateway's OAuth-endpoint allowlist. **There are two such hosts, each a
+separate allowlist entry, and you may hit either (or both, one after the other):**
+
+- the **MCP server's own authorize route** on API Gateway — host like
+  `<id>.execute-api.<region>.amazonaws.com`, path **`/authorize`** (this is the
+  first redirect, so it is usually the one you hit first); and
+- the **Cognito sign-in host** — cainban's full Cognito domain
+  `cainban-<org>-<account_id>.auth.<region>.amazoncognito.com`, path
+  **`/oauth2/authorize`** (the handoff after the first redirect).
+
+Both host **and** path are **matched exactly**, and you do not have to construct
+either: **the exact `host` and `path` are already in the error message you are
+looking at — copy them from there verbatim.** (Real examples:
+`w241x2n8qj.execute-api.eu-central-1.amazonaws.com` + `/authorize` for the API
+Gateway host, and `cainban-emawiant-563329104476.auth.eu-central-1.amazoncognito.com`
++ `/oauth2/authorize` for Cognito. A bare `.auth.amazoncognito.com` or a wrong
+path never matches and leaves the gate closed.)
 
 Runtime-specific gotcha: if the sign-in lands on a Cognito error page whose URL
 reads `.../error?error=invalid_request&client_id=Q+DEV+CLI` (or any `client_id`
@@ -276,28 +286,32 @@ jq --arg cid "$CID" --arg url "$URL" \
   "$F" > "$F.tmp" && mv "$F.tmp" "$F"
 ```
 
-Then the gateway owner runs `kirocrew restart` from a terminal and retries
+Then the gateway owner restarts the gateway from a terminal and retries
 Authorize in a fresh chat.
 
-The gateway owner appends it to `additional_authorization_endpoints` in
-`~/.kiro/crew/oauth_endpoints.json` (hand-edit, no restart needed — just retry
-Authorize in a fresh chat). This list is **append-only**: add your entry without
-removing existing ones, or you drop other trusted IdPs.
+The gateway owner appends the failing endpoint to
+`additional_authorization_endpoints` in `~/.kiro/crew/oauth_endpoints.json`
+(hand-edit, no restart needed — just retry Authorize in a fresh chat). This list
+is **append-only**: add your entry without removing existing ones, or you drop
+other trusted IdPs. If you were blocked on both hosts, add both objects.
 
 ```json
 { "additional_authorization_endpoints": [
+  { "host": "<id>.execute-api.<region>.amazonaws.com", "path": "/authorize" },
   { "host": "cainban-<org>-<account_id>.auth.<region>.amazoncognito.com", "path": "/oauth2/authorize" }
 ] }
 ```
 
-One-liner that appends safely without clobbering existing entries (requires
-`jq`) — replace the host with the one from your error message:
+One-liner that appends one entry safely without clobbering existing entries
+(requires `jq`) — copy **both** `HOST` and `PATH` straight from the error
+message (the `/authorize` API-Gateway entry and the `/oauth2/authorize` Cognito
+entry each need their own run):
 
 ```sh
-HOST="cainban-<org>-<account_id>.auth.<region>.amazoncognito.com"
+HOST="<id>.execute-api.<region>.amazonaws.com"; PATH_="/authorize"
 F=~/.kiro/crew/oauth_endpoints.json
 [ -f "$F" ] || echo '{}' > "$F"
-jq --arg h "$HOST" '.additional_authorization_endpoints = ((.additional_authorization_endpoints // []) + [{host:$h, path:"/oauth2/authorize"}] | unique)' "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+jq --arg h "$HOST" --arg p "$PATH_" '.additional_authorization_endpoints = ((.additional_authorization_endpoints // []) + [{host:$h, path:$p}] | unique)' "$F" > "$F.tmp" && mv "$F.tmp" "$F"
 ```
 
 #### Kiro
