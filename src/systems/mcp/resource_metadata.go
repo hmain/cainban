@@ -123,12 +123,14 @@ func NewResourceMetadataHandler(cfg ResourceMetadataConfig) http.Handler {
 // branches are matched before, and never fall through to, the authenticated
 // handler.
 //
-// resourceCfg / authServerCfg are derived from env by the entrypoint (McpApiUrl
-// origin + CAINBAN_AUTH_ISSUER + CAINBAN_HOSTED_UI_DOMAIN). authed is the
-// fully-authenticated MCP handler (Server.HandlerWithAuth).
-func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetadataConfig, authed http.Handler) http.Handler {
+// resourceCfg / authServerCfg / clientCfg are derived from env by the entrypoint
+// (McpApiUrl origin + CAINBAN_AUTH_ISSUER + CAINBAN_HOSTED_UI_DOMAIN +
+// CAINBAN_MCP_CLI_CLIENT_ID). authed is the fully-authenticated MCP handler
+// (Server.HandlerWithAuth).
+func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetadataConfig, clientCfg ClientConfigConfig, authed http.Handler) http.Handler {
 	metadata := NewResourceMetadataHandler(resourceCfg)
 	authServerMeta := NewAuthServerMetadataHandler(authServerCfg)
+	clientConfig := NewClientConfigHandler(clientCfg)
 	mux := http.NewServeMux()
 	// Exact-match the well-known paths so they are served publicly; the metadata
 	// handlers themselves enforce GET/HEAD.
@@ -137,6 +139,11 @@ func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetad
 	// that advertises code_challenge_methods_supported:["S256"] (which Cognito's
 	// own discovery omits), unblocking a spec-compliant MCP client.
 	mux.Handle(WellKnownAuthServerPath, authServerMeta)
+	// cainban's own MCP client auto-config document — PUBLIC. Returns the MCP
+	// URL, client id, resolved authorize/token endpoints, and pre-computed
+	// per-client config snippets so an agent (or the connect page) can configure
+	// itself in one fetch instead of hand-assembling JSON.
+	mux.Handle(WellKnownClientConfigPath, clientConfig)
 	// Everything else (root, /{proxy+}, tool calls) goes through the JWT auth +
 	// tenant-resolution gate. "/" is the ServeMux catch-all.
 	//

@@ -695,7 +695,24 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
 	})
 
-	// The MCP Lambda serves the RFC 9728 metadata document from its OWN canonical
+	// --- cainban MCP client auto-config route (not an RFC; cainban's own) ---
+	//
+	// GET /.well-known/mcp-client-config is PUBLIC — it returns the MCP URL, the
+	// public OAuth client id, the resolved authorize/token endpoints, and
+	// pre-computed per-client config snippets (Kiro Crew, Claude Code, Kiro IDE,
+	// Cursor, VS Code) so an agent or the connect page can configure itself in
+	// one fetch instead of hand-assembling JSON. Nothing in it is a secret (the
+	// client id is a public PKCE identifier; authorization is always the token's
+	// repos claim). Same HttpNoneAuthorizer exemption as the discovery routes;
+	// every other MCP route stays behind the managed Cognito JWT authorizer. The
+	// document is served by the MCP Lambda (mcp.PublicMux) which routes only this
+	// exact path publicly.
+	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
+		Path:        jsii.String("/.well-known/mcp-client-config"),
+		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
+		Integration: mcpIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
+	})
 	// URL. mcpAPI is created after the function, so the URL is added as env here
 	// (a lazily-resolved CDK token) rather than at function construction. This is
 	// the `resource` field of the metadata doc, the RFC 8707 resource indicator,
@@ -712,6 +729,15 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// authorization_endpoint/token_endpoint from this. Sourced from the same
 	// UserPoolDomain construct the HostedUiDomain output uses — never hardcoded.
 	fn.AddEnvironment(jsii.String("CAINBAN_HOSTED_UI_DOMAIN"), hostedUiBaseURL, nil)
+
+	// The public Cognito MCP CLI app client id (McpCliClientId output). The
+	// client-config auto-config document (mcp.NewClientConfigHandler) advertises
+	// it so an agent/connect-page can write a complete MCP config — including the
+	// OAuth client id — without the user looking it up. It is a public PKCE
+	// client identifier, not a secret, and authorizes nothing on its own (every
+	// request is still gated by the token's validated repos claim). Sourced from
+	// the McpCliClient construct the McpCliClientId output uses — never hardcoded.
+	fn.AddEnvironment(jsii.String("CAINBAN_MCP_CLI_CLIENT_ID"), mcpCliClient.UserPoolClientId(), nil)
 
 	// --- Explicit CloudWatch log group -----------------------------------
 	//

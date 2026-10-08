@@ -422,6 +422,8 @@ function McpConfig() {
       : "/cainban-mcp-setup.md";
   const prompt = agentPrompt(MCP_API, clientId, "owner/repo", setupUrl);
   const rule = steeringRule("owner/repo", setupUrl);
+  const connectAgentCmd = `cainban connect-agent --mcp-url ${MCP_API || "<MCP_API>"} --format kirocrew`;
+  const clientConfigUrl = `${MCP_API || "<MCP_API>"}/.well-known/mcp-client-config`;
 
   const copy = async (text: string, which: string) => {
     try {
@@ -435,6 +437,55 @@ function McpConfig() {
 
   return (
     <>
+      <section className="card" aria-labelledby="autoconf-heading">
+        <h2 id="autoconf-heading">Auto-configure (one command)</h2>
+        <p className="hint">
+          The fastest path, and the one that can’t pick the wrong URL. Run this
+          and it fetches the correct MCP URL, OAuth client id and authorize host
+          straight from the server, then writes a ready-to-use config. Requires
+          the <code>cainban</code> CLI.
+        </p>
+        <div className="account-row">
+          <span className="muted">Kiro Crew (writes ~/.kiro/crew/mcp.json form):</span>
+          <button
+            className="link"
+            onClick={() => void copy(connectAgentCmd, "connectagent")}
+          >
+            {copied === "connectagent" ? "Copied!" : "Copy"}
+          </button>
+        </div>
+        <pre className="code-block">
+          <code>{connectAgentCmd}</code>
+        </pre>
+        <p className="hint">
+          Other clients: swap <code>--format kirocrew</code> for{" "}
+          <code>claude</code>, <code>kiro-ide</code>, <code>cursor</code>, or{" "}
+          <code>vscode</code>. Add <code>--output &lt;path&gt;</code> to write
+          the file directly instead of printing it.
+        </p>
+        <details className="manual-entry">
+          <summary>No CLI? Point your agent at the config endpoint</summary>
+          <p className="hint">
+            This public endpoint returns the MCP URL, OAuth client id, resolved
+            authorize/token endpoints, and pre-built config snippets for every
+            client — one fetch, no guessing which URL is which. Tell your agent
+            to GET it and write the matching snippet:
+          </p>
+          <div className="account-row">
+            <span className="muted">Config endpoint:</span>
+            <button
+              className="link"
+              onClick={() => void copy(clientConfigUrl, "ccurl")}
+            >
+              {copied === "ccurl" ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <pre className="code-block">
+            <code>{clientConfigUrl}</code>
+          </pre>
+        </details>
+      </section>
+
       <section className="card" aria-labelledby="mcp-heading">
         <h2 id="mcp-heading">Add cainban to your MCP client</h2>
 

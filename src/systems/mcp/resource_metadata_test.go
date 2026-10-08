@@ -107,7 +107,7 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	m := newMWSigner(t)
 	// A protected handler that must NEVER run unauthenticated.
 	protected := AuthMiddlewareWithChallenge(m.resolver(t), resourceMetaURLFor(testMcpResource), &spyHandler{})
-	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), protected)
+	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), testClientCfg(), protected)
 
 	// (a) well-known: public 200. The Lambda sees the bare route path (API
 	// Gateway routes by path; no stage/host prefix reaches the handler).
@@ -124,6 +124,14 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	mux.ServeHTTP(asRec, asReq)
 	if asRec.Code != http.StatusOK {
 		t.Errorf("as-metadata status = %d, want 200 (must be public, no auth)", asRec.Code)
+	}
+
+	// (a3) the cainban client-config doc is ALSO public: 200, no token.
+	ccReq := httptest.NewRequest(http.MethodGet, WellKnownClientConfigPath, nil)
+	ccRec := httptest.NewRecorder()
+	mux.ServeHTTP(ccRec, ccReq)
+	if ccRec.Code != http.StatusOK {
+		t.Errorf("client-config status = %d, want 200 (must be public, no auth)", ccRec.Code)
 	}
 
 	// (b) some other route without a token: 401 (auth gate ran).

@@ -67,7 +67,7 @@ func main() {
 	// are DERIVED from env (CAINBAN_MCP_RESOURCE + CAINBAN_AUTH_ISSUER), never
 	// hardcoded.
 	authed := server.HandlerWithAuthChallenge(resolver, resourceMetadataURL())
-	handler := mcp.PublicMux(resourceMetadataConfig(), authServerMetadataConfig(), authed)
+	handler := mcp.PublicMux(resourceMetadataConfig(), authServerMetadataConfig(), clientConfigConfig(), authed)
 	adapter := httpadapter.NewV2(handler)
 
 	// This Lambda is fronted by an API Gateway v2 HTTP API (payload format 2.0),

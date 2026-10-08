@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -64,6 +65,8 @@ func main() {
 		handleTUI()
 	case "mcp":
 		handleMCP(os.Args[2:])
+	case "connect-agent":
+		handleConnectAgent(os.Args[2:])
 	case "version":
 		handleVersion()
 	default:
@@ -94,6 +97,7 @@ func printUsage() {
 	fmt.Println("  cainban tui                          Start interactive TUI mode")
 	fmt.Println("  cainban mcp                          Start MCP server (stdio, default)")
 	fmt.Println("  cainban mcp --http :PORT             Start MCP server (stateless HTTP, 127.0.0.1)")
+	fmt.Println("  cainban connect-agent --mcp-url URL  Auto-configure an AI agent for a cainban MCP server")
 	fmt.Println("  cainban version                      Show version")
 	fmt.Println()
 	fmt.Println("Board commands:")
@@ -905,4 +909,100 @@ func handleVersion() {
 	fmt.Println("  ✅ Full keyboard navigation (j/k, PgUp/PgDn, Home/End)")
 	fmt.Println("  ✅ Auto-scroll with selection indicators [X/Y]")
 	fmt.Println("  🔧 Conditional debug logging (CAINBAN_DEBUG=1)")
+}
+
+// handleConnectAgent implements `cainban connect-agent`: it discovers a cainban
+// MCP server's auto-config document and emits (or writes) a ready-to-use MCP
+// client config in the requested format. This removes the manual, error-prone
+// steps of looking up the right MCP URL and OAuth client id and hand-assembling
+// JSON — the usual cause of a broken setup (e.g. pasting the Connect API URL).
+//
+// Flags:
+//
+//	--mcp-url URL   (required) the cainban MCP server base URL
+//	--format FMT    output format: json (default), kirocrew, kirocrew-exfil-gate,
+//	                kirocrew-dashboard, claude, kiro-ide, cursor, vscode
+//	--output PATH   write to PATH instead of stdout ("-" = stdout, the default)
+//
+// It never writes to a path it was not told to, and prints next steps so the
+// user knows to restart/authenticate.
+func handleConnectAgent(args []string) {
+	mcpURL := ""
+	format := "json"
+	output := "-"
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		next := func() string {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", a)
+				os.Exit(1)
+			}
+			i++
+			return args[i]
+		}
+		switch {
+		case a == "--mcp-url":
+			mcpURL = next()
+		case strings.HasPrefix(a, "--mcp-url="):
+			mcpURL = strings.TrimPrefix(a, "--mcp-url=")
+		case a == "--format":
+			format = next()
+		case strings.HasPrefix(a, "--format="):
+			format = strings.TrimPrefix(a, "--format=")
+		case a == "--output" || a == "-o":
+			output = next()
+		case strings.HasPrefix(a, "--output="):
+			output = strings.TrimPrefix(a, "--output=")
+		default:
+			fmt.Fprintf(os.Stderr, "Error: unknown connect-agent argument %q\n", a)
+			fmt.Fprintln(os.Stderr, "Usage: cainban connect-agent --mcp-url URL [--format FMT] [--output PATH]")
+			os.Exit(1)
+		}
+	}
+
+	if strings.TrimSpace(mcpURL) == "" {
+		fmt.Fprintln(os.Stderr, "Error: --mcp-url is required (the cainban MCP server URL, from the connect page)")
+		fmt.Fprintln(os.Stderr, "Usage: cainban connect-agent --mcp-url URL [--format FMT] [--output PATH]")
+		os.Exit(1)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cfg, err := mcp.DiscoverClientConfig(ctx, mcpURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	rendered, err := cfg.RenderConfig(format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	if output == "-" || output == "" {
+		fmt.Println(rendered)
+	} else {
+		if err := os.WriteFile(output, []byte(rendered+"\n"), 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "Error writing %s: %v\n", output, err)
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "Wrote %s config to %s\n", format, output)
+	}
+
+	// Next-step guidance to stderr so piping stdout to a config file stays clean.
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Next steps:")
+	fmt.Fprintf(os.Stderr, "  1. Merge the config into your MCP client (do not overwrite other servers).\n")
+	if strings.HasPrefix(strings.ToLower(format), "kirocrew") {
+		fmt.Fprintf(os.Stderr, "  2. If your Authorize banner fails with an exfiltration-pattern error, also\n")
+		fmt.Fprintf(os.Stderr, "     run with --format kirocrew-exfil-gate and merge it into\n")
+		fmt.Fprintf(os.Stderr, "     ~/.kiro/crew/oauth_endpoints.json, then restart the gateway.\n")
+		fmt.Fprintf(os.Stderr, "  3. Open a FRESH chat, then click Authorize and sign in.\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "  2. Reload your client's MCP servers, then authenticate in the browser.\n")
+		fmt.Fprintf(os.Stderr, "  3. Verify with list_tasks (an empty board is success; 403 = connect the repo first).\n")
+	}
 }
