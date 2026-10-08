@@ -18,6 +18,25 @@ export async function getIdToken(): Promise<string> {
   return token;
 }
 
+/**
+ * Force a fresh Cognito session so the ID token's `repos` / `default_repo`
+ * claims are re-minted. The claims are baked into the token by the pre-token
+ * Lambda from the LIVE grants store, so after connecting/disconnecting a repo
+ * the EXISTING token is stale (it carries the pre-change claim for up to ~1h).
+ * The board authorizes `list_tasks` against that claim, so without this a
+ * just-connected repo 403s ("not authorized — connect it first") until the
+ * token would naturally refresh. Calling this after a successful connect makes
+ * the next board navigation carry a token that grants the repo. Best-effort:
+ * a refresh failure is swallowed (the token still refreshes on its own later).
+ */
+export async function refreshIdToken(): Promise<void> {
+  try {
+    await fetchAuthSession({ forceRefresh: true });
+  } catch {
+    // Non-fatal: the session refreshes on its normal cadence regardless.
+  }
+}
+
 async function authHeader(): Promise<HeadersInit> {
   return { Authorization: `Bearer ${await getIdToken()}` };
 }

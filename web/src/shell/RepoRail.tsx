@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import type { ReposState } from "./useConnectedRepos";
 import { rememberLastRepo } from "./useConnectedRepos";
-import { disconnectRepo } from "../connectApi";
+import { disconnectRepo, refreshIdToken } from "../connectApi";
 
 // RepoRail is the persistent connected-repo navigation: a left rail on wide
 // screens (CSS) and a header dropdown on narrow screens. Selecting a repo
@@ -53,6 +53,8 @@ export function RepoRail({
       setConfirming(null);
       setRemoving(null);
       reload(); // refresh the rail from the server (source of truth)
+      // Re-mint the token so its repos claim drops the removed repo.
+      await refreshIdToken();
       // Notify other mounted views (the Connect page's repo list) that the
       // grant set changed, so they refresh without needing a tab blur/focus.
       window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
