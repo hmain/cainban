@@ -53,6 +53,9 @@ export function RepoRail({
       setConfirming(null);
       setRemoving(null);
       reload(); // refresh the rail from the server (source of truth)
+      // Notify other mounted views (the Connect page's repo list) that the
+      // grant set changed, so they refresh without needing a tab blur/focus.
+      window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
     } catch (e) {
       setError(String(e));
       setRemoving(null);
