@@ -8,32 +8,72 @@
 // a Cognito user pool, a placeholder GitHub App secret, least-privilege IAM per
 // function, reserved-concurrency caps, and explicit CloudWatch log groups.
 //
-// Deploy target: AWS profile aws-test-hamin, account 528757808822, region
-// eu-north-1. See infra/README.md for the exact commands.
+// Deploy target is selected by CAINBAN_ENV:
+//
+//	CAINBAN_ENV=dev (default)
+//	  Profile:  aws-test-hamin
+//	  Account:  528757808822
+//	  Region:   eu-north-1
+//	  Stack:    CainbanPhase2Stack
+//
+//	CAINBAN_ENV=prod
+//	  Profile:  elastic-mobile-aws-reseller
+//	  Account:  563329104476
+//	  Region:   eu-central-1
+//	  Stack:    CainbanProdStack
+//
+// See infra/README.md for the exact commands.
 //
 // Go CDK is used (not TypeScript) so the whole repo stays single-language: the
 // Lambda handler and the infrastructure are both Go, sharing one toolchain.
 package main
 
 import (
+	"os"
+
 	"github.com/aws/aws-cdk-go/awscdk/v2"
 	"github.com/aws/jsii-runtime-go"
 )
 
+// envConfig holds the per-environment deployment settings.
+type envConfig struct {
+	StackName string
+	Account   string
+	Region    string
+}
+
+var environments = map[string]envConfig{
+	"dev": {
+		StackName: "CainbanPhase2Stack",
+		Account:   "528757808822",
+		Region:    "eu-north-1",
+	},
+	"prod": {
+		StackName: "CainbanProdStack",
+		Account:   "563329104476",
+		Region:    "eu-central-1",
+	},
+}
+
 func main() {
 	defer jsii.Close()
 
+	env := os.Getenv("CAINBAN_ENV")
+	if env == "" {
+		env = "dev"
+	}
+	cfg, ok := environments[env]
+	if !ok {
+		panic("CAINBAN_ENV must be 'dev' or 'prod', got: " + env)
+	}
+
 	app := awscdk.NewApp(nil)
 
-	NewCainbanStack(app, "CainbanPhase2Stack", &CainbanStackProps{
+	NewCainbanStack(app, cfg.StackName, &CainbanStackProps{
 		StackProps: awscdk.StackProps{
-			// Region is fixed to the dev target. Account is pinned to the
-			// aws-test-hamin dev account so `cdk diff`/`deploy` resolve a
-			// concrete environment from code (credentials still come from the
-			// --profile at deploy time; this is only the target identity).
 			Env: &awscdk.Environment{
-				Account: jsii.String("528757808822"),
-				Region:  jsii.String("eu-north-1"),
+				Account: jsii.String(cfg.Account),
+				Region:  jsii.String(cfg.Region),
 			},
 			Description: jsii.String("cainban: DynamoDB + grants table + arm64 Lambdas (MCP/connect/pre-token) + Cognito auth + GitHub App connect; HTTP APIs fronted by a managed Cognito JWT authorizer (Bearer JWT, no SigV4); connect callback authorizer-exempt (HMAC state)"),
 		},
