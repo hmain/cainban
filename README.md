@@ -277,9 +277,32 @@ It's all Go — the CLI, the three Lambdas, and the CDK infra share one language
 
 Markdown rendering via [Glow](https://github.com/charmbracelet/glow) is still on the TODO list.
 
+## Access control
+
+In the serverless deployment, access is **self-service and GitHub-gated** — there is no admin "add user" action, and by design board access can never exceed GitHub repo access.
+
+Three layers decide who can touch a board:
+
+- **Identity** — who you are. Cognito, federated to Entra (Awiant SSO). The SPA only runs the sign-in redirect.
+- **Grant** — which repos you may touch. One row per user per repo in the `cainban-grants` table (`PK=USER#<sub>`, `SK=GRANT#<owner>/<repo>`), written by the connect Lambda *only after it verifies, server-side, that your own GitHub account has access to that repo*.
+- **Authorization** — may *this request* touch *this repo*. Enforced on every MCP/Connect call by `auth.Resolver` from the token's signed `repos` claim. The `X-Cainban-Repo` header and MCP tool args only *select* a repo; they never grant access. The chain fails closed (bad token → 401, ungranted repo → 403, grants-table error → deny).
+
+The `repos` claim is minted into the Cognito token by the `cainban-pretoken` trigger, which reads the live grants table at token-generation time.
+
+### Adding a user to a repo's board
+
+Because a grant is tied to a GitHub-verified identity, you add a user by giving them GitHub access, then they connect it themselves:
+
+1. **Grant them access to the repo on GitHub** (add them as a collaborator, or via a team) and ensure the **cainban GitHub App is installed** on that repo.
+2. **They sign in** to the SPA and open **Connect**.
+3. **They Link GitHub identity**, then **Connect** the repo. The connect Lambda verifies *their* GitHub access and writes the grant.
+4. On their next token the board is theirs — the agent/SPA can read and move tasks for that repo.
+
+An admin cannot grant on someone else's behalf through the app: the grant requires *that user's* own GitHub-verified access. To **remove** a user, revoke their grant (Disconnect in the SPA — the rail's × or the Connect page), or remove their GitHub access to the repo so a future re-connect fails verification. Grants are per-user; everyone granted a repo shares that repo's single board, and there are no per-user roles *within* a board (no read-only vs read-write) today.
+
 ## AI integration
 
-The MCP server exposes cainban's operations as tools and speaks JSON-RPC 2.0, so Kiro, Claude Desktop, and other MCP clients can read and change the board directly. The tools are `create_task`, `list_tasks`, `update_task_status`, `get_task`, `update_task_priority`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task_links`, `delete_task`, `restore_task`, `list_boards`, `change_board`, and `list_activity` — the table below has an example call for each.
+The MCP server exposes cainban's operations as tools and speaks JSON-RPC 2.0, so Kiro, Claude Desktop, and other MCP clients can read and change the board directly. The tools are `create_task`, `list_tasks`, `update_task_status`, `get_task`, `update_task_priority`, `update_task`, `link_tasks`, `unlink_tasks`, `get_task_links`, `list_links`, `delete_task`, `restore_task`, `list_boards`, `change_board`, and `list_activity` — the table below has an example call for each.
 
 ## MCP tools
 
@@ -294,6 +317,7 @@ The MCP server exposes cainban's operations as tools and speaks JSON-RPC 2.0, so
 | `link_tasks` | Create links between tasks | "Link task 1 to block task 2" |
 | `unlink_tasks` | Remove links between tasks | "Unlink task 1 from task 2" |
 | `get_task_links` | Show all links for a task | "Show me all links for task 5" |
+| `list_links` | List every task link on the board (for the dependency graph) | "Show all task dependencies" |
 | `delete_task` | Delete task (soft delete by default) | "Delete task 8" |
 | `restore_task` | Restore a soft-deleted task | "Restore task 8" |
 | `list_boards` | List all available boards | "Show me all my boards" |
