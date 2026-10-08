@@ -79,7 +79,7 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 	// No repo named and no default_repo: authenticated but unscoped. Valid only
 	// for non-tenant handshake operations; the store path fails closed on it.
 	if target == "" {
-		return &Tenant{Subject: identity.Subject, Actor: actorFor(identity), Unscoped: true}, nil
+		return &Tenant{Subject: identity.Subject, Actor: actorFor(identity), AuthorizedRepos: identity.sortedRepos(), Unscoped: true}, nil
 	}
 
 	if !identity.authorizes(target) {
@@ -92,6 +92,7 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 		PartitionPrefix: PartitionPrefixFor(target),
 		Subject:         identity.Subject,
 		Actor:           actorFor(identity),
+		AuthorizedRepos: identity.sortedRepos(),
 	}, nil
 }
 

@@ -45,6 +45,7 @@ func listToolsWire(t *testing.T) []*mcp.Tool {
 func TestToolsListStable(t *testing.T) {
 	want := []string{
 		"change_board",
+		"change_repo",
 		"create_task",
 		"delete_task",
 		"get_task",
@@ -113,6 +114,7 @@ func TestToolOutputSchemasPresent(t *testing.T) {
 		"get_task":       true,
 		"list_boards":    true,
 		"whoami":         true,
+		"change_repo":    true,
 		"search_tasks":   true,
 		"get_task_links": true,
 		"list_activity":  true,
@@ -260,6 +262,7 @@ func TestToolAnnotationsClassified(t *testing.T) {
 		"list_activity":  true,
 		"whoami":         true,
 		"change_board":   true,
+		"change_repo":    true,
 		"search_tasks":   true,
 		"get_task_links": true,
 		"list_links":     true,

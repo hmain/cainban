@@ -217,23 +217,29 @@ func loopbackOnly(addr string) (string, error) {
 //   - Each board DB has its own boards table whose primary board is id 1, so
 //     the numeric board ROW defaults to 1 in the handlers.
 func (s *Server) resolveTaskSystem(ctx context.Context, boardName string) (store.TaskStore, func(), error) {
+	return s.resolveTaskSystemForRepo(ctx, boardName, "")
+}
+
+// resolveTaskSystemForRepo is resolveTaskSystem with an optional PER-CALL repo
+// override (the `repo` tool arg). This is how a client switches repo at runtime
+// on ONE stateless connection: the edge already resolved a default tenant from
+// the X-Cainban-Repo header / default_repo claim, and a tool may name a
+// DIFFERENT authorized repo for this single call.
+//
+// The override is UNTRUSTED for authorization: it only selects which repo, and
+// is authorized against the SIGNED `repos` claim surfaced on the tenant
+// (AuthorizedRepos) before any store opens — a repo the token does not grant is
+// a tool error, never a cross-tenant read. An empty argRepo keeps the tenant's
+// edge-resolved repo (backward compatible: every existing caller passes "").
+func (s *Server) resolveTaskSystemForRepo(ctx context.Context, boardName, argRepo string) (store.TaskStore, func(), error) {
 	if boardName == "" {
 		boardName = "default"
 	}
 	dbPath := s.boardSystem.GetBoardPath(boardName)
 
-	partitionPrefix := ""
-	if t, ok := tenantFromContext(ctx); ok && t != nil {
-		// An UNSCOPED tenant authenticated but named no repo (and had no
-		// default_repo). It is valid only for the MCP handshake, never for a
-		// data operation: opening a store with an empty prefix would collapse
-		// every tenant into one partition. Fail closed with a clear message the
-		// client can act on (name a repo via the X-Cainban-Repo header or set a
-		// default_repo). Handshake ops (initialize, tools/list) never reach here.
-		if t.Unscoped {
-			return nil, nil, fmt.Errorf("no target repo for this request: set the %s header or a default_repo claim before calling a tool", auth.HeaderTargetRepo)
-		}
-		partitionPrefix = t.PartitionPrefix
+	partitionPrefix, err := partitionPrefixForCall(ctx, argRepo)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	ts, closer, err := store.OpenTaskForTenant(context.Background(), dbPath, partitionPrefix)
@@ -242,6 +248,57 @@ func (s *Server) resolveTaskSystem(ctx context.Context, boardName string) (store
 	}
 	closeFn := func() { _ = closer() }
 	return ts, closeFn, nil
+}
+
+// partitionPrefixForCall computes the DynamoDB partition prefix for one request,
+// honoring an optional per-call repo override. It is the single place the
+// stateless per-call repo switch is authorized, shared by the task and board
+// paths so they cannot drift.
+//
+// Rules:
+//   - no tenant (local CLI/stdio): empty prefix (single-tenant), override ignored.
+//   - tenant, no override: the tenant's edge-resolved repo; an UNSCOPED tenant
+//     fails closed exactly as before (never open a store on an empty prefix).
+//   - tenant, override set: normalize it, AUTHORIZE it against the tenant's
+//     signed AuthorizedRepos, and use that repo's prefix. A repo the token does
+//     not grant is a forbidden error; a structurally invalid repo is an error.
+//     This works even for an otherwise-UNSCOPED tenant — naming an authorized
+//     repo is exactly how a client with no default_repo picks one at runtime.
+func partitionPrefixForCall(ctx context.Context, argRepo string) (string, error) {
+	t, ok := tenantFromContext(ctx)
+	if !ok || t == nil {
+		// Local CLI / stdio: single-tenant, empty prefix. A per-call repo has no
+		// meaning without an authorizing token, so it is ignored here.
+		return "", nil
+	}
+
+	override := strings.TrimSpace(argRepo)
+	if override == "" {
+		if t.Unscoped {
+			return "", fmt.Errorf("no target repo for this request: set the %s header, pass a repo argument, or set a default_repo claim before calling a tool", auth.HeaderTargetRepo)
+		}
+		return t.PartitionPrefix, nil
+	}
+
+	norm, err := auth.NormalizeRepo(override)
+	if err != nil {
+		return "", fmt.Errorf("invalid repo %q: %w", argRepo, err)
+	}
+	if !tenantAuthorizes(t, norm) {
+		return "", fmt.Errorf("not authorized for repo %q; call change_repo to see the repos this token grants", norm)
+	}
+	return auth.PartitionPrefixFor(norm), nil
+}
+
+// tenantAuthorizes reports whether the tenant's signed claim grants a repo. The
+// repo must already be normalized (partitionPrefixForCall normalizes first).
+func tenantAuthorizes(t *auth.Tenant, repo string) bool {
+	for _, r := range t.AuthorizedRepos {
+		if r == repo {
+			return true
+		}
+	}
+	return false
 }
 
 // resolveBoardStore opens the per-request BoardStore, mirroring
@@ -256,14 +313,21 @@ func (s *Server) resolveTaskSystem(ctx context.Context, boardName string) (store
 // resolved tenant from context and passes its partition prefix. The repo was
 // authorized once upstream in AuthMiddleware; no board-specific auth is added.
 func (s *Server) resolveBoardStore(ctx context.Context) (store.BoardStore, func(), error) {
+	return s.resolveBoardStoreForRepo(ctx, "")
+}
+
+// resolveBoardStoreForRepo is resolveBoardStore with an optional per-call repo
+// override, authorized identically to resolveTaskSystemForRepo via the shared
+// partitionPrefixForCall. The board tools take no repo argument today except
+// change_repo/whoami discovery; keeping the override here means a future
+// board-level call can target a repo the same way the task tools do, with the
+// single authorization path.
+func (s *Server) resolveBoardStoreForRepo(ctx context.Context, argRepo string) (store.BoardStore, func(), error) {
 	dbPath := s.boardSystem.GetBoardPath("default")
 
-	partitionPrefix := ""
-	if t, ok := tenantFromContext(ctx); ok && t != nil {
-		if t.Unscoped {
-			return nil, nil, fmt.Errorf("no target repo for this request: set the %s header or a default_repo claim before calling a tool", auth.HeaderTargetRepo)
-		}
-		partitionPrefix = t.PartitionPrefix
+	partitionPrefix, err := partitionPrefixForCall(ctx, argRepo)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	bs, closer, err := store.OpenBoardForTenant(context.Background(), dbPath, partitionPrefix)
@@ -324,6 +388,15 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 		// mutates no shared state.
 		Annotations: readOnly("Change board"),
 	}, s.handleChangeBoard)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "change_repo",
+		Description: "List the repos your token authorizes and (optionally) validate one you intend to act on. Repo selection is PER CALL in this stateless server: pass the chosen owner/repo as the `repo` argument on each tool call (create_task, list_tasks, …), exactly like board_id. This tool does not pin a repo server-side — it tells you which repos are available and confirms a target is authorized.",
+		// Read-only: it reports the authorized repo set and validates a target.
+		// It changes NO server-side state (the server is stateless; the repo is
+		// chosen per request via the `repo` arg), so it is safe + idempotent.
+		Annotations: readOnly("Change repo (list / validate authorized repos)"),
+	}, s.handleChangeRepo)
 
 	mcp.AddTool(mcpServer, &mcp.Tool{
 		Name:        "list_activity",
@@ -456,27 +529,32 @@ type CreateTaskArgs struct {
 	Description string      `json:"description,omitempty" jsonschema:"the description of the task"`
 	BoardID     int         `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
 	Priority    interface{} `json:"priority,omitempty" jsonschema:"priority level (none, low, medium, high, critical or 0-4)"`
+	Repo        string      `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type ListTasksArgs struct {
 	BoardID int    `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
 	Status  string `json:"status,omitempty" jsonschema:"filter by status (todo, doing, done)"`
+	Repo    string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type UpdateTaskStatusArgs struct {
 	ID              int    `json:"id" jsonschema:"the task ID"`
 	Status          string `json:"status" jsonschema:"the new status (todo, doing, done)"`
 	ExpectedVersion int    `json:"expected_version,omitempty" jsonschema:"optimistic-concurrency guard: the task version you last read; the write fails with a version-conflict error if the task changed since. Omit (or 0) to force-write."`
+	Repo            string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type GetTaskArgs struct {
-	ID int `json:"id" jsonschema:"the task ID"`
+	ID   int    `json:"id" jsonschema:"the task ID"`
+	Repo string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type UpdateTaskPriorityArgs struct {
 	ID              int         `json:"id" jsonschema:"task ID to update"`
 	Priority        interface{} `json:"priority" jsonschema:"priority level (none, low, medium, high, critical or 0-4)"`
 	ExpectedVersion int         `json:"expected_version,omitempty" jsonschema:"optimistic-concurrency guard: the task version you last read; the write fails with a version-conflict error if the task changed since. Omit (or 0) to force-write."`
+	Repo            string      `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type UpdateTaskArgs struct {
@@ -484,6 +562,7 @@ type UpdateTaskArgs struct {
 	Title           string `json:"title" jsonschema:"the new title"`
 	Description     string `json:"description,omitempty" jsonschema:"the new description"`
 	ExpectedVersion int    `json:"expected_version,omitempty" jsonschema:"optimistic-concurrency guard: the task version you last read; the write fails with a version-conflict error if the task changed since. Omit (or 0) to force-write."`
+	Repo            string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type ListBoardsArgs struct{}
@@ -496,50 +575,65 @@ type ChangeBoardArgs struct {
 	BoardName string `json:"board_name" jsonschema:"the name of the board to switch to"`
 }
 
+// ChangeRepoArgs optionally names a repo to validate. With no repo, change_repo
+// just lists the authorized set. The named repo is UNTRUSTED for authorization:
+// it is checked against the token's signed `repos` claim, never trusted alone.
+type ChangeRepoArgs struct {
+	Repo string `json:"repo,omitempty" jsonschema:"optional owner/repo to validate against your authorized repos. Omit to just list the repos your token grants."`
+}
+
 type ListActivityArgs struct {
 	TaskID int    `json:"task_id,omitempty" jsonschema:"optional: only show activity for this board task ID; omit for the whole board"`
 	Limit  int    `json:"limit,omitempty" jsonschema:"max events to return, newest first (default 50, max 200)"`
 	Since  string `json:"since,omitempty" jsonschema:"optional RFC3339 timestamp; return only events strictly newer than this (for delta polling a live board)"`
+	Repo   string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type DeleteTaskArgs struct {
-	ID   int  `json:"id" jsonschema:"the board task ID to delete"`
-	Hard bool `json:"hard,omitempty" jsonschema:"permanently delete instead of soft-delete; a hard delete cannot be restored (default false)"`
+	ID   int    `json:"id" jsonschema:"the board task ID to delete"`
+	Hard bool   `json:"hard,omitempty" jsonschema:"permanently delete instead of soft-delete; a hard delete cannot be restored (default false)"`
+	Repo string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type RestoreTaskArgs struct {
-	ID int `json:"id" jsonschema:"the board task ID to restore"`
+	ID   int    `json:"id" jsonschema:"the board task ID to restore"`
+	Repo string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type SearchTasksArgs struct {
 	Query   string `json:"query" jsonschema:"title substring to fuzzy-match against tasks in the board"`
 	BoardID int    `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
+	Repo    string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type LinkTasksArgs struct {
 	FromID   int    `json:"from_id" jsonschema:"board task ID of the source task"`
 	ToID     int    `json:"to_id" jsonschema:"board task ID of the target task"`
 	LinkType string `json:"type" jsonschema:"link type: blocks, blocked_by, related, depends_on"`
+	Repo     string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type UnlinkTasksArgs struct {
 	FromID   int    `json:"from_id" jsonschema:"board task ID of the source task"`
 	ToID     int    `json:"to_id" jsonschema:"board task ID of the target task"`
 	LinkType string `json:"type" jsonschema:"link type: blocks, blocked_by, related, depends_on"`
+	Repo     string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type GetTaskLinksArgs struct {
-	ID int `json:"id" jsonschema:"the board task ID to list links for"`
+	ID   int    `json:"id" jsonschema:"the board task ID to list links for"`
+	Repo string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 type ListLinksArgs struct {
-	BoardID int `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
+	BoardID int    `json:"board_id,omitempty" jsonschema:"the board ID (defaults to 1)"`
+	Repo    string `json:"repo,omitempty" jsonschema:"optional owner/repo to act on for THIS call; must be one of the repos your token authorizes (call change_repo to list them). Omit to use the connection's default repo."`
 }
 
 // Tool handlers. Each resolves its board database per request.
 
 func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest, args CreateTaskArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -584,7 +678,7 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest,
 }
 
 func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, args ListTasksArgs) (*mcp.CallToolResult, []*task.Task, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -651,7 +745,7 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 		return toolError("invalid status %q; valid values are todo, doing, done", args.Status), nil, nil
 	}
 
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -725,7 +819,7 @@ func toolError(format string, args ...any) *mcp.CallToolResult {
 }
 
 func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, args GetTaskArgs) (*mcp.CallToolResult, *task.Task, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -761,7 +855,7 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 		return toolError("invalid priority; valid values are none, low, medium, high, critical (or 0-4)"), nil, nil
 	}
 
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -807,7 +901,7 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 }
 
 func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -923,7 +1017,107 @@ func (s *Server) handleChangeBoard(ctx context.Context, req *mcp.CallToolRequest
 	}, b, nil
 }
 
-// whoamiResult is the structured content of the whoami tool: the resolved repo
+// authorizedReposFromCtx returns the repos the current token authorizes, as
+// surfaced on the resolved tenant (sorted). Empty on the local CLI path (no
+// tenant) and for a token that grants nothing.
+func authorizedReposFromCtx(ctx context.Context) []string {
+	if t, ok := tenantFromContext(ctx); ok && t != nil {
+		return t.AuthorizedRepos
+	}
+	return nil
+}
+
+// changeRepoResult is the structured content of change_repo: the full set of
+// repos the current token authorizes, the repo the connection currently
+// defaults to (edge-resolved from the X-Cainban-Repo header / default_repo
+// claim), and — when the caller named one — whether that target is authorized.
+type changeRepoResult struct {
+	AuthorizedRepos []string `json:"authorized_repos"`
+	CurrentRepo     string   `json:"current_repo,omitempty"`
+	Requested       string   `json:"requested,omitempty"`
+	Authorized      bool     `json:"authorized,omitempty"`
+}
+
+// handleChangeRepo lists the repos the current token authorizes and, when a
+// repo is named, validates it against that set. It is the repo-level analogue of
+// change_board, closing the asymmetry a caller notices: board selection is
+// per-request, and so is repo selection — but there was no way to SEE the repos
+// a token grants, nor to confirm one before using it.
+//
+// It is deliberately STATELESS: it pins nothing server-side. The actual switch
+// is per call — a client passes the chosen repo as the `repo` argument to
+// create_task / list_tasks / etc., which authorizes it against the SAME signed
+// claim (partitionPrefixForCall). change_repo exists so the client (or an
+// agent) can discover the valid values and validate one, exactly as list_boards
+// precedes a board_id. All data comes from the already-authorized tenant;
+// nothing new is authorized here.
+//
+// On the local CLI path (no tenant) it reports the single local scope. On an
+// authenticated token with no grants it reports an empty set and the remedy
+// (grant a repo on the connect page), as NORMAL content — asking which repos
+// you have when you have none is a valid question, not an error.
+func (s *Server) handleChangeRepo(ctx context.Context, req *mcp.CallToolRequest, args ChangeRepoArgs) (*mcp.CallToolResult, *changeRepoResult, error) {
+	repos := authorizedReposFromCtx(ctx)
+	current := repoFromCtx(ctx)
+
+	// Local CLI (no tenant at all): single local scope, no token to enumerate.
+	if _, ok := tenantFromContext(ctx); !ok {
+		res := &changeRepoResult{AuthorizedRepos: nil, CurrentRepo: "(local)"}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "Running locally (no token) — single local scope; the repo argument has no effect here."}},
+		}, res, nil
+	}
+
+	// Authenticated but the token grants nothing: report the gap + remedy.
+	if len(repos) == 0 {
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: "Your token authorizes no repos. Grant a repo on the cainban connect page, then re-authenticate so a fresh token carries it."}},
+		}, &changeRepoResult{AuthorizedRepos: []string{}}, nil
+	}
+
+	res := &changeRepoResult{AuthorizedRepos: repos, CurrentRepo: current}
+
+	// No target named: just list what is authorized and how to use it.
+	if strings.TrimSpace(args.Repo) == "" {
+		var sb strings.Builder
+		sb.WriteString("Repos this token authorizes:")
+		for _, r := range repos {
+			marker := ""
+			if r == current {
+				marker = " (current default)"
+			}
+			fmt.Fprintf(&sb, "\n• %s%s", r, marker)
+		}
+		sb.WriteString("\n\nRepo selection is per call: pass repo=\"owner/repo\" on any tool (create_task, list_tasks, …) to act on that repo for that call.")
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: sb.String()}},
+		}, res, nil
+	}
+
+	// A target was named: normalize + authorize it against the signed claim.
+	norm, err := auth.NormalizeRepo(args.Repo)
+	if err != nil {
+		return toolError("invalid repo %q: %s", args.Repo, err), nil, nil
+	}
+	res.Requested = norm
+	authorized := false
+	for _, r := range repos {
+		if r == norm {
+			authorized = true
+			break
+		}
+	}
+	res.Authorized = authorized
+	if !authorized {
+		return toolError("repo %q is not authorized by your token; authorized repos: %s", norm, strings.Join(repos, ", ")), res, nil
+	}
+	return &mcp.CallToolResult{
+		Content: []mcp.Content{&mcp.TextContent{
+			Text: fmt.Sprintf("Repo %q is authorized. Pass repo=%q on each tool call to act on it (stateless: nothing is pinned server-side).", norm, norm),
+		}},
+	}, res, nil
+}
+
 // and board scope the current token maps to, plus the human-readable actor. All
 // fields come from the already-AUTHORIZED tenant and the per-request board
 // store — nothing new is authorized here.
@@ -1002,7 +1196,7 @@ func (s *Server) handleWhoami(ctx context.Context, req *mcp.CallToolRequest, arg
 // board (or a single task when task_id is given), newest first. The event store
 // is pure audit and is never used to derive task/board state.
 func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolRequest, args ListActivityArgs) (*mcp.CallToolResult, []task.ActivityEvent, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1048,7 +1242,7 @@ func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolReques
 // and its links. A missing task is an EXPECTED outcome returned as an isError
 // tool result, not a transport error, so the model can recover.
 func (s *Server) handleDeleteTask(ctx context.Context, req *mcp.CallToolRequest, args DeleteTaskArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1097,7 +1291,7 @@ func (s *Server) handleDeleteTask(ctx context.Context, req *mcp.CallToolRequest,
 // by board task id and resolved through the store's own RestoreTask, which
 // no-ops cleanly on a task that was never deleted.
 func (s *Server) handleRestoreTask(ctx context.Context, req *mcp.CallToolRequest, args RestoreTaskArgs) (*mcp.CallToolResult, any, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1130,7 +1324,7 @@ func (s *Server) handleRestoreTask(ctx context.Context, req *mcp.CallToolRequest
 // Read-only; prepends the same scope header as list_tasks so the caller sees
 // which repo/board the results belong to.
 func (s *Server) handleSearchTasks(ctx context.Context, req *mcp.CallToolRequest, args SearchTasksArgs) (*mcp.CallToolResult, []*task.Task, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1170,7 +1364,7 @@ func (s *Server) handleLinkTasks(ctx context.Context, req *mcp.CallToolRequest, 
 		return toolError("invalid link type %q; valid values are %s", args.LinkType, validLinkTypes), nil, nil
 	}
 
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1215,7 +1409,7 @@ func (s *Server) handleUnlinkTasks(ctx context.Context, req *mcp.CallToolRequest
 		return toolError("invalid link type %q; valid values are %s", args.LinkType, validLinkTypes), nil, nil
 	}
 
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1255,7 +1449,7 @@ func (s *Server) handleUnlinkTasks(ctx context.Context, req *mcp.CallToolRequest
 
 // handleGetTaskLinks returns all links referencing a task in both directions.
 func (s *Server) handleGetTaskLinks(ctx context.Context, req *mcp.CallToolRequest, args GetTaskLinksArgs) (*mcp.CallToolResult, []task.TaskLink, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1295,7 +1489,7 @@ func (s *Server) handleGetTaskLinks(ctx context.Context, req *mcp.CallToolReques
 // A link whose endpoint no longer resolves to a live task on the board is
 // skipped (e.g. a hard-deleted task), so the returned graph never dangles.
 func (s *Server) handleListLinks(ctx context.Context, req *mcp.CallToolRequest, args ListLinksArgs) (*mcp.CallToolResult, []task.TaskLinkView, error) {
-	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
 	}
