@@ -380,10 +380,54 @@ Once connected, use cainban as the task backend for `<owner>/<repo>`:
 **Available tools:** `list_boards`, `change_board`, `list_tasks`, `get_task`,
 `create_task`, `update_task`, `update_task_status`, `update_task_priority`,
 `search_tasks`, `delete_task`, `restore_task`, `link_tasks`, `unlink_tasks`,
-`get_task_links`, `list_activity`, `whoami`.
+`get_task_links`, `list_links`, `list_activity`, `whoami`.
 
 End by telling the user: cainban is set up for `<owner>/<repo>`. Your agent will
 list, create, and move tasks on the board as it works.
+
+### Step 6 (recommended): Install a steering rule so cainban is used automatically
+
+So the user never has to say "use cainban" again, write a rule into THIS
+project's agent-rules file. Pick the file for the tool in use:
+
+| Agent       | Rules file                 | Location                  |
+| ----------- | -------------------------- | ------------------------- |
+| Claude Code | `CLAUDE.md`                | project root              |
+| Codex / generic | `AGENTS.md`            | project root              |
+| Kiro        | `.kiro/steering/cainban.md`| `.kiro/steering/`         |
+| Cursor      | `.cursor/rules/cainban.mdc`| `.cursor/rules/`          |
+
+Write it **non-destructively** — these files hold the project's own instructions
+and are usually committed:
+
+- If the file does not exist, create it (and its directory) and write the rule.
+- If it exists, **append** the rule between idempotent markers rather than
+  overwriting. Use `<<<CAINBAN_STEERING_START>>>` / `<<<CAINBAN_STEERING_END>>>`
+  so re-running replaces only the marked block instead of adding a second copy.
+- Where the project's own instructions conflict with the rule, the project wins.
+
+The rule to write (substitute `<owner>/<repo>`):
+
+```markdown
+# Task management: use cainban
+
+This project tracks work on a cainban board (a per-repo kanban board exposed
+over MCP) for `<owner>/<repo>`. Treat cainban as the source of truth for what
+needs doing and what is in progress — use it automatically, without being asked.
+
+- At the start of any work session, call `list_tasks` before deciding what to do.
+- When given work, break it into tasks with `create_task` (one per cohesive
+  unit); set a priority when it is obvious.
+- As you work, keep the board honest with `update_task_status` (`todo` → `doing`
+  → `done`), and record a blocks / depends_on relationship with `link_tasks`
+  when one task gates another.
+- Do not ask which tool to use for tasks, and do not keep a separate TODO list
+  in chat or scratch files — the board is it. The repo is selected by your
+  token, so no `X-Cainban-Repo` header is needed.
+```
+
+**Success:** the rule is present in the correct rules file, pre-existing project
+instructions are preserved, and a fresh session uses cainban without prompting.
 
 ## Troubleshooting
 

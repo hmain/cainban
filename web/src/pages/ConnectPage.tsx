@@ -421,6 +421,7 @@ function McpConfig() {
       ? `${window.location.origin}/cainban-mcp-setup.md`
       : "/cainban-mcp-setup.md";
   const prompt = agentPrompt(MCP_API, clientId, "owner/repo", setupUrl);
+  const rule = steeringRule("owner/repo", setupUrl);
 
   const copy = async (text: string, which: string) => {
     try {
@@ -494,13 +495,41 @@ function McpConfig() {
           </button>
         </div>
         <p className="hint">
-          Paste this to your AI coding agent to point it at a repo’s cainban
-          board over MCP. It carries everything the agent needs — the server URL
-          and the OAuth client id.
+          Paste this to your AI coding agent. It points the agent at this repo’s
+          cainban board over MCP <strong>and</strong> installs a steering rule in
+          the project, so the agent uses cainban for task management
+          automatically — you won’t have to tell it “use cainban” each time. It
+          carries everything the agent needs (server URL, OAuth client id) and
+          writes the rule non-destructively (idempotent markers, project rules
+          win).
         </p>
         <pre className="code-block">
           <code>{prompt}</code>
         </pre>
+
+        <details className="manual-entry">
+          <summary>Just the steering rule (add it yourself)</summary>
+          <p className="hint">
+            The rule the prompt installs. Drop it into your tool’s agent-rules
+            file so cainban is used automatically:{" "}
+            <code>CLAUDE.md</code> / <code>AGENTS.md</code> (project root),{" "}
+            <code>.kiro/steering/cainban.md</code>, or{" "}
+            <code>.cursor/rules/cainban.mdc</code>.
+          </p>
+          <div className="account-row">
+            <span className="muted">Steering rule:</span>
+            <button
+              className="link"
+              onClick={() => void copy(rule, "rule")}
+            >
+              {copied === "rule" ? "Copied!" : "Copy"}
+            </button>
+          </div>
+          <pre className="code-block">
+            <code>{rule}</code>
+          </pre>
+        </details>
+
         <p className="install-again">
           Full agent-readable setup guide:{" "}
           <a className="link" href="/cainban-mcp-setup.md" download>
@@ -629,8 +658,11 @@ function agentPrompt(
   const cid = clientId || "<CLIENT_ID>";
   const redirectUri = MCP_OAUTH_REDIRECT_URI;
   return [
-    `Set up the cainban MCP server as your task backend for ${repo}, then start`,
-    `using it. Everything you need is here — don't ask me for a token or an id.`,
+    `Set up the cainban MCP server as your task backend for ${repo}, install a`,
+    `steering rule so you use it automatically from now on, then start using it.`,
+    `Everything you need is here — don't ask me for a token or an id.`,
+    ``,
+    `## 1. Register the MCP server`,
     ``,
     `Register this remote MCP server with your client (prefer OAuth: you sign in`,
     `once in the browser and tokens self-refresh — there is no token to paste):`,
@@ -661,8 +693,66 @@ function agentPrompt(
     `list_tasks for ${repo} — an empty board is success; a 403 means my account`,
     `isn't granted this repo yet, so tell me to connect it on the connect page.`,
     ``,
-    `Once connected, use cainban as the task backend: list_tasks before you start,`,
-    `create_task to break the work down, and update_task_status (todo → doing →`,
-    `done) as you go. Full reference if you need it: ${setupUrl}`,
+    `## 2. Install a steering rule so you use cainban automatically`,
+    ``,
+    `So I never have to tell you "use cainban" again, write the rule below into`,
+    `THIS project's agent-rules file. Pick the file for your tool:`,
+    ``,
+    `  Claude Code -> CLAUDE.md (project root)`,
+    `  Codex / generic -> AGENTS.md (project root)`,
+    `  Kiro -> .kiro/steering/cainban.md`,
+    `  Cursor -> .cursor/rules/cainban.mdc`,
+    ``,
+    `Write it NON-DESTRUCTIVELY: these files hold the project's own instructions`,
+    `and are often committed. If the file doesn't exist, create it (and its`,
+    `directory). If it exists, APPEND the rule between the idempotent markers`,
+    `below rather than overwriting; if those markers are already present, replace`,
+    `only what's between them so re-running this doesn't duplicate the rule. Where`,
+    `the project's own instructions conflict with this rule, the project wins.`,
+    ``,
+    `<<<CAINBAN_STEERING_START>>>`,
+    ...steeringRule(repo, setupUrl).split("\n"),
+    `<<<CAINBAN_STEERING_END>>>`,
+    ``,
+    `## 3. Start using it`,
+    ``,
+    `Once the server is connected and the rule is written, follow the rule from`,
+    `now on: list_tasks before you start, create_task to break work down,`,
+    `update_task_status (todo -> doing -> done) as you go. Full reference if you`,
+    `need it: ${setupUrl}`,
+  ].join("\n");
+}
+
+// steeringRule returns the markdown rule block an agent writes into the
+// project's rules file (CLAUDE.md / AGENTS.md / .kiro/steering / .cursor/rules)
+// so it uses cainban as the task backend automatically, without the user having
+// to name it each time. Kept terse and tool-agnostic; the repo and setup-guide
+// link are interpolated.
+function steeringRule(repo: string, setupUrl: string): string {
+  return [
+    `# Task management: use cainban`,
+    ``,
+    `This project tracks work on a **cainban** board (a per-repo kanban board`,
+    `exposed over MCP) for \`${repo}\`. Treat cainban as the source of truth for`,
+    `what needs doing and what is in progress — use it automatically, without`,
+    `being asked.`,
+    ``,
+    `**At the start of any work session**, call \`list_tasks\` to see the board`,
+    `before deciding what to do.`,
+    ``,
+    `**When given work**, break it into tasks with \`create_task\` (one task per`,
+    `cohesive unit), and set a priority when it is obvious.`,
+    ``,
+    `**As you work**, keep the board honest with \`update_task_status\`: move a`,
+    `task to \`doing\` when you start it and \`done\` when it is complete and`,
+    `verified. Use \`link_tasks\` to record a blocks / depends_on relationship`,
+    `when one task gates another.`,
+    ``,
+    `**Do not** ask the user which tool to use for tasks, and do not keep a`,
+    `separate TODO list in chat or scratch files — the board is it. The repo is`,
+    `selected by your token, so you never need an X-Cainban-Repo header for`,
+    `\`${repo}\`.`,
+    ``,
+    `Setup / tool reference: ${setupUrl}`,
   ].join("\n");
 }
