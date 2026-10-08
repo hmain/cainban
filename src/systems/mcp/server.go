@@ -1039,7 +1039,7 @@ type changeRepoResult struct {
 }
 
 // handleChangeRepo lists the repos the current token authorizes and, when a
-// repo is named, validates it against that set. It is the repo-level analogue of
+// repo is named, validates it against that set. It is the repo-level analog of
 // change_board, closing the asymmetry a caller notices: board selection is
 // per-request, and so is repo selection — but there was no way to SEE the repos
 // a token grants, nor to confirm one before using it.
