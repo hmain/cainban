@@ -256,6 +256,29 @@ you are looking at — copy it from there verbatim.** (A real example is
 `cainban-emawiant-563329104476.auth.eu-central-1.amazoncognito.com`; a bare
 `.auth.amazoncognito.com` never matches and leaves the gate closed.)
 
+Runtime-specific gotcha: if the sign-in lands on a Cognito error page whose URL
+reads `.../error?error=invalid_request&client_id=Q+DEV+CLI` (or any `client_id`
+that is not cainban's), the cainban server entry has the wrong — or no —
+`client_id`, so the runtime fell back to a built-in default (`Q DEV CLI` is the
+Amazon Q CLI's). Cognito rejects an unknown client with `invalid_request`. Fix:
+set the cainban entry's `client_id` to the `<CLIENT_ID>` from the connect page,
+in **both** the top-level `client_id` and the nested `oauth.clientId` (some
+runtime paths read one, some the other). One-liner that merges the correct id
+into `~/.kiro/crew/mcp.json` without clobbering other servers (requires `jq` —
+substitute `<MCP_API>` and `<CLIENT_ID>`):
+
+```sh
+CID="<CLIENT_ID>"; URL="<MCP_API>"
+F=~/.kiro/crew/mcp.json
+[ -f "$F" ] || echo '{}' > "$F"
+jq --arg cid "$CID" --arg url "$URL" \
+  '.mcpServers.cainban = ((.mcpServers.cainban // {}) + {type:"http", url:$url, client_id:$cid, oauth:{clientId:$cid, redirectUri:"http://127.0.0.1:3334/oauth/callback"}})' \
+  "$F" > "$F.tmp" && mv "$F.tmp" "$F"
+```
+
+Then the gateway owner runs `kirocrew restart` from a terminal and retries
+Authorize in a fresh chat.
+
 The gateway owner appends it to `additional_authorization_endpoints` in
 `~/.kiro/crew/oauth_endpoints.json` (hand-edit, no restart needed — just retry
 Authorize in a fresh chat). This list is **append-only**: add your entry without
@@ -466,6 +489,12 @@ instructions are preserved, and a fresh session uses cainban without prompting.
 - **Step 3 — browser lands on a page that won't load, URL has `?code=…`:** the
   sign-in succeeded but the callback port is unregistered. Use
   `MCP_OAUTH_CALLBACK_PORT=3118` (Claude Code) and retry.
+- **Step 3 — Cognito error page `invalid_request` with a bogus `client_id`
+  (e.g. `client_id=Q+DEV+CLI`):** the server entry's `client_id` is wrong or
+  missing and the runtime used a built-in default that cainban's Cognito pool
+  does not know. Set the entry's `client_id` (and nested `oauth.clientId`) to the
+  `<CLIENT_ID>` from the connect page — see the Kiro Crew runtime one-liner above
+  — then restart and retry Authorize.
 - **Step 4 — 401:** the token expired or is missing. On OAuth the client
   refreshes automatically; if it persists, re-authenticate (Step 3). On the
   bearer fallback, regenerate the token on the connect page.
