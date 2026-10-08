@@ -659,6 +659,51 @@ func TestRepoDelete_Removes(t *testing.T) {
 	}
 }
 
+// Removing the repo that is the subject's default re-points the default to a
+// remaining grant (per-user META cleanup; never touches board data).
+func TestRepoDelete_RepointsDefaultToRemaining(t *testing.T) {
+	e := newEnv(t)
+	e.store.grants[subA] = map[string]bool{"acme/widgets": true, "acme/other": true}
+	e.store.defaults[subA] = "acme/widgets" // the one we remove is the default
+	w := e.do(t, "DELETE", "/connect/repo", e.token(t, subA), `{"owner":"acme","repo":"widgets"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d, want 200", w.Code)
+	}
+	// Default must no longer point at the removed repo; it re-points to the one
+	// remaining grant.
+	if got := e.store.defaults[subA]; got != "acme/other" {
+		t.Errorf("default_repo = %q, want acme/other (re-pointed)", got)
+	}
+}
+
+// Removing the subject's last grant, when it is the default, clears the default.
+func TestRepoDelete_ClearsDefaultWhenNoneRemain(t *testing.T) {
+	e := newEnv(t)
+	e.store.grants[subA] = map[string]bool{"acme/widgets": true}
+	e.store.defaults[subA] = "acme/widgets"
+	w := e.do(t, "DELETE", "/connect/repo", e.token(t, subA), `{"owner":"acme","repo":"widgets"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d, want 200", w.Code)
+	}
+	if got := e.store.defaults[subA]; got != "" {
+		t.Errorf("default_repo = %q, want empty (cleared) after removing last grant", got)
+	}
+}
+
+// Removing a repo that is NOT the default leaves the default untouched.
+func TestRepoDelete_LeavesUnrelatedDefault(t *testing.T) {
+	e := newEnv(t)
+	e.store.grants[subA] = map[string]bool{"acme/widgets": true, "acme/keep": true}
+	e.store.defaults[subA] = "acme/keep" // default is a different repo
+	w := e.do(t, "DELETE", "/connect/repo", e.token(t, subA), `{"owner":"acme","repo":"widgets"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("DELETE status = %d, want 200", w.Code)
+	}
+	if got := e.store.defaults[subA]; got != "acme/keep" {
+		t.Errorf("default_repo = %q, want acme/keep (unchanged)", got)
+	}
+}
+
 // GET /connect/repos lists ONLY the caller's grants.
 func TestReposList_OnlyCallersGrants(t *testing.T) {
 	e := newEnv(t)

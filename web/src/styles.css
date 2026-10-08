@@ -352,6 +352,69 @@ code {
   color: var(--text);
 }
 
+/* Each rail item is a row: the repo link flexes to fill, the remove control
+   sits at the end (revealed on hover/focus-within so the rail stays calm). */
+.repo-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.repo-rail-item .repo-rail-link {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.repo-rail-remove {
+  flex: none;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+  padding: 0.2rem 0.4rem;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.repo-rail-item:hover .repo-rail-remove,
+.repo-rail-item:focus-within .repo-rail-remove {
+  opacity: 1;
+}
+.repo-rail-remove:hover,
+.repo-rail-remove:focus-visible {
+  color: var(--error);
+  background: var(--bg);
+}
+
+.repo-rail-confirm {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.repo-rail-confirm-yes {
+  color: var(--error);
+}
+.repo-rail-confirm-no {
+  color: var(--muted);
+}
+.repo-rail-confirm button[disabled] {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.repo-rail-error {
+  font-size: 0.8rem;
+  margin: 0.3rem 0 0;
+}
+
+/* On narrow screens the remove control is hidden (removal happens from the
+   wide list); keep the dropdown clean. The @media rule that flips the rail to
+   the dropdown form already hides .repo-rail-list. */
+
 /* The narrow-screen dropdown is hidden on wide screens. */
 .repo-rail-select {
   display: none;

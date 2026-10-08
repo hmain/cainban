@@ -132,7 +132,7 @@ function SignedInShell({ email }: { email: string }) {
       </header>
 
       <div className="app-body">
-        <RepoRail repos={repos} current={useCurrentRepo()} />
+        <RepoRail repos={repos} current={useCurrentRepo()} reload={repos.reload} />
         <main className="app-main container">
           <Routes>
             <Route path="/" element={<HomeRedirect repos={repos} />} />
