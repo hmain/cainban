@@ -1,9 +1,11 @@
-/* Design tokens. Light is the default; dark is applied via prefers-color-scheme
-   (borrowed from Pico CSS's theming approach). Every surface in this file
-   references a token — never a literal hex — so the whole UI reskins from this
-   one block. --bg-inset is the recessed surface (inputs, code blocks,
-   cards-on-cards) that used to be a hardcoded near-black; it now adapts with the
-   theme. --warn replaces the inline #f5b14c used for high-priority / degraded. */
+/* Design tokens. Light is the default (:root); dark is applied EITHER when the
+   OS prefers dark and the user has not chosen a theme (:root:not([data-theme])
+   under prefers-color-scheme), OR when the user explicitly picks dark
+   ([data-theme="dark"]). An explicit [data-theme="light"] forces light even on a
+   dark OS. This is the Pico CSS pattern: OS default, overridable by a data-theme
+   attribute the toggle sets on <html>. Dark values live in one shared selector
+   list so they are defined exactly once. Every surface references a token —
+   never a literal hex — so the whole UI reskins from this block. */
 :root {
   --bg: #f6f7f9;
   --bg-inset: #eceef2;
@@ -19,8 +21,9 @@
   color-scheme: light dark;
 }
 
+/* Shared dark palette: used by the OS-default branch and the manual override. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #0f1116;
     --bg-inset: #0b0d12;
     --card: #171a21;
@@ -32,7 +35,27 @@
     --error: #ff6b6b;
     --ok: #4cd07d;
     --warn: #f5b14c;
+    color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #0f1116;
+  --bg-inset: #0b0d12;
+  --card: #171a21;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --muted: #9aa2b1;
+  --accent: #4c8bf5;
+  --accent-text: #ffffff;
+  --error: #ff6b6b;
+  --ok: #4cd07d;
+  --warn: #f5b14c;
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {
@@ -920,4 +943,36 @@ dialog.task-detail::backdrop {
   font-size: 0.95rem;
   border-top: 1px solid var(--border);
   padding-top: 0.8rem;
+}
+
+/* Theme toggle: a quiet pill button in the header. Icon + current-mode label;
+   the title/aria name what the next click does. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: inherit;
+  font-size: 0.85rem;
+  text-decoration: none;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  background: none;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.theme-toggle:hover,
+.theme-toggle:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.theme-toggle > span[aria-hidden] {
+  font-size: 0.95rem;
+}
+.theme-toggle-label {
+  font-weight: 600;
+}
+.signed-out-theme {
+  margin-top: 0.75rem;
 }
