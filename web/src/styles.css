@@ -1,5 +1,47 @@
+/* Design tokens. Light is the default (:root); dark is applied EITHER when the
+   OS prefers dark and the user has not chosen a theme (:root:not([data-theme])
+   under prefers-color-scheme), OR when the user explicitly picks dark
+   ([data-theme="dark"]). An explicit [data-theme="light"] forces light even on a
+   dark OS. This is the Pico CSS pattern: OS default, overridable by a data-theme
+   attribute the toggle sets on <html>. Dark values live in one shared selector
+   list so they are defined exactly once. Every surface references a token —
+   never a literal hex — so the whole UI reskins from this block. */
 :root {
+  --bg: #f6f7f9;
+  --bg-inset: #eceef2;
+  --card: #ffffff;
+  --border: #d4d8e0;
+  --text: #1a1d24;
+  --muted: #5c6472;
+  --accent: #2563eb;
+  --accent-text: #ffffff;
+  --error: #d1344b;
+  --ok: #1f9d57;
+  --warn: #b4700a;
+  color-scheme: light dark;
+}
+
+/* Shared dark palette: used by the OS-default branch and the manual override. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    --bg: #0f1116;
+    --bg-inset: #0b0d12;
+    --card: #171a21;
+    --border: #2a2f3a;
+    --text: #e6e8ec;
+    --muted: #9aa2b1;
+    --accent: #4c8bf5;
+    --accent-text: #ffffff;
+    --error: #ff6b6b;
+    --ok: #4cd07d;
+    --warn: #f5b14c;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
   --bg: #0f1116;
+  --bg-inset: #0b0d12;
   --card: #171a21;
   --border: #2a2f3a;
   --text: #e6e8ec;
@@ -8,7 +50,12 @@
   --accent-text: #ffffff;
   --error: #ff6b6b;
   --ok: #4cd07d;
+  --warn: #f5b14c;
   color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
 }
 
 * {
@@ -113,7 +160,7 @@ button.link {
   padding: 0.5rem 0.6rem;
   border-radius: 8px;
   border: 1px solid var(--border);
-  background: #0f1116;
+  background: var(--bg-inset);
   color: var(--text);
   min-width: 12rem;
 }
@@ -128,7 +175,7 @@ button.link {
 }
 
 code {
-  background: #0b0d12;
+  background: var(--bg-inset);
   padding: 0.1rem 0.35rem;
   border-radius: 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -136,7 +183,7 @@ code {
 }
 
 .code-block {
-  background: #0b0d12;
+  background: var(--bg-inset);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 0.9rem;
@@ -212,7 +259,7 @@ code {
   gap: 0.1rem 0.6rem;
   align-items: start;
   padding: 0.55rem 0.7rem;
-  background: #0b0d12;
+  background: var(--bg-inset);
   border: 1px solid var(--border);
   border-radius: 8px;
 }
@@ -561,7 +608,7 @@ code {
 
 .pill-low { color: var(--muted); border-color: var(--border); }
 .pill-medium { color: var(--accent); border-color: var(--accent); }
-.pill-high { color: #f5b14c; border-color: #f5b14c; }
+.pill-high { color: var(--warn); border-color: var(--warn); }
 .pill-critical { color: var(--error); border-color: var(--error); }
 
 /* Connection chip — distinguishable by icon + label, not colour alone. */
@@ -585,7 +632,7 @@ code {
 .conn-chip.reconnecting { color: var(--accent); border-color: var(--accent); }
 .conn-chip.paused { color: var(--muted); }
 .conn-chip.stale { color: var(--error); border-color: var(--error); }
-.conn-chip.degraded { color: #f5b14c; border-color: #f5b14c; }
+.conn-chip.degraded { color: var(--warn); border-color: var(--warn); }
 
 .conn-chip.live .conn-dot {
   animation: card-pulse 1.6s ease-in-out infinite;
@@ -734,4 +781,198 @@ code {
 .dep-toggle[aria-pressed="true"] {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+/* ------------------------------------------------------------------ */
+/* Tier 1 web-UI additions: clickable cards, filter bar, empty state,  */
+/* and the read-only task-detail dialog. All colours are theme tokens. */
+/* ------------------------------------------------------------------ */
+
+/* Clickable card (opens the detail modal). Keyboard-focusable via role=button
+   + tabIndex; show a clear focus ring and a subtle hover lift. */
+.board-card.clickable {
+  cursor: pointer;
+}
+.board-card.clickable:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+}
+.board-card.clickable:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .board-card.clickable:hover {
+    transform: none;
+  }
+}
+
+/* Filter bar: a calm row above the columns. Wraps on narrow screens. */
+.board-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.9rem;
+}
+.board-filter-field input[type="search"] {
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text);
+  min-width: 14rem;
+}
+.board-filter-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+.board-filter-select select {
+  font: inherit;
+  padding: 0.35rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text);
+}
+.board-filter-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.board-filter-count {
+  font-size: 0.85rem;
+}
+.board-no-matches {
+  margin-top: 1rem;
+}
+
+/* First-run empty board. */
+.board-empty {
+  text-align: left;
+}
+.board-empty h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.05rem;
+}
+.board-empty p {
+  margin: 0.3rem 0;
+  font-size: 0.925rem;
+}
+
+/* Task-detail dialog (native <dialog>, Pico-style modal). */
+dialog.task-detail {
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100vh - 4rem);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  color: var(--text);
+  overflow: hidden;
+}
+dialog.task-detail::backdrop {
+  background: rgba(0, 0, 0, 0.5);
+}
+.task-detail-body {
+  margin: 0;
+  padding: 1.25rem;
+  max-height: calc(100vh - 4rem);
+  overflow-y: auto;
+  background: none;
+  border: none;
+}
+.task-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.task-detail-head-main {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.task-detail-status {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.task-detail-close {
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 1.4rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 0.25rem;
+  border-radius: 6px;
+}
+.task-detail-close:hover,
+.task-detail-close:focus-visible {
+  color: var(--text);
+  background: var(--bg-inset);
+}
+.task-detail-title {
+  margin: 0 0 0.6rem;
+  font-size: 1.2rem;
+  word-break: break-word;
+}
+.task-detail-desc {
+  margin: 0 0 0.6rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.task-detail-updated {
+  margin: 0 0 0.9rem;
+  font-size: 0.8rem;
+}
+.task-detail-subhead {
+  margin: 0.5rem 0 0.5rem;
+  font-size: 0.95rem;
+  border-top: 1px solid var(--border);
+  padding-top: 0.8rem;
+}
+
+/* Theme toggle: a quiet pill button in the header. Icon + current-mode label;
+   the title/aria name what the next click does. */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font: inherit;
+  font-size: 0.85rem;
+  text-decoration: none;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.2rem 0.65rem;
+  background: none;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.theme-toggle:hover,
+.theme-toggle:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.theme-toggle > span[aria-hidden] {
+  font-size: 0.95rem;
+}
+.theme-toggle-label {
+  font-weight: 600;
+}
+.signed-out-theme {
+  margin-top: 0.75rem;
 }

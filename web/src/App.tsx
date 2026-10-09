@@ -12,6 +12,7 @@ import { Hub } from "aws-amplify/utils";
 import { ENTRA_PROVIDER_NAME } from "./amplify";
 import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
+import { ThemeToggle } from "./components/ThemeToggle";
 import { ConnectPage } from "./pages/ConnectPage";
 import { RepoRail } from "./shell/RepoRail";
 import { NotConnected } from "./shell/NotConnected";
@@ -75,6 +76,9 @@ export function App() {
         <header>
           <h1>cainban</h1>
           <p className="subtitle">Watch your repo’s board move as agents work it.</p>
+          <div className="signed-out-theme">
+            <ThemeToggle />
+          </div>
         </header>
         <SignedOut />
       </main>
@@ -125,6 +129,7 @@ function SignedInShell({ email }: { email: string }) {
             Connect
           </Link>
           <span className="muted">{email}</span>
+          <ThemeToggle />
           <button className="link" onClick={() => void signOut()}>
             Sign out
           </button>
