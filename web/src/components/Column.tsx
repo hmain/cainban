@@ -10,11 +10,13 @@ export function Column({
   tasks,
   agentTasks,
   workingTasks,
+  onOpen,
 }: {
   status: Status;
   tasks: Task[];
   agentTasks?: Set<number>;
   workingTasks?: Set<number>;
+  onOpen?: (task: Task) => void;
 }) {
   const cards = sortCards(tasks);
   return (
@@ -33,6 +35,7 @@ export function Column({
               task={t}
               agent={agentTasks?.has(t.BoardTaskID)}
               working={workingTasks?.has(t.BoardTaskID)}
+              onOpen={onOpen}
             />
           ))
         )}

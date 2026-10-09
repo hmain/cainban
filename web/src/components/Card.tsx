@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { Task } from "../mcpApi";
 import { priorityName } from "../board/types";
 
@@ -11,10 +11,12 @@ export function Card({
   task,
   agent,
   working,
+  onOpen,
 }: {
   task: Task;
   agent?: boolean;
   working?: boolean;
+  onOpen?: (task: Task) => void;
 }) {
   const pname = priorityName(task.Priority);
   const firstRender = useRef(true);
@@ -43,6 +45,7 @@ export function Card({
 
   const cls = [
     "board-card",
+    onOpen ? "clickable" : "",
     working ? "working" : "",
     entering ? "enter" : "",
     landed ? "done-landed" : "",
@@ -51,7 +54,24 @@ export function Card({
     .join(" ");
 
   return (
-    <article className={cls} data-task-id={task.BoardTaskID}>
+    <article
+      className={cls}
+      data-task-id={task.BoardTaskID}
+      {...(onOpen
+        ? {
+            role: "button",
+            tabIndex: 0,
+            "aria-label": `Open task #${task.BoardTaskID}: ${task.Title}`,
+            onClick: () => onOpen(task),
+            onKeyDown: (e: KeyboardEvent) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                onOpen(task);
+              }
+            },
+          }
+        : {})}
+    >
       <div className="board-card-head">
         <code className="board-card-id">#{task.BoardTaskID}</code>
         {task.Priority > 0 && (
