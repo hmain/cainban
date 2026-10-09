@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router";
 import type { ReposState } from "./useConnectedRepos";
 import { rememberLastRepo } from "./useConnectedRepos";
 import { disconnectRepo, refreshIdToken } from "../connectApi";
