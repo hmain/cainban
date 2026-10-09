@@ -6,7 +6,7 @@ import {
   useParams,
   useLocation,
   Link,
-} from "react-router-dom";
+} from "react-router";
 import { signInWithRedirect, signOut, fetchAuthSession } from "aws-amplify/auth";
 import { Hub } from "aws-amplify/utils";
 import { ENTRA_PROVIDER_NAME } from "./amplify";

@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 
 // NotConnected is shown when the board route names a repo that is not in the
 // user's connected set — a clear "connect it first" state rather than a blank

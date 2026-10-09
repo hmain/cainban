@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link } from "react-router";
 import { listTasks, listLinks, type Task, type TaskLink } from "../mcpApi";
 import {
   boardReducer,
