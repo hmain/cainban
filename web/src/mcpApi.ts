@@ -36,6 +36,16 @@ export interface ListActivityResult {
   empty: boolean;
 }
 
+/** A derived link from a card to a GitHub issue or pull request, parsed
+ * server-side from the task text against the board's repo (see Go package
+ * githubref). Present only when the card's text names a reference. */
+export interface GitHubRef {
+  kind: "issue" | "pr";
+  number: number;
+  repo: string; // owner/repo
+  url: string; // canonical github.com page
+}
+
 /** One task as the MCP list_tasks tool returns it. The Go task.Task struct
  * marshals exact field names (no JSON tags), so field casing is PascalCase. */
 export interface Task {
@@ -45,6 +55,8 @@ export interface Task {
   Priority: number; // 0..4 (none..critical)
   Description?: string;
   UpdatedAt?: string;
+  /** Derived GitHub issue/PR link, absent when the card references none. */
+  GitHubRef?: GitHubRef;
 }
 
 export interface ListTasksResult {
@@ -357,6 +369,7 @@ function asTaskArray(v: unknown): Task[] | null {
     const status = str(pick("status", "Status"));
     const description = pick("description", "Description");
     const updatedAt = pick("updated_at", "UpdatedAt");
+    const githubRef = parseGitHubRef(pick("github_ref", "GitHubRef"));
     return {
       BoardTaskID: num(pick("board_task_id", "BoardTaskID")),
       Title: str(pick("title", "Title")),
@@ -367,8 +380,25 @@ function asTaskArray(v: unknown): Task[] | null {
       Priority: num(pick("priority", "Priority")),
       Description: description == null ? undefined : str(description),
       UpdatedAt: updatedAt == null ? undefined : str(updatedAt),
+      GitHubRef: githubRef,
     };
   });
+}
+
+// parseGitHubRef reads the optional derived github_ref object off a task. The
+// Go githubref.Ref marshals snake_case json tags (kind, number, repo, url). It
+// returns undefined for anything that is not a well-formed ref so a card simply
+// renders no chip rather than a broken one.
+function parseGitHubRef(v: unknown): GitHubRef | undefined {
+  if (v == null || typeof v !== "object") return undefined;
+  const o = v as Record<string, unknown>;
+  const kind = str(o.kind);
+  const number = num(o.number);
+  const url = str(o.url);
+  if ((kind !== "issue" && kind !== "pr") || number <= 0 || url === "") {
+    return undefined;
+  }
+  return { kind, number, repo: str(o.repo), url };
 }
 
 interface McpEnvelope {

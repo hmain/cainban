@@ -79,11 +79,26 @@ export function Card({
         )}
       </div>
       <div className="board-card-title">{task.Title}</div>
-      {(agent || working) && (
+      {(agent || working || task.GitHubRef) && (
         <div className="board-card-foot">
-          <span className="agent-badge" title="Changed by an agent">
-            ⚡ {working ? "agent working" : "agent"}
-          </span>
+          {(agent || working) && (
+            <span className="agent-badge" title="Changed by an agent">
+              ⚡ {working ? "agent working" : "agent"}
+            </span>
+          )}
+          {task.GitHubRef && (
+            <a
+              className="gh-chip"
+              href={task.GitHubRef.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`Open ${task.GitHubRef.kind === "pr" ? "pull request" : "issue"} on GitHub: ${task.GitHubRef.repo}#${task.GitHubRef.number}`}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {task.GitHubRef.kind === "pr" ? "⇄" : "◇"} #
+              {task.GitHubRef.number}
+            </a>
+          )}
         </div>
       )}
     </article>

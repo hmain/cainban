@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hmain/cainban/src/systems/githubref"
 )
 
 // ErrVersionConflict is the canonical optimistic-concurrency sentinel. It lives
@@ -174,6 +176,13 @@ type Task struct {
 	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
+	// GitHubRef is a DERIVED, non-persisted link from this card to a GitHub
+	// issue or pull request, parsed from Title/Description against the board's
+	// repo (see package githubref). It is populated only at the read/serialize
+	// boundary (the MCP handlers) and is nil when the card's text names no
+	// reference. It is never stored — the DynamoDB/SQLite task rows carry no
+	// such column — so there is no schema change, migration, or write path.
+	GitHubRef *githubref.Ref `json:"github_ref,omitempty"`
 }
 
 // System handles task operations
