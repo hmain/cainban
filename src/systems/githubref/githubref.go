@@ -49,16 +49,24 @@ type Ref struct {
 	URL string `json:"url"`
 }
 
+// hostGuard anchors the scheme so "github.com" must be the actual host, not a
+// trailing label of a hostile host (evilgithub.com) or a path segment of
+// another host (https://evil.com/github.com/...). RE2 has no lookbehind, so the
+// guard is a leading group m[1] that matches start-of-text or a character that
+// cannot be part of a hostname — the owner/repo/number captures therefore shift
+// to m[2]/m[3]/m[4].
+const hostGuard = `(^|[^\w.-])`
+
 // prURLRe matches a full GitHub pull-request URL anywhere in the text, capturing
 // owner, repo and number. Host is fixed to github.com (Tier 1 is github.com
 // only, matching the GitHub App's scope).
 var prURLRe = regexp.MustCompile(
-	`https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/(\d+)`,
+	hostGuard + `https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/pull/(\d+)`,
 )
 
 // issueURLRe matches a full GitHub issue URL anywhere in the text.
 var issueURLRe = regexp.MustCompile(
-	`https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/(\d+)`,
+	hostGuard + `https?://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/issues/(\d+)`,
 )
 
 // qualifiedRe matches a cross-repo short reference "owner/repo#123".
@@ -90,10 +98,10 @@ func Parse(title, description, boardRepo string) (*Ref, bool) {
 	text := title + "\n" + description
 
 	if m := prURLRe.FindStringSubmatch(text); m != nil {
-		return makeRef(KindPR, m[1]+"/"+m[2], m[3]), true
+		return makeRef(KindPR, m[2]+"/"+m[3], m[4]), true
 	}
 	if m := issueURLRe.FindStringSubmatch(text); m != nil {
-		return makeRef(KindIssue, m[1]+"/"+m[2], m[3]), true
+		return makeRef(KindIssue, m[2]+"/"+m[3], m[4]), true
 	}
 	if m := qualifiedRe.FindStringSubmatch(text); m != nil {
 		return makeRef(KindIssue, m[1]+"/"+m[2], m[3]), true

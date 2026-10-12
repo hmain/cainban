@@ -94,6 +94,28 @@ func TestParse(t *testing.T) {
 			wantRepo:   "octo/cli",
 			wantURL:    "https://github.com/octo/cli/issues/12",
 		},
+		{
+			name:       "URL at the very start of text is accepted",
+			title:      "https://github.com/octo/cli/pull/7 is the fix",
+			boardRepo:  "octo/cli",
+			wantOK:     true,
+			wantKind:   KindPR,
+			wantNumber: 7,
+			wantRepo:   "octo/cli",
+			wantURL:    "https://github.com/octo/cli/pull/7",
+		},
+		{
+			name:      "spoofed host (github.com as a label of another host) is rejected",
+			desc:      "see https://evilgithub.com/octo/cli/pull/9",
+			boardRepo: "",
+			wantOK:    false,
+		},
+		{
+			name:      "spoofed host (github.com as a path of another host) is rejected",
+			desc:      "see https://evil.com/github.com/octo/cli/issues/9",
+			boardRepo: "",
+			wantOK:    false,
+		},
 	}
 
 	for _, tc := range cases {
