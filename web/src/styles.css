@@ -583,6 +583,10 @@ code {
 
 .board-card-foot {
   margin-top: 0.4rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem;
 }
 
 .agent-badge {
@@ -592,6 +596,35 @@ code {
   border: 1px solid var(--accent);
   border-radius: 999px;
   padding: 0.05rem 0.45rem;
+}
+
+/* GitHub issue/PR reference chip, derived from the card's text. Links out to
+   github.com in a new tab; stops click propagation so it does not also open
+   the card detail modal. Uses theme tokens so it adapts to light/dark. */
+.gh-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.gh-chip:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.gh-chip-lg {
+  font-size: 0.85rem;
+  padding: 0.25rem 0.6rem;
+}
+.task-detail-github {
+  margin: 0 0 0.6rem;
 }
 
 /* Priority pills. */

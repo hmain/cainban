@@ -86,6 +86,21 @@ export function TaskDetail({
           {task.Title}
         </h2>
 
+        {task.GitHubRef && (
+          <p className="task-detail-github">
+            <a
+              className="gh-chip gh-chip-lg"
+              href={task.GitHubRef.url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {task.GitHubRef.kind === "pr" ? "⇄" : "◇"}{" "}
+              {task.GitHubRef.kind === "pr" ? "Pull request" : "Issue"}{" "}
+              {task.GitHubRef.repo}#{task.GitHubRef.number} ↗
+            </a>
+          </p>
+        )}
+
         {task.Description ? (
           <p className="task-detail-desc">{task.Description}</p>
         ) : (

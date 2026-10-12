@@ -11,6 +11,7 @@ import (
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/board"
+	"github.com/hmain/cainban/src/systems/githubref"
 	"github.com/hmain/cainban/src/systems/store"
 	"github.com/hmain/cainban/src/systems/task"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -509,6 +510,40 @@ func repoFromCtx(ctx context.Context) string {
 	return ""
 }
 
+// enrichGitHubRefs derives each task's GitHub issue/PR reference from its text
+// (Title/Description) against the request's authorized repo and attaches it as
+// the read-only, non-persisted task.GitHubRef field. It mutates the tasks in
+// place and returns the same slice for call-site convenience.
+//
+// This is the single serialization-boundary seam where the derived link is
+// computed: the store never sees it, and the agent-facing MCP tool contract is
+// unchanged (no new tool, no new write argument) — list_tasks / get_task /
+// search_tasks simply carry one extra optional output field. A card whose text
+// names no reference gets GitHubRef == nil (omitempty drops it from the JSON).
+func enrichGitHubRefs(ctx context.Context, tasks []*task.Task) []*task.Task {
+	repo := repoFromCtx(ctx)
+	for _, t := range tasks {
+		if t == nil {
+			continue
+		}
+		if ref, ok := githubref.Parse(t.Title, t.Description, repo); ok {
+			t.GitHubRef = ref
+		}
+	}
+	return tasks
+}
+
+// enrichGitHubRef is the single-task form of enrichGitHubRefs (get_task).
+func enrichGitHubRef(ctx context.Context, t *task.Task) *task.Task {
+	if t == nil {
+		return t
+	}
+	if ref, ok := githubref.Parse(t.Title, t.Description, repoFromCtx(ctx)); ok {
+		t.GitHubRef = ref
+	}
+	return t
+}
+
 // scopeLine builds the one-line "where am I?" header prefixed to list_tasks /
 // list_boards output so the caller can see the scope on calls they already
 // make. The board is always id 1 today (single board per tenant). In single-user
@@ -711,6 +746,10 @@ func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, 
 		}, tasks, nil
 	}
 
+	// Attach each card's derived GitHub issue/PR reference (read-only, not
+	// persisted) so clients can render the link without a second call.
+	tasks = enrichGitHubRefs(ctx, tasks)
+
 	// Group by status for better display
 	tasksByStatus := make(map[task.Status][]*task.Task)
 	for _, t := range tasks {
@@ -833,6 +872,13 @@ func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, ar
 	}
 
 	text := fmt.Sprintf("#%d [%s] %s\n%s", t.BoardTaskID, t.Status, t.Title, t.Description)
+
+	// Attach the derived GitHub issue/PR reference (read-only, not persisted).
+	t = enrichGitHubRef(ctx, t)
+	if t.GitHubRef != nil {
+		text += fmt.Sprintf("\nGitHub: %s #%d — %s",
+			t.GitHubRef.Kind, t.GitHubRef.Number, t.GitHubRef.URL)
+	}
 
 	// Best-effort: append links if any exist. A link-read failure is not
 	// worth failing the whole get_task call.
@@ -1352,6 +1398,7 @@ func (s *Server) handleSearchTasks(ctx context.Context, req *mcp.CallToolRequest
 		})
 	}
 
+	results = enrichGitHubRefs(ctx, results)
 	return &mcp.CallToolResult{Content: content}, results, nil
 }
 
