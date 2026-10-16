@@ -305,6 +305,16 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		UserPoolClientName: jsii.String("cainban-spa-client"),
 		// Public SPA client: PKCE, no secret.
 		GenerateSecret: jsii.Bool(false),
+		// Token lifetimes. Cognito defaults access/ID tokens to 1h; that made
+		// cainban re-prompt roughly hourly because the cached grant stored only
+		// a relative `expires_in` (no absolute expiry) and the client did not
+		// refresh. Raise access/ID to the Cognito max (24h) so day-to-day use
+		// does not churn, and make the 30d refresh window explicit (not an
+		// implicit default) so it is not silently changed. Lifetime only — no
+		// change to flows, scopes, audiences, or the pre-token trigger.
+		AccessTokenValidity:  awscdk.Duration_Hours(jsii.Number(24)),
+		IdTokenValidity:      awscdk.Duration_Hours(jsii.Number(24)),
+		RefreshTokenValidity: awscdk.Duration_Days(jsii.Number(30)),
 		OAuth: &awscognito.OAuthSettings{
 			Flows: &awscognito.OAuthFlows{
 				AuthorizationCodeGrant: jsii.Bool(true),
@@ -371,9 +381,18 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 
 	mcpCliClient := userPool.AddClient(jsii.String("McpCliClient"), &awscognito.UserPoolClientOptions{
 		UserPoolClientName: jsii.String("cainban-mcp-cli"),
-		// Public PKCE client: no secret. Claude Code performs PKCE + the code
-		// exchange + refresh itself; cainban only validates the resulting token.
+		// Public PKCE client: no secret. Claude Code / Kiro perform PKCE + the
+		// code exchange + refresh themselves; cainban only validates the token.
 		GenerateSecret: jsii.Bool(false),
+		// Token lifetimes — see the SpaClient note above. 1h access tokens made
+		// the Kiro/kiro-cli loopback flow re-prompt hourly on a headless gateway
+		// (no browser to pop, no consent banner, grant goes stale). 24h access/ID
+		// + explicit 30d refresh stops the churn; the client still refreshes via
+		// the advertised token_endpoint (grant_types_supported includes
+		// refresh_token). Lifetime only — audiences/routes/trigger unchanged.
+		AccessTokenValidity:  awscdk.Duration_Hours(jsii.Number(24)),
+		IdTokenValidity:      awscdk.Duration_Hours(jsii.Number(24)),
+		RefreshTokenValidity: awscdk.Duration_Days(jsii.Number(30)),
 		OAuth: &awscognito.OAuthSettings{
 			Flows: &awscognito.OAuthFlows{
 				AuthorizationCodeGrant: jsii.Bool(true),
@@ -498,9 +517,16 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Handler:      jsii.String("bootstrap"),
 		MemorySize:   jsii.Number(256),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
-		// Frugality: cap concurrency on the hot MCP path so a runaway agent
-		// loop or traffic spike cannot scale out Lambda + on-demand DynamoDB
-		// cost unbounded. 10 is generous for a dev-scale shared board.
+		// Frugality AND abuse guard: cap concurrency on the hot MCP path so a
+		// runaway agent loop or traffic spike cannot scale out Lambda +
+		// on-demand DynamoDB cost unbounded. This cap is LOAD-BEARING now that
+		// the MCP data routes use HttpNoneAuthorizer and enforce auth in the
+		// Lambda (so the 401 can carry the RFC 9728 resource_metadata challenge):
+		// UNAUTHENTICATED requests now reach this function instead of being
+		// absorbed for free by the managed JWT authorizer, so an anonymous flood
+		// consumes invocations. 10 bounds that blast radius (cost cannot exceed
+		// 10 concurrent) while staying generous for a dev-scale shared board.
+		// Do NOT remove this cap when revisiting the authorizer model.
 		ReservedConcurrentExecutions: jsii.Number(10),
 		Environment: &map[string]*string{
 			"CAINBAN_BACKEND":    jsii.String("dynamodb"),
@@ -600,8 +626,15 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	)
 
 	mcpAPI := awsapigatewayv2.NewHttpApi(stack, jsii.String("McpHttpApi"), &awsapigatewayv2.HttpApiProps{
-		ApiName:           jsii.String("cainban-mcp"),
-		Description:       jsii.String("MCP Streamable-HTTP endpoint — HTTP API + managed Cognito JWT authorizer (Authorization: Bearer <jwt>, no SigV4)"),
+		ApiName:     jsii.String("cainban-mcp"),
+		Description: jsii.String("MCP Streamable-HTTP endpoint — HTTP API; auth enforced IN the Lambda so the 401 carries the RFC 9728 resource_metadata challenge (Authorization: Bearer <jwt>, no SigV4)"),
+		// DefaultAuthorizer stays as a FAIL-SAFE: any route added later without an
+		// explicit authorizer is JWT-protected by default rather than open. The
+		// MCP data routes below deliberately OVERRIDE it with HttpNoneAuthorizer
+		// and let the Lambda enforce auth, so that the Lambda (not the managed
+		// authorizer) produces the 401 — only the Lambda's challenge carries
+		// `resource_metadata`, which is what makes a spec-compliant client show
+		// an auth page. See the data-route comment below.
 		DefaultAuthorizer: mcpAuthorizer,
 		CorsPreflight: &awsapigatewayv2.CorsPreflightOptions{
 			AllowOrigins: jsii.Strings("*"),
@@ -616,31 +649,44 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	})
 
-	// Route every MCP request (root + any sub-path) to the MCP Lambda under the
-	// default JWT authorizer. The MCP client POSTs to the API root.
+	// Route every MCP request (root + any sub-path) to the MCP Lambda.
+	//
+	// These data routes use HttpNoneAuthorizer so the request reaches the Lambda,
+	// which enforces auth itself (HandlerWithAuthChallenge: signature-first JWT
+	// validation + repo-scoped tenant resolution — a missing/invalid/expired
+	// token is a 401, an ungranted repo a 403, before any store runs). We move
+	// enforcement OFF the managed JWT authorizer for one specific reason: a
+	// spec-compliant MCP client bootstraps OAuth from the 401's
+	// `WWW-Authenticate: Bearer resource_metadata="<url>"` challenge (RFC 9728 /
+	// MCP auth spec), and the managed authorizer emits only a BARE `Bearer` with
+	// no resource_metadata — so the client never discovers the authorization
+	// server and never shows an auth page. The Lambda's challenge DOES carry
+	// resource_metadata (CAINBAN_MCP_RESOURCE → the protected-resource doc URL),
+	// so letting the Lambda produce the 401 is what makes the auth page appear.
+	// HTTP APIs (apigatewayv2) cannot customize an authorizer's 401 headers
+	// (no REST-style Gateway Responses), so in-Lambda enforcement is the fix.
+	// The `verify-deploy.sh` smoke check asserts the 401 carries resource_metadata
+	// so this cannot silently regress.
 	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
 		Path:        jsii.String("/"),
 		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_ANY},
 		Integration: mcpIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
 	})
 	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
 		Path:        jsii.String("/{proxy+}"),
 		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_ANY},
 		Integration: mcpIntegration,
+		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
 	})
 
-	// CORS preflight exemption. The two routes above use HttpMethod_ANY, which
-	// also matches the browser's OPTIONS preflight — and because the API's
-	// DefaultAuthorizer is the JWT authorizer, that preflight (which carries NO
-	// Authorization header, as browsers never send one on preflight) is rejected
-	// 401 BEFORE the managed CORS layer can answer it. The browser then sees a
-	// non-2xx preflight and blocks the real POST ("preflight does not have HTTP
-	// ok status"). Declaring explicit OPTIONS routes with HttpNoneAuthorizer makes
-	// them more specific than the ANY route, so OPTIONS bypasses the authorizer
-	// and the managed CorsPreflight responds (204). This mirrors why the Connect
-	// API never hit this: its routes declare explicit GET/POST/DELETE methods, so
-	// OPTIONS never matched a route under its authorizer. The authed data methods
-	// (POST/GET on these paths) are unchanged and still require a valid JWT.
+	// CORS preflight. Explicit OPTIONS routes with HttpNoneAuthorizer so the
+	// managed CorsPreflight layer answers the browser's preflight (204) instead
+	// of any authorizer. The data routes above are already HttpNoneAuthorizer
+	// (auth is enforced in the Lambda), so these explicit OPTIONS routes keep the
+	// preflight behaviour unambiguous and independent of the API default. The
+	// authed data methods (POST/GET on these paths) still require a valid JWT —
+	// now enforced by the in-Lambda validator rather than the managed authorizer.
 	mcpAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
 		Path:        jsii.String("/"),
 		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_OPTIONS},

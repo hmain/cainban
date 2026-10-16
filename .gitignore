@@ -75,5 +75,7 @@ coverage.html
 /cainban-connect
 /cainban
 
-# RFC design docs (kept local, not committed)
+# RFC design docs (kept local, not committed) — all RFC files, any extension, any location
+rfc*.*
+**/rfc*.*
 docs/rfc*.md
