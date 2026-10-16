@@ -97,6 +97,20 @@ else
   bad "unauth POST tools/list -> $code (want 401; the data path must require a token)"
 fi
 
+# The 401 MUST carry the RFC 9728 discovery pointer, or a spec-compliant MCP
+# client cannot bootstrap OAuth and never shows an auth page. A managed JWT
+# authorizer emits a BARE `Bearer` (no resource_metadata); only the in-Lambda
+# challenge carries it. This assertion is the regression guard for that bug.
+wwwauth="$(curl -sS -D - -o /dev/null -X POST "${MCP_API%/}/" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' 2>/dev/null \
+  | grep -i '^www-authenticate:' || true)"
+if printf '%s' "$wwwauth" | grep -qi 'resource_metadata='; then
+  pass "401 carries WWW-Authenticate resource_metadata (MCP client can discover the auth server)"
+else
+  bad "401 WWW-Authenticate has no resource_metadata (got: ${wwwauth:-<none>}); MCP clients will NOT show an auth page"
+fi
+
 if [ -n "${CONNECT_API:-}" ] && [ "$CONNECT_API" != "None" ]; then
   code="$(http_code GET "${CONNECT_API%/}/connect/repos")"
   if [ "$code" = "401" ]; then

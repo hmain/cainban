@@ -89,6 +89,14 @@ connect:
 verify-deploy:
 	./infra/scripts/verify-deploy.sh
 
+# Self-service reset of the stale cainban OAuth grant kiro-cli caches under
+# ~/.aws/sso/cache/. Use when cainban tools 401 / show "Not verified" and no
+# consent banner fires. Removes ONLY cainban's grant (matched by issuer host),
+# then re-authorize from a fresh chat. Override env with CAINBAN_ISSUER_HOST=.
+.PHONY: reauth-cainban
+reauth-cainban:
+	./infra/scripts/reauth.sh
+
 # One canonical deploy flow: build every Lambda bundle, cdk deploy the stack,
 # then AUTOMATICALLY run verify-deploy as the final gate so a broken live edge
 # (e.g. a CORS preflight the authorizer 401s) can never ship unnoticed. Use this
@@ -153,5 +161,6 @@ help:
 	@echo "  docker-run   Run Docker container"
 	@echo "  coverage     Generate test coverage report"
 	@echo "  verify-deploy Smoke-check the live API edge (CORS preflight + auth gate)"
+	@echo "  reauth-cainban Reset the stale cainban OAuth grant (re-authorize from a fresh chat)"
 	@echo "  deploy       Build bundles, cdk deploy, then auto-run verify-deploy"
 	@echo "  help         Show this help message"

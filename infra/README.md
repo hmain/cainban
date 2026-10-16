@@ -170,6 +170,55 @@ can only narrow within the granted set, never escalate.
 replacing Cognito with an existing IdP is a change to those three env vars (and
 the CDK user-pool block), not a code change.
 
+### Token lifetimes
+
+The SPA and MCP-CLI Cognito app clients set explicit token validity:
+**access/ID tokens 24h, refresh tokens 30d** (`infra/stack.go`). Cognito's
+default is a **1-hour** access token, which made the Kiro / kiro-cli loopback
+flow re-prompt roughly hourly: the client caches the grant under
+`~/.aws/sso/cache/` with only a relative `expires_in` (no absolute expiry) and
+did not refresh, so the token went stale, the server answered `401`, and —
+because a grant still existed in cache — the client did not re-trigger consent.
+24h access tokens remove the day-to-day churn; the client still refreshes
+silently via the advertised `token_endpoint` (the RFC 8414 shim lists
+`refresh_token` in `grant_types_supported`). Changing validity affects **new**
+tokens only — re-mint existing grants (see "Re-authorizing" below) to pick up
+the longer lifetime.
+
+### Authorizing cainban from a headless gateway (first consent)
+
+On a headless remote gateway there is **no desktop browser to pop**, so the
+dashboard's "Apply & Restart" opens no window and the per-row "Not verified"
+badge is expected (the dashboard probes without a token and gets a `401`; it
+cannot tell "unauthorized" from "authorized via the CLI"). To authorize:
+
+1. In a **fresh chat**, call a cainban tool (e.g. "list the cainban tasks"). The
+   CLI hits the `401` and starts the OAuth flow.
+2. Complete the Entra/Hosted-UI sign-in via the consent link.
+3. The callback lands on the pinned `http://127.0.0.1:3334/oauth/callback`. A
+   browser **"connection refused" on that exact loopback URL is the SUCCESS
+   signal** — the callback listener runs on the gateway host, not your laptop;
+   the CLI has already captured the code.
+
+The grant then persists in the CLI's own store (`~/.aws/sso/cache/`) and is
+reused by every later session — you do not re-authorize per chat.
+
+### Re-authorizing cainban (stale OAuth grant)
+
+If cainban tools start returning `401` / "Not verified" and **no consent banner
+fires**, the cached grant has gone stale and the client will not re-prompt while
+a grant exists. Reset it with:
+
+```bash
+make reauth-cainban        # removes ONLY cainban's grant, by issuer host
+# other env: CAINBAN_ISSUER_HOST=<host> make reauth-cainban
+```
+
+Then start a fresh chat and call a cainban tool to re-authorize (per the
+headless flow above). The script never does a blanket wipe and never touches
+another server's grant. **Do not** hand-delete files in `~/.aws/sso/cache/` —
+use this target so the correct triple is matched.
+
 ### How grants reach the token: the pre-token-generation trigger
 
 The validator authorizes against a **top-level** `repos` claim (and optional
