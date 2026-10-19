@@ -505,10 +505,22 @@ function McpConfig() {
         </pre>
         <p className="hint">
           Then run <code>/mcp</code> in Claude Code and pick{" "}
-          <strong>cainban → Authenticate</strong>. If the browser callback fails
-          to load after you sign in, launch Claude Code with the pinned callback
-          port: <code>MCP_OAUTH_CALLBACK_PORT={MCP_OAUTH_CALLBACK_PORT} claude</code>.
+          <strong>cainban → Authenticate</strong>. A browser opens, you sign in,
+          and you&rsquo;re done — the server advertises its authorization endpoint
+          so the client discovers it automatically. If the callback page shows{" "}
+          <em>&ldquo;this site can&rsquo;t be reached&rdquo;</em> on a{" "}
+          <code>127.0.0.1</code> address after you sign in, that is{" "}
+          <strong>success</strong>, not a failure: the client has already captured
+          the code and the loopback page simply has nothing to render.
         </p>
+        <details className="manual-entry">
+          <summary>Browser didn&rsquo;t open, or callback port mismatch?</summary>
+          <p className="hint">
+            Rare, and only if your client picks a non-default callback port. Launch
+            Claude Code with the pinned port so the registered redirect matches:{" "}
+            <code>MCP_OAUTH_CALLBACK_PORT={MCP_OAUTH_CALLBACK_PORT} claude</code>.
+          </p>
+        </details>
 
         <details className="manual-entry">
           <summary>Config-file form (Kiro, VS Code, other clients)</summary>
@@ -739,8 +751,11 @@ function agentPrompt(
     `    "oauth": { "clientId": "${cid}", "redirectUri": "${redirectUri}" } }`,
     ``,
     `Then authenticate (the browser sign-in is the one step I have to do myself —`,
-    `pause and let me complete it), and note that a newly-added MCP server usually`,
-    `only loads in a NEW session, so verify in a fresh chat. Verify by calling`,
+    `pause and let me complete it). If the callback page shows "this site can't be`,
+    `reached" on a 127.0.0.1 address after sign-in, that is SUCCESS not failure —`,
+    `the client already captured the code; don't report it as an error. Note that a`,
+    `newly-added MCP server usually only loads in a NEW session, so verify in a`,
+    `fresh chat. Verify by calling`,
     `list_tasks for ${repo} — an empty board is success; a 403 means my account`,
     `isn't granted this repo yet, so tell me to connect it on the connect page.`,
     ``,
