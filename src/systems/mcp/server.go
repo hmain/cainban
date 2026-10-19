@@ -42,6 +42,16 @@ type Server struct {
 	// mcpServer is the underlying SDK server used by the stdio transport
 	// (Start). The HTTP transport builds its own per-request servers.
 	mcpServer *mcp.Server
+	// hub fans out task-activity events to WebSocket clients (Phase 4). It is
+	// always non-nil (created in NewStateless) so the broadcast sites need no
+	// nil check; it simply has no clients until a browser connects to
+	// /ws/{owner}/{repo}.
+	hub *Hub
+	// wsResolver, when set (SetWSResolver), enables the authenticated
+	// /ws/{owner}/{repo} real-time endpoint on the long-running HTTP server
+	// (ServeHTTP). It is nil on the unauthenticated loopback dev path, where
+	// there is no token to validate and the WS route is simply not mounted.
+	wsResolver *auth.Resolver
 }
 
 // New creates a new stateless cainban MCP server.
@@ -59,6 +69,7 @@ func NewStateless() *Server {
 	s := &Server{
 		boardSystem: board.New(),
 		schemaCache: mcp.NewSchemaCache(),
+		hub:         NewHub(),
 	}
 	s.mcpServer = s.newMCPServer()
 	return s
@@ -170,12 +181,121 @@ func (s *Server) HandlerWithAuthChallenge(resolver *auth.Resolver, resourceMetad
 	return AuthMiddlewareWithChallenge(resolver, resourceMetadataURL, s.Handler())
 }
 
+// SetWSResolver enables the authenticated real-time WebSocket endpoint on the
+// long-running HTTP server (ServeHTTP) by supplying the signature-first auth
+// resolver used to validate the token in each WS auth frame. Leave it unset for
+// the unauthenticated loopback dev server, which has no token to validate.
+func (s *Server) SetWSResolver(resolver *auth.Resolver) { s.wsResolver = resolver }
+
+// WithWebSocket returns an http.Handler that serves the real-time WebSocket
+// endpoint at /ws/{owner}/{repo} and delegates every other path to next. It is
+// the single seam that mounts the Phase 4 WS route in front of an existing
+// handler chain, so both the local long-running server (ServeHTTP) and a
+// WebSocket-capable deployment can expose it without the broadcast wiring
+// changing.
+//
+// The WS handler validates the bearer token (sent in the first frame) through
+// the SAME resolver the MCP path uses, so auth is one code path. next is the
+// fully-assembled MCP handler (public well-knowns + authed tool calls).
+//
+// NOTE: AWS API Gateway v2 HTTP APIs do not proxy raw WebSocket upgrades, so
+// the Lambda entrypoint does not mount this; it is for the long-running HTTP
+// server path (and a future ALB/WebSocket-API deployment). Mounting it is
+// harmless where upgrades are unsupported: a non-WS request to /ws/... simply
+// fails the handshake.
+func (s *Server) WithWebSocket(resolver *auth.Resolver, next http.Handler) http.Handler {
+	ws := s.hub.WebSocketHandler(resolver, s)
+	mux := http.NewServeMux()
+	mux.Handle("/ws/", ws)
+	mux.Handle("/", next)
+	return mux
+}
+
+// recordActivity appends the append-only audit event AND broadcasts it to any
+// WebSocket clients watching the request's repo. Both are best-effort: a record
+// error is swallowed (as the direct RecordActivity call was before Phase 4) and
+// the broadcast is a no-op when no client is connected or the request carries no
+// scoped repo. This is the single seam every mutating tool handler calls so the
+// audit log and the real-time push can never drift apart.
+//
+// The event timestamp is set here when the caller left it zero, so the frame
+// pushed to the browser carries the same time the audit row records.
+func (s *Server) recordActivity(ctx context.Context, ts store.TaskStore, ev task.ActivityEvent) {
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now().UTC()
+	}
+	_ = ts.RecordActivity(ev)
+	s.broadcastActivity(ctx, ev)
+}
+
+// broadcastActivity fans an activity event out to the WebSocket clients
+// watching the request's repo. It is best-effort observability: it never fails
+// a tool call and does nothing when the request carries no scoped repo (the
+// local CLI/stdio path) or when no client is connected. It is called at each
+// RecordActivity site so the browser sees the same mutation it just audited.
+func (s *Server) broadcastActivity(ctx context.Context, ev task.ActivityEvent) {
+	repo := repoFromCtx(ctx)
+	if repo == "" {
+		return
+	}
+	s.hub.Broadcast(repo, ev)
+}
+
+// wsSnapshot loads the current board snapshot for a freshly connected WebSocket
+// client. It satisfies snapshotProvider. The tenant is the already-authorized
+// tenant resolved from the WS auth frame, so the store opens under that
+// tenant's partition prefix (structural isolation, identical to the MCP path).
+// The cursor is the RFC3339 timestamp of the newest activity event, which the
+// client can use as the `since` for a delta poll if it ever falls back off the
+// socket.
+func (s *Server) wsSnapshot(ctx context.Context, tenant *auth.Tenant) ([]wsTask, string, error) {
+	ctx = withTenant(ctx, tenant)
+	taskSystem, closeFn, err := s.resolveTaskSystem(ctx, "")
+	if err != nil {
+		return nil, "", err
+	}
+	defer closeFn()
+
+	const boardID = 1
+	tasks, err := taskSystem.List(boardID)
+	if err != nil {
+		return nil, "", err
+	}
+	out := make([]wsTask, 0, len(tasks))
+	for _, t := range tasks {
+		if t == nil {
+			continue
+		}
+		out = append(out, wsTask{
+			BoardTaskID: t.BoardTaskID,
+			Title:       t.Title,
+			Status:      string(t.Status),
+			Priority:    t.Priority,
+			Description: t.Description,
+		})
+	}
+
+	// Cursor = newest event timestamp (best-effort). Activity is append-only
+	// and newest-first, so the first event is the latest.
+	cursor := ""
+	if events, aerr := taskSystem.ListActivity(boardID, 0, 1, time.Time{}); aerr == nil && len(events) > 0 {
+		cursor = events[0].Timestamp.Format(time.RFC3339)
+	}
+	return out, cursor, nil
+}
+
 // ServeHTTP serves the stateless Streamable HTTP transport on addr, bound to
 // loopback only. addr may be ":8080" or "127.0.0.1:8080"; a bare-port or
 // wildcard host is rewritten to 127.0.0.1 so the server never binds a public
 // interface (multi-user/public exposure is deferred to Phase 3).
 func (s *Server) ServeHTTP(addr string) error {
 	handler := s.Handler()
+	// Mount the real-time WebSocket route (/ws/{owner}/{repo}) when a resolver
+	// is configured (SetWSResolver). The dev loopback path is unauthenticated,
+	// so it has no resolver and serves only the plain MCP handler.
+	if s.wsResolver != nil {
+		handler = s.WithWebSocket(s.wsResolver, handler)
+	}
 
 	loopbackAddr, err := loopbackOnly(addr)
 	if err != nil {
@@ -710,7 +830,7 @@ func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest,
 	}
 
 	// Best-effort append-only audit: never fail the tool call on a record error.
-	_ = taskSystem.RecordActivity(task.ActivityEvent{
+	s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 		BoardID:     boardID,
 		BoardTaskID: createdTask.BoardTaskID,
 		Action:      task.ActivityCreated,
@@ -830,7 +950,7 @@ func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRe
 	}
 
 	// Best-effort append-only audit (success path only; t.Status is the old value).
-	_ = taskSystem.RecordActivity(task.ActivityEvent{
+	s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 		BoardID:     boardID,
 		BoardTaskID: args.ID,
 		Action:      task.ActivityStatusChanged,
@@ -949,7 +1069,7 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 	priorityName := task.GetPriorityName(priorityLevel)
 
 	// Best-effort append-only audit (success path only; t.Priority is the old value).
-	_ = taskSystem.RecordActivity(task.ActivityEvent{
+	s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 		BoardID:     boardID,
 		BoardTaskID: args.ID,
 		Action:      task.ActivityPriorityChanged,
@@ -992,7 +1112,7 @@ func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest,
 	}
 
 	// Best-effort append-only audit (success path only).
-	_ = taskSystem.RecordActivity(task.ActivityEvent{
+	s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 		BoardID:     boardID,
 		BoardTaskID: args.ID,
 		Action:      task.ActivityUpdated,
@@ -1337,7 +1457,7 @@ func (s *Server) handleDeleteTask(ctx context.Context, req *mcp.CallToolRequest,
 	}
 
 	// Best-effort append-only audit (success path only).
-	_ = taskSystem.RecordActivity(task.ActivityEvent{
+	s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 		BoardID:     boardID,
 		BoardTaskID: args.ID,
 		Action:      task.ActivityDeleted,
@@ -1371,7 +1491,7 @@ func (s *Server) handleRestoreTask(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	// Best-effort append-only audit (success path only).
-	_ = taskSystem.RecordActivity(task.ActivityEvent{
+	s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 		BoardID:     boardID,
 		BoardTaskID: args.ID,
 		Action:      task.ActivityRestored,
@@ -1454,7 +1574,7 @@ func (s *Server) handleLinkTasks(ctx context.Context, req *mcp.CallToolRequest, 
 
 	// Best-effort audit on both tasks.
 	for _, id := range []int{args.FromID, args.ToID} {
-		_ = taskSystem.RecordActivity(task.ActivityEvent{
+		s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 			BoardID:     boardID,
 			BoardTaskID: id,
 			Action:      task.ActivityLinked,
@@ -1498,7 +1618,7 @@ func (s *Server) handleUnlinkTasks(ctx context.Context, req *mcp.CallToolRequest
 	}
 
 	for _, id := range []int{args.FromID, args.ToID} {
-		_ = taskSystem.RecordActivity(task.ActivityEvent{
+		s.recordActivity(ctx, taskSystem, task.ActivityEvent{
 			BoardID:     boardID,
 			BoardTaskID: id,
 			Action:      task.ActivityUnlinked,
