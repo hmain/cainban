@@ -35,13 +35,28 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
 	"github.com/hmain/cainban/src/systems/mcp"
+	"github.com/hmain/cainban/src/systems/mcp/wsconn"
 )
+
+// envWebSocketAPIEndpoint is the API Gateway WebSocket API's per-stage callback
+// URL (e.g. https://<apiId>.execute-api.<region>.amazonaws.com/<stage>). The
+// CDK stack sets it from the WebSocket stage URL. When present, this Lambda
+// installs the API-Gateway-WebSocket broadcaster so a task mutation pushes a
+// real-time frame to every connected browser; when absent (e.g. a deployment
+// without the WebSocket API), the server keeps its in-process hub default and
+// simply has no external fan-out (the serverless MCP path has no persistent WS
+// server, so no client is connected to the hub — the push is a no-op, exactly
+// as before).
+const envWebSocketAPIEndpoint = "CAINBAN_WS_API_ENDPOINT"
 
 func main() {
 	// Force the DynamoDB backend: this binary has no SQLite (built CGO-off) and
@@ -57,6 +72,22 @@ func main() {
 	}
 
 	server := mcp.NewStateless()
+
+	// Install the API Gateway WebSocket broadcaster when the WebSocket API
+	// endpoint is configured. This is the serverless replacement for the
+	// in-process hub's fan-out: on a mutation, broadcastActivity routes through
+	// the broadcaster, which lists the repo's persisted connections and posts
+	// the activity frame to each via the API Gateway Management API. A
+	// misconfigured AWS config is fatal at cold start (a half-wired broadcaster
+	// that silently drops every push would be worse than failing loudly).
+	if endpoint := strings.TrimSpace(os.Getenv(envWebSocketAPIEndpoint)); endpoint != "" {
+		cfg, cfgErr := awsconfig.LoadDefaultConfig(context.Background())
+		if cfgErr != nil {
+			log.Fatalf("cainban-lambda: load AWS config for WebSocket broadcaster: %v", cfgErr)
+		}
+		server.SetBroadcaster(wsconn.New(cfg, endpoint))
+		log.Printf("cainban-lambda: API Gateway WebSocket broadcaster enabled (%s)", endpoint)
+	}
 
 	// Top-level handler: the RFC 9728 protected-resource metadata document is
 	// served PUBLICLY at /.well-known/oauth-protected-resource (MCP OAuth
