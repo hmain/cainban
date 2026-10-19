@@ -265,7 +265,7 @@ func (f *OAuthFlow) handleCallback(w http.ResponseWriter, r *http.Request) {
 func (f *OAuthFlow) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 func (f *OAuthFlow) exchangeCode(ctx context.Context, code string) (*OAuthFlowResult, error) {
@@ -287,7 +287,7 @@ func (f *OAuthFlow) exchangeCode(ctx context.Context, code string) (*OAuthFlowRe
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024))
 	if err != nil {

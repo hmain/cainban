@@ -149,7 +149,7 @@ func WriteMCPConfig(client, serverName string, serverConfig map[string]any) erro
 	}
 
 	if err := os.Rename(tmpPath, configPath); err != nil {
-		os.Remove(tmpPath) // Clean up
+		_ = os.Remove(tmpPath) // Clean up, ignore error
 		return fmt.Errorf("failed to save config: %w", err)
 	}
 
