@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { listActivity, type ActivityEvent } from "../mcpApi";
-import { displayActor } from "../board/actor";
+import { classifyActor, displayActor } from "../board/actor";
 
 // ActivityFeed shows the append-only "who changed what" audit feed for a repo's
 // board, read from the MCP `list_activity` tool. Read-only. The repo now comes
 // from the route (/r/:owner/:repo/activity) rather than a selectedRepo prop.
+//
+// Phase 7 enhancements:
+// - Agent vs human visual distinction (🤖 / 👤 icons)
+// - Action-specific styling
+// - Filterable by actor type
 export function ActivityFeed({ repo }: { repo: string }) {
   const [events, setEvents] = useState<ActivityEvent[]>([]);
   const [state, setState] = useState<"idle" | "loading" | "ready" | "error">(
@@ -12,6 +17,7 @@ export function ActivityFeed({ repo }: { repo: string }) {
   );
   const [error, setError] = useState("");
   const [empty, setEmpty] = useState(false);
+  const [filter, setFilter] = useState<"all" | "agent" | "human">("all");
 
   const load = useCallback(async () => {
     if (!repo) return;
@@ -32,6 +38,17 @@ export function ActivityFeed({ repo }: { repo: string }) {
     void load();
   }, [load]);
 
+  // Filter events by actor type
+  const filteredEvents = events.filter((ev) => {
+    if (filter === "all") return true;
+    const actorType = classifyActor(ev.Actor);
+    return actorType === filter;
+  });
+
+  // Count by actor type
+  const agentCount = events.filter((ev) => classifyActor(ev.Actor) === "agent").length;
+  const humanCount = events.filter((ev) => classifyActor(ev.Actor) === "human").length;
+
   return (
     <section className="card" aria-labelledby="activity-heading">
       <div className="account-row">
@@ -45,9 +62,34 @@ export function ActivityFeed({ repo }: { repo: string }) {
         </button>
       </div>
       <p className="hint">
-        Who changed what on <code>{repo}</code>’s board, newest first. This is a
-        read-only audit feed — it never changes a task.
+        Who changed what on <code>{repo}</code>'s board, newest first.
       </p>
+
+      {/* Actor type filter */}
+      {state === "ready" && !empty && (
+        <div className="activity-filter">
+          <button
+            className={`activity-filter-btn ${filter === "all" ? "active" : ""}`}
+            onClick={() => setFilter("all")}
+          >
+            All ({events.length})
+          </button>
+          <button
+            className={`activity-filter-btn ${filter === "agent" ? "active" : ""}`}
+            onClick={() => setFilter("agent")}
+            disabled={agentCount === 0}
+          >
+            🤖 Agents ({agentCount})
+          </button>
+          <button
+            className={`activity-filter-btn ${filter === "human" ? "active" : ""}`}
+            onClick={() => setFilter("human")}
+            disabled={humanCount === 0}
+          >
+            👤 Humans ({humanCount})
+          </button>
+        </div>
+      )}
 
       {state === "loading" && <p className="hint">Loading activity…</p>}
       {state === "error" && (
@@ -61,27 +103,44 @@ export function ActivityFeed({ repo }: { repo: string }) {
           or moved on this board.
         </p>
       )}
-      {state === "ready" && !empty && (
+      {state === "ready" && !empty && filteredEvents.length === 0 && (
+        <p className="hint">
+          No {filter} activity yet.
+        </p>
+      )}
+      {state === "ready" && !empty && filteredEvents.length > 0 && (
         <ul className="activity-list">
-          {events.map((ev, i) => (
-            <li
+          {filteredEvents.map((ev, i) => (
+            <ActivityItem
               key={`${ev.Timestamp}-${ev.BoardTaskID}-${i}`}
-              className="activity-item"
-            >
-              <span className={`activity-badge activity-${ev.Action}`}>
-                {actionLabel(ev.Action)}
-              </span>
-              <span className="activity-body">
-                <code>#{ev.BoardTaskID}</code> {ev.Detail}
-              </span>
-              <span className="activity-meta">
-                {displayActor(ev.Actor)} · {formatWhen(ev.Timestamp)}
-              </span>
-            </li>
+              event={ev}
+            />
           ))}
         </ul>
       )}
     </section>
+  );
+}
+
+function ActivityItem({ event }: { event: ActivityEvent }) {
+  const actorType = classifyActor(event.Actor);
+  const isAgent = actorType === "agent";
+  
+  return (
+    <li className={`activity-item ${isAgent ? "agent" : "human"}`}>
+      <span className="activity-actor-icon" aria-hidden="true">
+        {isAgent ? "🤖" : "👤"}
+      </span>
+      <span className={`activity-badge activity-${event.Action}`}>
+        {actionLabel(event.Action)}
+      </span>
+      <span className="activity-body">
+        <code>#{event.BoardTaskID}</code> {event.Detail}
+      </span>
+      <span className="activity-meta">
+        {displayActor(event.Actor)} · {formatWhen(event.Timestamp)}
+      </span>
+    </li>
   );
 }
 
@@ -96,6 +155,14 @@ export function actionLabel(action: string): string {
       return "priority";
     case "updated":
       return "edited";
+    case "deleted":
+      return "deleted";
+    case "restored":
+      return "restored";
+    case "linked":
+      return "linked";
+    case "unlinked":
+      return "unlinked";
     default:
       return action || "changed";
   }
