@@ -117,6 +117,16 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
 	})
 
+	// Badge URL signing secret (HMAC-SHA256). Created out of band:
+	//   aws secretsmanager create-secret --name cainban/badge-secret --secret-string "$(openssl rand -hex 32)"
+	// RETAIN so cdk destroy doesn't delete it.
+	badgeSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("BadgeSecret"), jsii.String("cainban/badge-secret"))
+
+	// Widget token signing secret (HMAC-SHA256). Created out of band:
+	//   aws secretsmanager create-secret --name cainban/widget-secret --secret-string "$(openssl rand -hex 32)"
+	// RETAIN so cdk destroy doesn't delete it.
+	widgetSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("WidgetSecret"), jsii.String("cainban/widget-secret"))
+
 	// --- Cognito user pool (identity provider) ---------------------------
 	//
 	// A self-contained Cognito user pool issues the JWTs the Lambda validates
@@ -542,6 +552,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			// from this secret at runtime via src/systems/secrets — never from
 			// code or env. Wired now so P4.3 needs no infra change to read it.
 			"CAINBAN_GITHUB_APP_SECRET": githubAppSecret.SecretName(),
+			// Badge and widget signing secrets (HMAC-SHA256). Lambda reads them
+			// from Secrets Manager at startup; the name is passed via env var.
+			"CAINBAN_BADGE_SECRET_NAME":  badgeSecret.SecretName(),
+			"CAINBAN_WIDGET_SECRET_NAME": widgetSecret.SecretName(),
 		},
 		// Build the Go binary into the asset directory. The command runs in a
 		// local shell (no Docker) via TryBundle returning false is not used;
@@ -577,6 +591,10 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// credentials without an infra change; the pre-token trigger is deliberately
 	// NOT granted this (it never touches GitHub).
 	githubAppSecret.GrantRead(fn.Role(), nil)
+
+	// Grant read access to badge and widget signing secrets.
+	badgeSecret.GrantRead(fn.Role(), nil)
+	widgetSecret.GrantRead(fn.Role(), nil)
 
 	// --- API Gateway v2 HTTP API + Cognito JWT authorizer (MCP) ----------
 	//

@@ -3,21 +3,21 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/hmain/cainban/src/systems/auth"
+	"github.com/hmain/cainban/src/systems/secrets"
 	"github.com/hmain/cainban/src/systems/store"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// widgetSecret reads the HMAC signing secret for widget tokens from the
-// environment. An empty secret disables the widget-token feature: no token can
-// be minted (create_widget_token errors) and no widget token is accepted at the
-// auth edge.
+// widgetSecret reads the HMAC signing secret for widget tokens from Secrets
+// Manager (via CAINBAN_WIDGET_SECRET_NAME). An empty secret disables the
+// widget-token feature: no token can be minted (create_widget_token errors)
+// and no widget token is accepted at the auth edge.
 func widgetSecret() []byte {
-	return []byte(strings.TrimSpace(os.Getenv(EnvWidgetSecret)))
+	return []byte(strings.TrimSpace(secrets.GetStringSecret(context.Background(), "CAINBAN_WIDGET_SECRET_NAME")))
 }
 
 // resolveWidgetTokenStore opens the per-request widget-token metadata store for
