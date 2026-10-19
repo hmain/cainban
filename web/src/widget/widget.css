@@ -1,0 +1,243 @@
+/*
+ * Self-contained styles for the cainban embeddable widget.
+ *
+ * These rules are injected into a Shadow DOM root (see widget.ts), so every
+ * selector here is scoped to that shadow tree and CANNOT leak into — or be
+ * overridden by — the host page's global CSS. The `:host` selector targets the
+ * widget's custom host element; all other selectors match only nodes inside the
+ * shadow root. We still prefix classes with `cb-` as a readability aid.
+ *
+ * Theme: the host sets `data-theme="light"|"dark"` on the host element. Light is
+ * the default palette; the `:host([data-theme="dark"])` block overrides it. When
+ * no data-theme is given we follow the host OS via prefers-color-scheme.
+ */
+
+:host {
+  /* Reset inherited host-page typography so the widget renders consistently. */
+  all: initial;
+  display: block;
+  box-sizing: border-box;
+
+  /* Light palette (default). */
+  --cb-bg: #ffffff;
+  --cb-fg: #1b1f24;
+  --cb-muted: #6b7280;
+  --cb-border: #e5e7eb;
+  --cb-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+
+  --cb-todo: #6b7280;
+  --cb-todo-bg: #f3f4f6;
+  --cb-doing: #2563eb;
+  --cb-doing-bg: #dbeafe;
+  --cb-done: #16a34a;
+  --cb-done-bg: #dcfce7;
+
+  --cb-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial,
+    sans-serif;
+}
+
+:host([data-theme="dark"]) {
+  --cb-bg: #161b22;
+  --cb-fg: #e6edf3;
+  --cb-muted: #8b949e;
+  --cb-border: #30363d;
+  --cb-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+
+  --cb-todo: #9aa4b2;
+  --cb-todo-bg: #21262d;
+  --cb-doing: #58a6ff;
+  --cb-doing-bg: #0d2847;
+  --cb-done: #3fb950;
+  --cb-done-bg: #0f2e18;
+}
+
+/* Follow the OS only when the embedder did NOT pin a theme. */
+@media (prefers-color-scheme: dark) {
+  :host(:not([data-theme])) {
+    --cb-bg: #161b22;
+    --cb-fg: #e6edf3;
+    --cb-muted: #8b949e;
+    --cb-border: #30363d;
+    --cb-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+
+    --cb-todo: #9aa4b2;
+    --cb-todo-bg: #21262d;
+    --cb-doing: #58a6ff;
+    --cb-doing-bg: #0d2847;
+    --cb-done: #3fb950;
+    --cb-done-bg: #0f2e18;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.cb-card {
+  font-family: var(--cb-font);
+  background: var(--cb-bg);
+  color: var(--cb-fg);
+  border: 1px solid var(--cb-border);
+  border-radius: 10px;
+  box-shadow: var(--cb-shadow);
+  padding: 14px 16px;
+  width: 100%;
+  max-width: 420px;
+  min-width: 200px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+
+.cb-card:hover {
+  border-color: var(--cb-doing);
+}
+
+.cb-card:focus-visible {
+  outline: 2px solid var(--cb-doing);
+  outline-offset: 2px;
+}
+
+.cb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.cb-title {
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cb-brand {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cb-muted);
+  flex: none;
+  letter-spacing: 0.02em;
+}
+
+/* Count row: three status pills. Wraps on very narrow hosts. */
+.cb-counts {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cb-pill {
+  flex: 1 1 0;
+  min-width: 64px;
+  border-radius: 8px;
+  padding: 8px 10px;
+  text-align: center;
+}
+
+.cb-pill--todo {
+  background: var(--cb-todo-bg);
+}
+.cb-pill--doing {
+  background: var(--cb-doing-bg);
+}
+.cb-pill--done {
+  background: var(--cb-done-bg);
+}
+
+.cb-num {
+  font-size: 22px;
+  font-weight: 700;
+  display: block;
+  line-height: 1.1;
+}
+
+.cb-pill--todo .cb-num {
+  color: var(--cb-todo);
+}
+.cb-pill--doing .cb-num {
+  color: var(--cb-doing);
+}
+.cb-pill--done .cb-num {
+  color: var(--cb-done);
+}
+
+.cb-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--cb-muted);
+  margin-top: 2px;
+  display: block;
+}
+
+/* Optional mini board: a thin proportional bar of the three statuses. */
+.cb-bar {
+  display: flex;
+  height: 6px;
+  margin-top: 12px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--cb-border);
+}
+
+.cb-bar-seg {
+  height: 100%;
+}
+.cb-bar-seg--todo {
+  background: var(--cb-todo);
+}
+.cb-bar-seg--doing {
+  background: var(--cb-doing);
+}
+.cb-bar-seg--done {
+  background: var(--cb-done);
+}
+
+.cb-foot {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--cb-muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.cb-open {
+  color: var(--cb-doing);
+  font-weight: 600;
+}
+
+.cb-state {
+  font-size: 12px;
+  color: var(--cb-muted);
+  text-align: center;
+  padding: 6px 0;
+}
+
+.cb-state--error {
+  color: #dc2626;
+}
+
+/* Minimal spinner for the loading state. */
+.cb-spin {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--cb-border);
+  border-top-color: var(--cb-doing);
+  border-radius: 50%;
+  display: inline-block;
+  vertical-align: -2px;
+  margin-right: 6px;
+  animation: cb-spin 0.7s linear infinite;
+}
+
+@keyframes cb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
