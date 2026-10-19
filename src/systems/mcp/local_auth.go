@@ -99,16 +99,15 @@ func localTenantForStdio() (*auth.Tenant, error) {
 	return localTenantFromEnv()
 }
 
-
 // =============================================================================
 // Local Token (Mode 1): HMAC-SHA256 signed JWT
 // =============================================================================
 
 // localTokenClaims is the payload of a local token.
 type localTokenClaims struct {
-	Subject string   `json:"sub"`          // identity (email or username)
-	Repos   []string `json:"repos"`        // authorized repos ["owner/repo", ...]
-	Expiry  int64    `json:"exp"`          // Unix timestamp
+	Subject string   `json:"sub"`           // identity (email or username)
+	Repos   []string `json:"repos"`         // authorized repos ["owner/repo", ...]
+	Expiry  int64    `json:"exp"`           // Unix timestamp
 	Issuer  string   `json:"iss,omitempty"` // always "cainban-local"
 }
 

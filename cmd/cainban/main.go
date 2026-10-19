@@ -1012,7 +1012,6 @@ func handleConnectAgent(args []string) {
 	}
 }
 
-
 // handleToken implements `cainban token`: mints a local API token for stdio MCP.
 // The token is an HMAC-SHA256 signed JWT containing repos and identity claims.
 //

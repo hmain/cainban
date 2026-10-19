@@ -182,7 +182,6 @@ func TestLocalTenantIntegration(t *testing.T) {
 	// without error. The real test is that we got here without auth errors.
 }
 
-
 // =============================================================================
 // Phase 2: CAINBAN_TOKEN tests
 // =============================================================================
