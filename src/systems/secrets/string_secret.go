@@ -22,9 +22,9 @@ var (
 // with "_NAME" suffix is set, and if so, loads the secret from Secrets Manager.
 // Otherwise it falls back to the direct env var without "_NAME" suffix (for local
 // development and testing). E.g. for nameEnvVar="CAINBAN_BADGE_SECRET_NAME":
-//   1. If CAINBAN_BADGE_SECRET_NAME is set → load from Secrets Manager
-//   2. Else if CAINBAN_BADGE_SECRET is set → use that value directly
-//   3. Else → return empty (feature disabled)
+//  1. If CAINBAN_BADGE_SECRET_NAME is set → load from Secrets Manager
+//  2. Else if CAINBAN_BADGE_SECRET is set → use that value directly
+//  3. Else → return empty (feature disabled)
 func GetStringSecret(ctx context.Context, nameEnvVar string) string {
 	secretName := strings.TrimSpace(os.Getenv(nameEnvVar))
 
