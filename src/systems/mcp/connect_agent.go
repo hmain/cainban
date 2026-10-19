@@ -122,8 +122,10 @@ func (f *FetchedClientConfig) RenderConfig(format string) (string, error) {
 			return "", fmt.Errorf("no claude command available (server did not advertise a client id)")
 		}
 		return f.Raw.Configs.ClaudeCodeCommand, nil
+	case "stdio", "local":
+		return marshalIndent(f.Raw.Configs.Stdio)
 	default:
-		return "", fmt.Errorf("unknown format %q (want: json, kirocrew, kirocrew-exfil-gate, kirocrew-dashboard, claude, kiro-ide, cursor, vscode)", format)
+		return "", fmt.Errorf("unknown format %q (want: json, kirocrew, kirocrew-exfil-gate, kirocrew-dashboard, claude, kiro-ide, cursor, vscode, stdio)", format)
 	}
 }
 

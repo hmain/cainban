@@ -109,3 +109,69 @@ func TestRenderConfig_Formats(t *testing.T) {
 		t.Errorf("expected an error for an unknown format")
 	}
 }
+
+// TestRenderConfig_StdioFormat proves the stdio format emits a valid MCP client
+// config for local stdio transport with env-based credentials.
+func TestRenderConfig_StdioFormat(t *testing.T) {
+	srv := newClientConfigServer(t)
+	cfg, err := DiscoverClientConfig(context.Background(), srv.URL)
+	if err != nil {
+		t.Fatalf("discover: %v", err)
+	}
+
+	out, err := cfg.RenderConfig("stdio")
+	if err != nil {
+		t.Fatalf("RenderConfig(stdio): %v", err)
+	}
+
+	// Must be valid JSON
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(out), &doc); err != nil {
+		t.Fatalf("RenderConfig(stdio) is not valid JSON: %v", err)
+	}
+
+	// Must have mcpServers.cainban
+	servers, ok := doc["mcpServers"].(map[string]any)
+	if !ok {
+		t.Fatal("missing mcpServers key")
+	}
+	cainban, ok := servers["cainban"].(map[string]any)
+	if !ok {
+		t.Fatal("missing mcpServers.cainban")
+	}
+
+	// stdio format must have command, args, and env (NOT url or oauth)
+	if _, hasCommand := cainban["command"]; !hasCommand {
+		t.Error("stdio format missing 'command' field")
+	}
+	if _, hasArgs := cainban["args"]; !hasArgs {
+		t.Error("stdio format missing 'args' field")
+	}
+	if _, hasEnv := cainban["env"]; !hasEnv {
+		t.Error("stdio format missing 'env' field")
+	}
+	if _, hasURL := cainban["url"]; hasURL {
+		t.Error("stdio format should NOT have 'url' field (that's HTTP)")
+	}
+	if _, hasOAuth := cainban["oauth"]; hasOAuth {
+		t.Error("stdio format should NOT have 'oauth' field")
+	}
+
+	// args should include "mcp"
+	args, ok := cainban["args"].([]any)
+	if !ok || len(args) == 0 {
+		t.Fatal("args should be a non-empty array")
+	}
+	if args[0] != "mcp" {
+		t.Errorf("args[0] = %v, want 'mcp'", args[0])
+	}
+
+	// env should have CAINBAN_REPO placeholder
+	env, ok := cainban["env"].(map[string]any)
+	if !ok {
+		t.Fatal("env should be an object")
+	}
+	if _, hasRepo := env["CAINBAN_REPO"]; !hasRepo {
+		t.Error("env missing CAINBAN_REPO")
+	}
+}
