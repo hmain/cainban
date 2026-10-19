@@ -17,6 +17,9 @@ frontend:
     build:
       commands:
         - npm run build
+        # Embeddable widget IIFE bundle -> web/dist/widget/cainban-widget.js,
+        # published alongside the SPA so external sites can <script src> it.
+        - npm run build:widget
   artifacts:
     baseDirectory: web/dist
     files:

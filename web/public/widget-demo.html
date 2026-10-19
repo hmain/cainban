@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>cainban widget — embed demo</title>
+    <style>
+      /* Deliberately opinionated host-page CSS to prove the widget's Shadow DOM
+         isolates it: these rules must NOT bleed into the widget. */
+      * {
+        font-family: "Comic Sans MS", cursive;
+      }
+      body {
+        margin: 0;
+        padding: 32px;
+        background: #fafafa;
+        color: #222;
+        line-height: 1.6;
+      }
+      h1 {
+        color: hotpink;
+      }
+      h2 {
+        font-size: 15px;
+        text-transform: uppercase;
+        color: #888;
+        margin: 32px 0 8px;
+      }
+      /* A hostile global div rule — the widget must ignore it. */
+      div {
+        letter-spacing: 3px;
+      }
+      .grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 24px;
+        align-items: start;
+      }
+      code {
+        background: #eee;
+        padding: 1px 5px;
+        border-radius: 4px;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        letter-spacing: 0;
+      }
+      pre {
+        background: #1b1f24;
+        color: #e6edf3;
+        padding: 14px 16px;
+        border-radius: 8px;
+        overflow: auto;
+        letter-spacing: 0;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 13px;
+      }
+      .dark-stage {
+        background: #0d1117;
+        padding: 24px;
+        border-radius: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>cainban embeddable widget</h1>
+    <p>
+      One <code>&lt;script&gt;</code> tag plus a
+      <code>&lt;div data-cainban-widget&gt;</code> renders a live board-status
+      card on any site. Each widget mounts into its own Shadow DOM, so the host
+      page's Comic Sans and letter-spacing above never touch it.
+    </p>
+
+    <h2>Minimal usage</h2>
+    <pre>&lt;script src="cainban-widget.js"&gt;&lt;/script&gt;
+&lt;div data-cainban-widget data-repo="owner/repo"&gt;&lt;/div&gt;</pre>
+
+    <h2>Live examples</h2>
+    <div class="grid">
+      <!-- Follows the OS theme; points data-api at a local demo by default so
+           the page renders even without a backend (shows the error state, which
+           is itself part of the demo). Replace data-api/data-repo for real use. -->
+      <div
+        data-cainban-widget
+        data-repo="hmain/cainban"
+        data-board-url="https://cainban.com"
+      ></div>
+
+      <!-- Forced light theme, polling every 15s, mini-bar off. -->
+      <div
+        data-cainban-widget
+        data-repo="hmain/cainban"
+        data-theme="light"
+        data-poll="15"
+        data-bar="false"
+      ></div>
+
+      <!-- Forced dark theme on a dark stage. -->
+      <div class="dark-stage">
+        <div
+          data-cainban-widget
+          data-repo="hmain/cainban"
+          data-theme="dark"
+        ></div>
+      </div>
+    </div>
+
+    <h2>All attributes</h2>
+    <pre>data-repo        owner/repo (required)
+data-api         MCP endpoint URL (optional; defaults to &lt;board-url&gt;/mcp)
+data-token       read-only bearer token (optional; for authed servers)
+data-board-url   full board URL opened on click (optional)
+data-theme       "light" | "dark" (optional; omit to follow the OS)
+data-poll        refresh interval in seconds (optional; 0 disables; default 30)
+data-bar         "true" | "false" mini-board bar (optional; default true)</pre>
+
+    <p>
+      Inject widgets after load? Call
+      <code>window.cainbanWidget.mount()</code> to upgrade any new
+      <code>[data-cainban-widget]</code> elements.
+    </p>
+
+    <!-- Deployed layout: this page is published at the site root
+         (/widget-demo.html) and the bundle at /widget/cainban-widget.js, so the
+         relative path below resolves in production and in `vite preview`. For a
+         quick local check, run `npm run build && npm run build:widget` then
+         serve web/dist (e.g. `python3 -m http.server --bind 127.0.0.1 -d dist`)
+         and open /widget-demo.html. -->
+    <script src="widget/cainban-widget.js"></script>
+  </body>
+</html>

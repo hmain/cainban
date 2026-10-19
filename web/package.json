@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:widget": "vite build --config vite.config.widget.ts",
     "preview": "vite preview",
     "typecheck": "tsc -b --noEmit"
   },
