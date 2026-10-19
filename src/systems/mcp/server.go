@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -52,7 +53,33 @@ type Server struct {
 	// (ServeHTTP). It is nil on the unauthenticated loopback dev path, where
 	// there is no token to validate and the WS route is simply not mounted.
 	wsResolver *auth.Resolver
+	// broadcaster, when set (SetBroadcaster), fans activity events out over an
+	// EXTERNAL transport instead of (well, in addition to) the in-process hub.
+	// It is how the MCP Lambda — which has no persistent WebSocket server —
+	// pushes updates to API Gateway WebSocket connections via the API Gateway
+	// Management API. It is nil on the long-running-server path, where the
+	// in-process hub does the fan-out. See SetBroadcaster.
+	broadcaster ActivityBroadcaster
 }
+
+// ActivityBroadcaster fans a single activity event out to the real-time clients
+// watching a repo over whatever transport the deployment uses. The in-process
+// hub is the default (long-running server); the MCP Lambda supplies an
+// API-Gateway-Management-API implementation (src/systems/mcp/wsconn) so a
+// serverless deployment pushes the same frames. It is best-effort observability:
+// an error is logged by the broadcaster, never surfaced to the tool call.
+type ActivityBroadcaster interface {
+	// Broadcast delivers one activity event to the connections watching repo.
+	// `event` is the serialized wire activity (activityToWS output); the
+	// implementation marshals the standard { "type":"event", "event":... } frame.
+	Broadcast(ctx context.Context, repo string, event interface{}) (int, error)
+}
+
+// SetBroadcaster installs an external activity broadcaster (e.g. the API Gateway
+// WebSocket broadcaster on Lambda). When set, broadcastActivity routes through
+// it; when nil, the in-process hub is used. Safe to call once at server
+// construction before any request is served.
+func (s *Server) SetBroadcaster(b ActivityBroadcaster) { s.broadcaster = b }
 
 // New creates a new stateless cainban MCP server.
 //
@@ -236,6 +263,16 @@ func (s *Server) recordActivity(ctx context.Context, ts store.TaskStore, ev task
 func (s *Server) broadcastActivity(ctx context.Context, ev task.ActivityEvent) {
 	repo := repoFromCtx(ctx)
 	if repo == "" {
+		return
+	}
+	// On a serverless deployment the external broadcaster (API Gateway
+	// WebSocket) owns the fan-out; on the long-running server the in-process hub
+	// does. They are mutually exclusive by deployment, so prefer the external
+	// one when installed and fall back to the hub otherwise.
+	if s.broadcaster != nil {
+		if _, err := s.broadcaster.Broadcast(ctx, repo, activityToWS(ev)); err != nil {
+			log.Printf("cainban: activity broadcast for %s: %v", repo, err)
+		}
 		return
 	}
 	s.hub.Broadcast(repo, ev)
