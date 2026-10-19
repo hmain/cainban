@@ -79,8 +79,28 @@ func (s *Server) newMCPServer() *mcp.Server {
 }
 
 // Start starts the MCP server using the stdio transport (the default mode).
+//
+// For local/headless deployments (the MCP spec's recommended stdio path), this
+// method reads credentials from the environment and injects a tenant into the
+// context if configured. See local_auth.go for the credential model.
+//
+// When CAINBAN_REPO is set, every tool call runs with that repo's tenant,
+// enabling repo-scoped operations without browser OAuth. When no local
+// credential is set, the server runs in single-tenant mode (existing behavior).
 func (s *Server) Start() error {
-	return s.mcpServer.Run(context.Background(), &mcp.StdioTransport{})
+	ctx := context.Background()
+
+	// Read local credentials from env (per MCP spec: stdio servers should
+	// retrieve credentials from the environment, not use OAuth).
+	tenant, err := localTenantForStdio()
+	if err != nil {
+		return fmt.Errorf("local auth: %w", err)
+	}
+	if tenant != nil {
+		ctx = withTenant(ctx, tenant)
+	}
+
+	return s.mcpServer.Run(ctx, &mcp.StdioTransport{})
 }
 
 // getServer returns a per-request *mcp.Server for the stateless HTTP handler.

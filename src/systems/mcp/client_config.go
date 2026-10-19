@@ -55,6 +55,19 @@ type ClientConfigConfig struct {
 	HostedUIDomain string
 }
 
+// stdioServerEntry is the shape of a stdio MCP server entry for local agents.
+// Unlike HTTP entries, it has command/args/env instead of url/oauth.
+type stdioServerEntry struct {
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+}
+
+// stdioServersDoc wraps a stdio server map.
+type stdioServersDoc struct {
+	MCPServers map[string]stdioServerEntry `json:"mcpServers"`
+}
+
 // mcpServerEntry is the shape of a single MCP server entry both Kiro Crew's
 // on-disk mcp.json and the Kiro/Cursor/VS Code config files use. Field order
 // mirrors what the setup guide documents.
@@ -125,6 +138,10 @@ type clientConfigs struct {
 	VSCode  mcpServersDoc `json:"vscode"`
 	// ClaudeCodeCommand is the one-line `claude mcp add` command.
 	ClaudeCodeCommand string `json:"claude_code_command"`
+	// Stdio is the local stdio transport config with env-based credentials.
+	// Per MCP spec: "STDIO transport SHOULD NOT follow [OAuth] and instead
+	// retrieve credentials from the environment."
+	Stdio stdioServersDoc `json:"stdio"`
 }
 
 // NewClientConfigHandler returns an http.Handler serving the MCP client
@@ -210,6 +227,22 @@ func buildClientConfigDoc(cfg ClientConfigConfig) clientConfigDoc {
 		claudeCmd = "claude mcp add --transport http --client-id " + clientID + " cainban " + mcpURL
 	}
 
+	// Stdio config for local agents (no OAuth, env-based credentials).
+	// The command placeholder "cainban" assumes it's in PATH; users can
+	// replace with the full path to their cainban binary.
+	stdioDoc := stdioServersDoc{
+		MCPServers: map[string]stdioServerEntry{
+			"cainban": {
+				Command: "cainban",
+				Args:    []string{"mcp"},
+				Env: map[string]string{
+					"CAINBAN_REPO":  "${CAINBAN_REPO}",
+					"CAINBAN_ACTOR": "${CAINBAN_ACTOR}",
+				},
+			},
+		},
+	}
+
 	return clientConfigDoc{
 		MCPURL:                mcpURL,
 		ClientID:              clientID,
@@ -224,6 +257,7 @@ func buildClientConfigDoc(cfg ClientConfigConfig) clientConfigDoc {
 			Cursor:            fileDoc(),
 			VSCode:            fileDoc(),
 			ClaudeCodeCommand: claudeCmd,
+			Stdio:             stdioDoc,
 		},
 	}
 }

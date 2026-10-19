@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
@@ -67,6 +69,8 @@ func main() {
 		handleMCP(os.Args[2:])
 	case "connect-agent":
 		handleConnectAgent(os.Args[2:])
+	case "token":
+		handleToken(os.Args[2:])
 	case "version":
 		handleVersion()
 	default:
@@ -98,6 +102,7 @@ func printUsage() {
 	fmt.Println("  cainban mcp                          Start MCP server (stdio, default)")
 	fmt.Println("  cainban mcp --http :PORT             Start MCP server (stateless HTTP, 127.0.0.1)")
 	fmt.Println("  cainban connect-agent --mcp-url URL  Auto-configure an AI agent for a cainban MCP server")
+	fmt.Println("  cainban token --repos owner/repo     Mint a local API token for stdio MCP")
 	fmt.Println("  cainban version                      Show version")
 	fmt.Println()
 	fmt.Println("Board commands:")
@@ -1005,4 +1010,150 @@ func handleConnectAgent(args []string) {
 		fmt.Fprintf(os.Stderr, "  2. Reload your client's MCP servers, then authenticate in the browser.\n")
 		fmt.Fprintf(os.Stderr, "  3. Verify with list_tasks (an empty board is success; 403 = connect the repo first).\n")
 	}
+}
+
+// handleToken implements `cainban token`: mints a local API token for stdio MCP.
+// The token is an HMAC-SHA256 signed JWT containing repos and identity claims.
+//
+// Flags:
+//
+//	--repos REPO1,REPO2   (required) comma-separated repos to authorize
+//	--subject SUB         subject/identity (default: current user or "local")
+//	--ttl DURATION        token lifetime (default: 8760h = 1 year)
+//	--key-file PATH       signing key file (default: auto-generated ~/.cainban/token.key)
+//
+// The token is printed to stdout; the signing key is saved to --key-file (or
+// ~/.cainban/token.key) and must be set as CAINBAN_TOKEN_KEY when using the token.
+func handleToken(args []string) {
+	repos := ""
+	subject := ""
+	ttl := 8760 * time.Hour // 1 year default
+	keyFile := ""
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		next := func() string {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", a)
+				os.Exit(1)
+			}
+			i++
+			return args[i]
+		}
+		switch {
+		case a == "--repos" || a == "-r":
+			repos = next()
+		case strings.HasPrefix(a, "--repos="):
+			repos = strings.TrimPrefix(a, "--repos=")
+		case a == "--subject" || a == "-s":
+			subject = next()
+		case strings.HasPrefix(a, "--subject="):
+			subject = strings.TrimPrefix(a, "--subject=")
+		case a == "--ttl" || a == "-t":
+			d, err := time.ParseDuration(next())
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid duration: %v\n", err)
+				os.Exit(1)
+			}
+			ttl = d
+		case strings.HasPrefix(a, "--ttl="):
+			d, err := time.ParseDuration(strings.TrimPrefix(a, "--ttl="))
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: invalid duration: %v\n", err)
+				os.Exit(1)
+			}
+			ttl = d
+		case a == "--key-file" || a == "-k":
+			keyFile = next()
+		case strings.HasPrefix(a, "--key-file="):
+			keyFile = strings.TrimPrefix(a, "--key-file=")
+		default:
+			fmt.Fprintf(os.Stderr, "Error: unknown token argument %q\n", a)
+			fmt.Fprintln(os.Stderr, "Usage: cainban token --repos owner/repo [--subject SUB] [--ttl 8760h] [--key-file PATH]")
+			os.Exit(1)
+		}
+	}
+
+	if strings.TrimSpace(repos) == "" {
+		fmt.Fprintln(os.Stderr, "Error: --repos is required")
+		fmt.Fprintln(os.Stderr, "Usage: cainban token --repos owner/repo [--subject SUB] [--ttl 8760h] [--key-file PATH]")
+		os.Exit(1)
+	}
+
+	// Parse repos
+	repoList := strings.Split(repos, ",")
+	for i, r := range repoList {
+		repoList[i] = strings.TrimSpace(r)
+	}
+
+	// Default subject
+	if subject == "" {
+		subject = os.Getenv("USER")
+		if subject == "" {
+			subject = "local"
+		}
+	}
+
+	// Default key file
+	if keyFile == "" {
+		home, _ := os.UserHomeDir()
+		keyFile = home + "/.cainban/token.key"
+	}
+
+	// Ensure directory exists
+	keyDir := keyFile[:strings.LastIndex(keyFile, "/")]
+	if err := os.MkdirAll(keyDir, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "Error creating key directory: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Load or generate signing key
+	key, err := loadOrGenerateKey(keyFile)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error with signing key: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Mint token
+	token, err := mcp.MintLocalToken(key, subject, repoList, ttl)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error minting token: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Output token to stdout
+	fmt.Println(token)
+
+	// Guidance to stderr
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Token minted. To use it, set these environment variables:")
+	fmt.Fprintf(os.Stderr, "  export CAINBAN_TOKEN='%s'\n", token)
+	keyB64 := base64.StdEncoding.EncodeToString(key)
+	fmt.Fprintf(os.Stderr, "  export CAINBAN_TOKEN_KEY='%s'  # base64-encoded key from %s\n", keyB64, keyFile)
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintf(os.Stderr, "Token expires: %s\n", time.Now().Add(ttl).Format(time.RFC3339))
+	fmt.Fprintf(os.Stderr, "Authorized repos: %s\n", strings.Join(repoList, ", "))
+}
+
+// loadOrGenerateKey loads an existing key from path, or generates a new 32-byte
+// key and saves it (mode 0600).
+func loadOrGenerateKey(path string) ([]byte, error) {
+	// Try to load existing key
+	if data, err := os.ReadFile(path); err == nil {
+		return data, nil
+	}
+
+	// Generate new key (32 bytes for HMAC-SHA256)
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate key: %w", err)
+	}
+
+	// Save key
+	if err := os.WriteFile(path, key, 0o600); err != nil {
+		return nil, fmt.Errorf("save key to %s: %w", path, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Generated new signing key: %s\n", path)
+	return key, nil
 }
