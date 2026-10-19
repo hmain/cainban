@@ -1009,3 +1009,177 @@ dialog.task-detail::backdrop {
 .signed-out-theme {
   margin-top: 0.75rem;
 }
+
+
+/* ------------------------------------------------------------------ */
+/* Simplified Connect Page (Phase 5: magical onboarding)               */
+/* ------------------------------------------------------------------ */
+
+.connect-page.simplified .hero-cta {
+  text-align: center;
+  padding: 2rem 1.5rem;
+}
+
+.connect-page.simplified .hero-cta h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+.connect-page.simplified .command-box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  flex-wrap: wrap;
+}
+
+.connect-page.simplified .command {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.95rem;
+  background: transparent;
+  padding: 0;
+  word-break: break-all;
+}
+
+.connect-page.simplified .copy-btn {
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.connect-page.simplified .copy-btn:hover {
+  opacity: 0.9;
+}
+
+.connect-page.simplified .hint.small {
+  font-size: 0.85rem;
+}
+
+/* Install badges placeholder */
+.connect-page.simplified .install-badges {
+  text-align: center;
+}
+
+.connect-page.simplified .install-badges h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.connect-page.simplified .badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+}
+
+.connect-page.simplified .badge {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.connect-page.simplified .badge.placeholder {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Repo list in simplified view */
+.connect-page.simplified .repo-list {
+  list-style: none;
+  margin: 0.75rem 0;
+  padding: 0;
+}
+
+.connect-page.simplified .repo-list .repo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 0.5rem;
+}
+
+.connect-page.simplified .repo-list .repo.connected {
+  border-color: var(--ok);
+}
+
+.connect-page.simplified .repo-name {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9rem;
+}
+
+.connect-page.simplified .status {
+  color: var(--ok);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.connect-page.simplified .success {
+  color: var(--ok);
+  margin: 0.75rem 0 0;
+}
+
+.connect-page.simplified h4 {
+  margin: 1rem 0 0.5rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* Manual fallback section */
+.connect-page.simplified .manual-fallback {
+  background: var(--card);
+}
+
+.connect-page.simplified .manual-fallback summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.connect-page.simplified .manual-fallback[open] summary {
+  margin-bottom: 1rem;
+}
+
+.connect-page.simplified .manual-setup h4 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.95rem;
+  color: var(--text);
+}
+
+.connect-page.simplified .manual-setup h4:first-child {
+  margin-top: 0;
+}
+
+.connect-page.simplified .manual-setup .steps {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+
+.connect-page.simplified .manual-setup .steps li {
+  margin: 0.4rem 0;
+}
+
+.connect-page.simplified .manual-setup .steps code {
+  background: var(--bg-inset);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-size: 0.85em;
+}

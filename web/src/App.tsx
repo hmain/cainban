@@ -13,7 +13,7 @@ import { ENTRA_PROVIDER_NAME } from "./amplify";
 import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ThemeToggle } from "./components/ThemeToggle";
-import { ConnectPage } from "./pages/ConnectPage";
+import { ConnectPageSimplified as ConnectPage } from "./pages/ConnectPageSimplified";
 import { RepoRail } from "./shell/RepoRail";
 import { NotConnected } from "./shell/NotConnected";
 import {
