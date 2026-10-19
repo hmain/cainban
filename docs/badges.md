@@ -44,12 +44,70 @@ the target repository.
 [![cainban](https://cainban.example.com/badges/cainban-badge.svg)](https://cainban.example.com/connect?repo=OWNER/REPO)
 ```
 
-## Dynamic status badge
+## Dynamic status badge (live counts)
 
-`cainban-status.svg` ships as a static template showing `cainban | board`. To
-render a live board count, serve the SVG from an endpoint that substitutes the
-message text and recomputes the message-rect width (roughly 6.5px per character
-plus padding). Example status strings: `3 in progress`, `12 tasks`, `idle`.
+The MCP server exposes a **public**, no-auth endpoint that renders a live
+status badge straight from the board:
+
+```
+GET /badge/{owner}/{repo}.svg
+```
+
+The badge shows the current task counts as `todo|doing|done` in the colored
+half and a label in the dark half. It is safe to embed in a public README: it
+exposes only the three per-status counts, never a task title, description, or
+any other board content. Unknown or unreadable repos render a gray
+`not found` badge (HTTP 200) rather than a broken image.
+
+Responses carry `Content-Type: image/svg+xml` and
+`Cache-Control: no-cache, max-age=60`, so README viewers see near-live counts.
+
+### URL format
+
+```
+https://mcp.cainban.example.com/badge/OWNER/REPO.svg
+```
+
+Replace `mcp.cainban.example.com` with your MCP API origin and `OWNER/REPO`
+with the target repository (e.g. `hmain/cainban`).
+
+### Query parameters
+
+| Param | Values | Default | Effect |
+| ----- | ------ | ------- | ------ |
+| `style` | `flat`, `flat-square`, `plastic` | `flat` | Badge shape (shields.io style). |
+| `label` | any text | `cainban` | Left (dark) half text. |
+| `color` | a name (`blue`, `green`, `red`, `orange`, `yellow`, `gray`, …) or a hex literal (`#2563eb`, `2563eb`, `abc`) | `blue` | Right (message) half fill. |
+
+Unrecognized `style`/`color` values fall back to the defaults, and the `label`
+is XML-escaped, so untrusted query input can never inject markup.
+
+### Examples
+
+Default blue flat badge:
+
+```markdown
+[![cainban board status](https://mcp.cainban.example.com/badge/OWNER/REPO.svg)](https://cainban.example.com/connect?repo=OWNER/REPO)
+```
+
+Green, square, custom label:
+
+```markdown
+[![tasks](https://mcp.cainban.example.com/badge/OWNER/REPO.svg?style=flat-square&label=tasks&color=green)](https://cainban.example.com/connect?repo=OWNER/REPO)
+```
+
+HTML:
+
+```html
+<a href="https://cainban.example.com/connect?repo=OWNER/REPO">
+  <img src="https://mcp.cainban.example.com/badge/OWNER/REPO.svg" alt="cainban board status" height="20" />
+</a>
+```
+
+### Static fallback template
+
+`cainban-status.svg` still ships as a static template showing `cainban | board`
+for deployments that can't reach the dynamic endpoint.
 
 ```markdown
 [![cainban board status](https://cainban.example.com/badges/cainban-status.svg)](https://cainban.example.com/connect?repo=OWNER/REPO)
@@ -60,3 +118,4 @@ plus padding). Example status strings: `3 in progress`, `12 tasks`, `idle`.
 - SVGs: `web/public/badges/*.svg` (served at `/badges/*.svg`).
 - Gallery page: `web/src/pages/BadgesPage.tsx` (route `/badges`).
 - Reusable component: `web/src/components/InstallBadges.tsx`.
+- Dynamic badge endpoint: `src/systems/mcp/badge.go` (route `GET /badge/{owner}/{repo}.svg`).
