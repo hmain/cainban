@@ -42,12 +42,32 @@ This is the AWS CDK (Go) app that provisions cainban's serverless stack. What it
   authorizer-exempt (a browser OAuth redirect authenticated by the HMAC-signed
   state param). See
   [Connect API (Phase 4, P4.3)](#connect-api-phase-4-p43).
+- **WebSocket Lambda** `cainban-ws` — a pure-Go arm64 Lambda built from
+  [`cmd/cainban-ws-lambda`](../cmd/cainban-ws-lambda) handling the API Gateway
+  WebSocket routes `$connect`, `$disconnect`, `$default`. It only manages the
+  connection registry in the `cainban` table (two rows per connection: a
+  repo-partitioned fan-out row and a `connectionId` reverse-lookup row, both
+  TTL-reaped). `$connect` validates the bearer token + repo (passed as
+  query-string params, since the browser can't set headers) **signature-first**
+  through the SAME Cognito resolver as the MCP path and authorizes the repo
+  against the token's signed `repos` claim before storing anything. The actual
+  push comes from the **`cainban-mcp` broadcaster**
+  ([`src/systems/mcp/wsconn`](../src/systems/mcp/wsconn)), which lists a repo's
+  connections and posts frames via the API Gateway Management API
+  (`PostToConnection`), pruning 410-Gone connections. See
+  [Real-time updates (WebSocket API)](../README.md#real-time-updates-websocket-api).
 - **API Gateway v2 HTTP APIs** (MCP + connect) — each fronted by a **managed
   Cognito JWT authorizer** (issuer/audience derived from the stack's own Cognito
   pool + app client). The client sends `Authorization: Bearer <jwt>` with **no
   SigV4** (fixing the header collision where SigV4 and the JWT both wanted the
   Authorization header). Every route requires the authorizer EXCEPT
   `GET /connect/github/callback`, which is exempt
+- **API Gateway WebSocket API** `cainban-ws` — a `WEBSOCKET` protocol API with a
+  single auto-deploying stage. `$connect`/`$disconnect`/`$default` route to the
+  `cainban-ws` Lambda; auth is enforced inside `$connect` (query-string token,
+  not an API Gateway authorizer). Publishes `WsApiUrl` (the `wss://` client URL)
+  and `WsManagementEndpoint` (the `https://` Management API callback set on the
+  MCP Lambda as `CAINBAN_WS_API_ENDPOINT`)
 - **IAM** least-privilege: the MCP Lambda gets only `GetItem`, `PutItem`,
   `UpdateItem`, `DeleteItem`, `Query` on the `cainban` table ARN, plus
   `secretsmanager:GetSecretValue` (+ `DescribeSecret`) on the
@@ -58,9 +78,15 @@ This is the AWS CDK (Go) app that provisions cainban's serverless stack. What it
   `cainban-grants` table ARN (read **and write** — it persists verified grants
   and the linked identity) plus `secretsmanager:GetSecretValue`
   (+ `DescribeSecret`) on the `cainban/github-app` secret ARN, and — like the
-  pre-token trigger — **no access to the `cainban` data table**
+  pre-token trigger — **no access to the `cainban` data table**; the
+  **`cainban-ws`** Lambda gets only `GetItem` + `PutItem` + `DeleteItem` on the
+  `cainban` table ARN (connection registry; **no `Query`** — only the broadcaster
+  on the MCP role lists a repo's connections), and the **MCP** Lambda
+  additionally gets `execute-api:ManageConnections` on the WebSocket API ARN so
+  its broadcaster can `PostToConnection`
 - **CloudWatch** log groups `/aws/lambda/cainban-mcp`,
-  `/aws/lambda/cainban-pretoken`, `/aws/lambda/cainban-connect` (30-day retention)
+  `/aws/lambda/cainban-pretoken`, `/aws/lambda/cainban-connect`,
+  `/aws/lambda/cainban-ws` (30-day retention)
 
 > **The endpoint is authenticated.** It sits behind an API Gateway v2 HTTP API
 > with a **managed Cognito JWT authorizer** (JWKS signature → issuer/audience/
@@ -91,16 +117,18 @@ The CDK app is written in Go so the whole repo stays one language: the Lambda ha
 ## Build the Lambda bundles FIRST
 
 The CDK stack packages `../.build/lambda` (the MCP handler), `../.build/pretoken`
-(the Cognito pre-token trigger) and `../.build/connect` (the Phase 4 connect API)
-via `Code.fromAsset`. Build all three before any synth/deploy:
+(the Cognito pre-token trigger), `../.build/connect` (the Phase 4 connect API)
+and `../.build/ws` (the WebSocket API handler) via `Code.fromAsset`. Build all
+four before any synth/deploy:
 
 ```sh
 # from the repo root
-make bundles          # builds .build/lambda + .build/pretoken + .build/connect
+make bundles          # builds .build/lambda + .build/pretoken + .build/connect + .build/ws
 # or individually:
 make lambda           # => .build/lambda/bootstrap
 make pretoken         # => .build/pretoken/bootstrap
 make connect          # => .build/connect/bootstrap
+make ws               # => .build/ws/bootstrap
 # all: CGO_ENABLED=0 GOOS=linux GOARCH=arm64, lambda.norpc
 ```
 
