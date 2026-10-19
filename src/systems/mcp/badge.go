@@ -7,11 +7,11 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/hmain/cainban/src/systems/auth"
+	"github.com/hmain/cainban/src/systems/secrets"
 	"github.com/hmain/cainban/src/systems/store"
 	"github.com/hmain/cainban/src/systems/task"
 )
@@ -30,8 +30,10 @@ import (
 // badge signing is disabled and all badges return "not configured".
 
 // badgeSecret returns the HMAC secret for badge URL signing, or empty if unset.
+// In production the secret is loaded from Secrets Manager via the secret name
+// in CAINBAN_BADGE_SECRET_NAME; locally CAINBAN_BADGE_SECRET can be set directly.
 func badgeSecret() string {
-	return os.Getenv("CAINBAN_BADGE_SECRET")
+	return secrets.GetStringSecret(context.Background(), "CAINBAN_BADGE_SECRET_NAME")
 }
 
 // SignBadgeURL generates a signature for a badge URL. repo must be normalized.
