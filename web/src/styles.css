@@ -1261,3 +1261,113 @@ dialog.task-detail::backdrop {
   color: var(--accent);
   border-color: var(--accent);
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 3: Install badges — gallery of copy-paste README badges.      */
+/* All colours come from the :root design tokens above.                */
+/* ------------------------------------------------------------------ */
+
+.badges-page .hint {
+  margin-bottom: 1rem;
+}
+
+.badge-repo-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.badge-repo-field input {
+  font: inherit;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-inset);
+  color: var(--text);
+  max-width: 20rem;
+}
+
+.badge-gallery {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.badge-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem 1.25rem;
+}
+
+.badge-card-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 0.4rem;
+}
+
+.badge-card-head img {
+  display: block;
+  height: 20px;
+}
+
+.badge-card-title {
+  font-weight: 600;
+}
+
+.badge-snippet {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.badge-snippet-label {
+  flex: 0 0 4.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.badge-snippet-code {
+  flex: 1 1 18rem;
+  min-width: 0;
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.badge-snippet .copy-btn {
+  flex: none;
+  background: var(--accent);
+  color: var(--accent-text);
+  border: none;
+  padding: 0.4rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.badge-snippet .copy-btn:hover {
+  opacity: 0.9;
+}
+
+@media (max-width: 560px) {
+  .badge-snippet-label {
+    flex-basis: 100%;
+  }
+}

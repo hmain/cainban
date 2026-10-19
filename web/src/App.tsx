@@ -14,6 +14,7 @@ import { Board } from "./components/Board";
 import { ActivityFeed } from "./components/ActivityFeed";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { ConnectPageSimplified as ConnectPage } from "./pages/ConnectPageSimplified";
+import { BadgesPage } from "./pages/BadgesPage";
 import { RepoRail } from "./shell/RepoRail";
 import { NotConnected } from "./shell/NotConnected";
 import {
@@ -128,6 +129,9 @@ function SignedInShell({ email }: { email: string }) {
           <Link className="link" to="/connect">
             Connect
           </Link>
+          <Link className="link" to="/badges">
+            Badges
+          </Link>
           <span className="muted">{email}</span>
           <ThemeToggle />
           <button className="link" onClick={() => void signOut()}>
@@ -147,6 +151,7 @@ function SignedInShell({ email }: { email: string }) {
               element={<ActivityRoute repos={repos} />}
             />
             <Route path="/connect" element={<ConnectPage />} />
+            <Route path="/badges" element={<BadgesPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

@@ -10,6 +10,8 @@ A minimal React + Vite + TypeScript single page that lets a user:
 4. See **My connected repos** (`GET /connect/repos`).
 5. Copy a ready-to-paste **MCP client config** (MCP URL + `Authorization: Bearer`
    + `X-Cainban-Repo`).
+6. Grab an embeddable **README badge** at `/badges` that links to the Connect
+   page — see [`docs/badges.md`](../docs/badges.md).
 
 It is configured against the **existing** CDK-managed Cognito user pool and the
 **new** public SPA app client — it does **not** use Amplify `defineAuth`/`defineData`
