@@ -3,7 +3,9 @@ package mcp
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/hmain/cainban/src/systems/auth"
 )
@@ -178,4 +180,195 @@ func TestLocalTenantIntegration(t *testing.T) {
 
 	// For SQLite, the partition prefix is ignored, so we just verify it opens
 	// without error. The real test is that we got here without auth errors.
+}
+
+
+// =============================================================================
+// Phase 2: CAINBAN_TOKEN tests
+// =============================================================================
+
+// TestLocalTokenValidation verifies that a valid CAINBAN_TOKEN sets the tenant
+// with repos from the token's claims.
+func TestLocalTokenValidation(t *testing.T) {
+	// Generate a test signing key
+	key := []byte("test-secret-key-32-bytes-long!!!")
+
+	// Create a valid token with repos claim
+	token, err := MintLocalToken(key, "test-user@example.com", []string{"hmain/cainban", "hmain/other"}, time.Hour)
+	if err != nil {
+		t.Fatalf("MintLocalToken() error: %v", err)
+	}
+
+	// Set up env
+	os.Setenv("CAINBAN_TOKEN", token)
+	os.Setenv("CAINBAN_TOKEN_KEY", string(key))
+	defer func() {
+		os.Unsetenv("CAINBAN_TOKEN")
+		os.Unsetenv("CAINBAN_TOKEN_KEY")
+	}()
+
+	tenant, err := localTenantFromEnv()
+	if err != nil {
+		t.Fatalf("localTenantFromEnv() error: %v", err)
+	}
+	if tenant == nil {
+		t.Fatal("localTenantFromEnv() returned nil tenant")
+	}
+
+	// Subject should be from token
+	if tenant.Subject != "test-user@example.com" {
+		t.Errorf("tenant.Subject = %q, want %q", tenant.Subject, "test-user@example.com")
+	}
+
+	// Actor should also be from token subject
+	if tenant.Actor != "test-user@example.com" {
+		t.Errorf("tenant.Actor = %q, want %q", tenant.Actor, "test-user@example.com")
+	}
+
+	// AuthorizedRepos should have both repos from token
+	if len(tenant.AuthorizedRepos) != 2 {
+		t.Fatalf("len(tenant.AuthorizedRepos) = %d, want 2", len(tenant.AuthorizedRepos))
+	}
+	wantRepos := map[string]bool{"hmain/cainban": true, "hmain/other": true}
+	for _, repo := range tenant.AuthorizedRepos {
+		if !wantRepos[repo] {
+			t.Errorf("unexpected repo %q in AuthorizedRepos", repo)
+		}
+	}
+
+	// First repo should be set as the primary Repo
+	if tenant.Repo != "hmain/cainban" {
+		t.Errorf("tenant.Repo = %q, want %q", tenant.Repo, "hmain/cainban")
+	}
+}
+
+// TestLocalTokenExpired verifies that an expired token is rejected.
+func TestLocalTokenExpired(t *testing.T) {
+	key := []byte("test-secret-key-32-bytes-long!!!")
+
+	// Create an expired token (negative duration)
+	token, err := MintLocalToken(key, "test-user", []string{"hmain/cainban"}, -time.Hour)
+	if err != nil {
+		t.Fatalf("MintLocalToken() error: %v", err)
+	}
+
+	os.Setenv("CAINBAN_TOKEN", token)
+	os.Setenv("CAINBAN_TOKEN_KEY", string(key))
+	defer func() {
+		os.Unsetenv("CAINBAN_TOKEN")
+		os.Unsetenv("CAINBAN_TOKEN_KEY")
+	}()
+
+	_, err = localTenantFromEnv()
+	if err == nil {
+		t.Fatal("expected error for expired token, got nil")
+	}
+	if !strings.Contains(err.Error(), "expired") {
+		t.Errorf("error should mention 'expired', got: %v", err)
+	}
+}
+
+// TestLocalTokenBadSignature verifies that a token with wrong signature is rejected.
+func TestLocalTokenBadSignature(t *testing.T) {
+	correctKey := []byte("correct-key-32-bytes-long!!!!!!!")
+	wrongKey := []byte("wrong-key-32-bytes-long-here!!!!")
+
+	// Create token with one key
+	token, err := MintLocalToken(correctKey, "test-user", []string{"hmain/cainban"}, time.Hour)
+	if err != nil {
+		t.Fatalf("MintLocalToken() error: %v", err)
+	}
+
+	// Try to validate with different key
+	os.Setenv("CAINBAN_TOKEN", token)
+	os.Setenv("CAINBAN_TOKEN_KEY", string(wrongKey))
+	defer func() {
+		os.Unsetenv("CAINBAN_TOKEN")
+		os.Unsetenv("CAINBAN_TOKEN_KEY")
+	}()
+
+	_, err = localTenantFromEnv()
+	if err == nil {
+		t.Fatal("expected error for bad signature, got nil")
+	}
+	if !strings.Contains(err.Error(), "signature") && !strings.Contains(err.Error(), "invalid") {
+		t.Errorf("error should mention signature issue, got: %v", err)
+	}
+}
+
+// TestLocalTokenMissingRepos verifies that a token without repos claim is rejected.
+func TestLocalTokenMissingRepos(t *testing.T) {
+	key := []byte("test-secret-key-32-bytes-long!!!")
+
+	// Create token with empty repos
+	token, err := MintLocalToken(key, "test-user", []string{}, time.Hour)
+	if err != nil {
+		t.Fatalf("MintLocalToken() error: %v", err)
+	}
+
+	os.Setenv("CAINBAN_TOKEN", token)
+	os.Setenv("CAINBAN_TOKEN_KEY", string(key))
+	defer func() {
+		os.Unsetenv("CAINBAN_TOKEN")
+		os.Unsetenv("CAINBAN_TOKEN_KEY")
+	}()
+
+	_, err = localTenantFromEnv()
+	if err == nil {
+		t.Fatal("expected error for token with no repos, got nil")
+	}
+	if !strings.Contains(err.Error(), "repos") {
+		t.Errorf("error should mention 'repos', got: %v", err)
+	}
+}
+
+// TestLocalTokenPrecedenceOverRepo verifies that CAINBAN_TOKEN takes precedence
+// over CAINBAN_REPO when both are set.
+func TestLocalTokenPrecedenceOverRepo(t *testing.T) {
+	key := []byte("test-secret-key-32-bytes-long!!!")
+
+	token, err := MintLocalToken(key, "token-user", []string{"token/repo"}, time.Hour)
+	if err != nil {
+		t.Fatalf("MintLocalToken() error: %v", err)
+	}
+
+	// Set both TOKEN and REPO
+	os.Setenv("CAINBAN_TOKEN", token)
+	os.Setenv("CAINBAN_TOKEN_KEY", string(key))
+	os.Setenv("CAINBAN_REPO", "env/repo")
+	os.Setenv("CAINBAN_ACTOR", "env-actor")
+	defer func() {
+		os.Unsetenv("CAINBAN_TOKEN")
+		os.Unsetenv("CAINBAN_TOKEN_KEY")
+		os.Unsetenv("CAINBAN_REPO")
+		os.Unsetenv("CAINBAN_ACTOR")
+	}()
+
+	tenant, err := localTenantFromEnv()
+	if err != nil {
+		t.Fatalf("localTenantFromEnv() error: %v", err)
+	}
+
+	// Token should win
+	if tenant.Repo != "token/repo" {
+		t.Errorf("tenant.Repo = %q, want %q (token should take precedence)", tenant.Repo, "token/repo")
+	}
+	if tenant.Actor != "token-user" {
+		t.Errorf("tenant.Actor = %q, want %q (token should take precedence)", tenant.Actor, "token-user")
+	}
+}
+
+// TestLocalTokenMissingKey verifies that a token without a signing key is rejected.
+func TestLocalTokenMissingKey(t *testing.T) {
+	key := []byte("test-secret-key-32-bytes-long!!!")
+	token, _ := MintLocalToken(key, "test-user", []string{"hmain/cainban"}, time.Hour)
+
+	os.Setenv("CAINBAN_TOKEN", token)
+	os.Unsetenv("CAINBAN_TOKEN_KEY") // No key set
+	defer os.Unsetenv("CAINBAN_TOKEN")
+
+	_, err := localTenantFromEnv()
+	if err == nil {
+		t.Fatal("expected error when CAINBAN_TOKEN_KEY is not set, got nil")
+	}
 }
