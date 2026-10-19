@@ -73,6 +73,7 @@ coverage.html
 # Stray compiled cmd binaries (name == cmd dir basename)
 /cainban-pretoken
 /cainban-connect
+/cainban-ws-lambda
 /cainban
 
 # RFC design docs (kept local, not committed) — all RFC files, any extension, any location

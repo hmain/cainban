@@ -796,6 +796,135 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
 	})
 
+	// --- Real-time WebSocket API -----------------------------------------
+	//
+	// The in-process /ws/{owner}/{repo} endpoint (src/systems/mcp/websocket.go)
+	// cannot run on Lambda: an API Gateway v2 HTTP API does not proxy raw
+	// WebSocket upgrades, and a Lambda has no persistent process to hold the
+	// live connection. An API Gateway WebSocket API is the serverless transport:
+	// API Gateway terminates the socket and invokes a dedicated WS Lambda on the
+	// three route keys ($connect/$disconnect/$default). That Lambda only manages
+	// the connection REGISTRY in the "cainban" table (store.WSConnectionStore);
+	// the actual real-time PUSH happens from the MCP Lambda's broadcaster
+	// (src/systems/mcp/wsconn), which lists a repo's connections and posts the
+	// activity frame via the API Gateway Management API when a tool mutates data.
+	//
+	// Auth: the browser WebSocket API cannot set headers, so the bearer token +
+	// target repo arrive as $connect query-string params and are validated
+	// signature-first by the SAME Cognito resolver the MCP path uses, authorized
+	// against the token's signed repos claim BEFORE any connection row is stored
+	// (handler.go handleConnect). A token that does not grant the repo is
+	// rejected at $connect — tenant isolation is structural.
+	//
+	// provided.al2023 + arm64 + pure-Go bootstrap, same as the other functions.
+	// Built into ../.build/ws (see `make ws`). The connection rows live in the
+	// EXISTING "cainban" table (co-located per repo partition), so no new table.
+	wsFn := awslambda.NewFunction(stack, jsii.String("WsFunction"), &awslambda.FunctionProps{
+		FunctionName: jsii.String("cainban-ws"),
+		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
+		Architecture: awslambda.Architecture_ARM_64(),
+		Handler:      jsii.String("bootstrap"),
+		MemorySize:   jsii.Number(128),
+		Timeout:      awscdk.Duration_Seconds(jsii.Number(10)),
+		// Frugality + abuse guard: $connect/$disconnect are tiny, fast registry
+		// writes. Cap concurrency so a connection flood cannot fan out Lambda +
+		// on-demand DynamoDB cost unbounded. 10 is ample at dev scale and bounds
+		// the blast radius exactly like the MCP function's cap.
+		ReservedConcurrentExecutions: jsii.Number(10),
+		Environment: &map[string]*string{
+			"CAINBAN_BACKEND":    jsii.String("dynamodb"),
+			"CAINBAN_DDB_TABLE":  table.TableName(),
+			"CAINBAN_DDB_REGION": stack.Region(),
+			// Same Cognito pool as the MCP Lambda — $connect validates the same
+			// tokens the MCP endpoint accepts (signature-first, repos claim).
+			"CAINBAN_AUTH_ISSUER":   issuer,
+			"CAINBAN_AUTH_AUDIENCE": authAudiencesCsv,
+		},
+		Code: awslambda.Code_FromAsset(jsii.String("../.build/ws"), nil),
+	})
+
+	// Least-privilege DynamoDB for the WS Lambda: it registers/lists/removes
+	// connection rows only — PutItem (register the two rows), GetItem (resolve a
+	// connection's repo on $disconnect), Query (not used by the WS Lambda itself
+	// but by the broadcaster; kept off here), DeleteItem (deregister). Grant
+	// exactly the actions the connection store issues on this table, scoped to
+	// the table ARN alone. No Query is granted to the WS Lambda (it never lists
+	// a repo's connections — only the broadcaster does, on the MCP role).
+	wsFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+		Effect: awsiam.Effect_ALLOW,
+		Actions: jsii.Strings(
+			"dynamodb:GetItem",
+			"dynamodb:PutItem",
+			"dynamodb:DeleteItem",
+		),
+		Resources: &[]*string{table.TableArn()},
+	}))
+
+	wsConnectIntegration := awsapigatewayv2integrations.NewWebSocketLambdaIntegration(
+		jsii.String("WsConnectIntegration"), wsFn, nil)
+	wsDisconnectIntegration := awsapigatewayv2integrations.NewWebSocketLambdaIntegration(
+		jsii.String("WsDisconnectIntegration"), wsFn, nil)
+	wsDefaultIntegration := awsapigatewayv2integrations.NewWebSocketLambdaIntegration(
+		jsii.String("WsDefaultIntegration"), wsFn, nil)
+
+	// The WebSocket API with the three required route keys wired to the WS
+	// Lambda. Auth is enforced INSIDE the $connect handler (query-string token,
+	// signature-first) rather than via an API Gateway WebSocket authorizer: the
+	// browser cannot send an Authorization header on the upgrade, so a Lambda/
+	// request authorizer reading the token from the query string would be the
+	// only option, and doing the SAME validation in the connect handler keeps WS
+	// and MCP auth on one code path (the resolver) with no second construct.
+	wsAPI := awsapigatewayv2.NewWebSocketApi(stack, jsii.String("WsApi"), &awsapigatewayv2.WebSocketApiProps{
+		ApiName:     jsii.String("cainban-ws"),
+		Description: jsii.String("Real-time task-activity push — API Gateway WebSocket API. $connect authenticates via query-string token+repo (signature-first, repo-scoped); the MCP Lambda pushes frames via the Management API."),
+		// cainban's protocol routes everything the client sends to $default
+		// (the client only ever sends an auth-less ping); server->client push
+		// is driven by the broadcaster, not by client messages.
+		ConnectRouteOptions: &awsapigatewayv2.WebSocketRouteOptions{
+			Integration: wsConnectIntegration,
+		},
+		DisconnectRouteOptions: &awsapigatewayv2.WebSocketRouteOptions{
+			Integration: wsDisconnectIntegration,
+		},
+		DefaultRouteOptions: &awsapigatewayv2.WebSocketRouteOptions{
+			Integration: wsDefaultIntegration,
+			// $default returns a pong frame to the client's ping, so the route
+			// must be allowed to send a response.
+			ReturnResponse: jsii.Bool(true),
+		},
+	})
+
+	// A single auto-deploying stage. The stage URL is the wss:// endpoint the
+	// browser connects to; the stage CALLBACK URL (https://) is what the
+	// Management API client posts to — that is the value the MCP Lambda's
+	// broadcaster needs as CAINBAN_WS_API_ENDPOINT.
+	wsStage := awsapigatewayv2.NewWebSocketStage(stack, jsii.String("WsStage"), &awsapigatewayv2.WebSocketStageProps{
+		WebSocketApi: wsAPI,
+		StageName:    jsii.String("prod"),
+		AutoDeploy:   jsii.Bool(true),
+	})
+
+	// Let the MCP Lambda PUSH to connected clients: grant execute-api:ManageConnections
+	// on this WebSocket API/stage so the broadcaster's PostToConnection calls are
+	// authorized. GrantManageConnections scopes the IAM action to this API's ARN
+	// alone — the MCP role cannot manage any other API's connections.
+	wsAPI.GrantManageConnections(fn)
+
+	// Tell the MCP Lambda where to push. Set as a lazily-resolved CDK token
+	// AFTER the stage exists (the function was created earlier), mirroring how
+	// CAINBAN_MCP_RESOURCE is added post-API. When this env is present the MCP
+	// Lambda installs the API-Gateway-WebSocket broadcaster (cmd/cainban-lambda
+	// main.go); when absent it keeps the in-process-hub default (a no-op on
+	// Lambda). The CALLBACK url (https://.../<stage>) is the Management API
+	// endpoint, NOT the wss:// client url.
+	fn.AddEnvironment(jsii.String("CAINBAN_WS_API_ENDPOINT"), wsStage.CallbackUrl(), nil)
+
+	awslogs.NewLogGroup(stack, jsii.String("WsLogGroup"), &awslogs.LogGroupProps{
+		LogGroupName:  jsii.String("/aws/lambda/cainban-ws"),
+		Retention:     awslogs.RetentionDays_ONE_MONTH,
+		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
+	})
+
 	// --- Connect API Lambda (Phase 4, P4.3) ------------------------------
 	//
 	// A SEPARATE function from the MCP Lambda. The connect flow has a distinct
@@ -1017,6 +1146,14 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	awscdk.NewCfnOutput(stack, jsii.String("ConnectApiUrl"), &awscdk.CfnOutputProps{
 		Value:       connectAPI.Url(),
 		Description: jsii.String("Connect API endpoint (Phase 4 P4.3) — HTTP API + Cognito JWT authorizer; /connect/* require Authorization: Bearer <jwt>. The GitHub App Callback URL is <this>connect/github/callback (authorizer-exempt; HMAC state auth)."),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("WsApiUrl"), &awscdk.CfnOutputProps{
+		Value:       wsStage.Url(),
+		Description: jsii.String("Real-time WebSocket endpoint the browser connects to (wss://). Connect with ?repo=<owner/repo>&token=<jwt>; the token is validated signature-first at $connect and authorized against its repos claim. The SPA uses this as VITE_WS_URL."),
+	})
+	awscdk.NewCfnOutput(stack, jsii.String("WsManagementEndpoint"), &awscdk.CfnOutputProps{
+		Value:       wsStage.CallbackUrl(),
+		Description: jsii.String("API Gateway Management API callback endpoint (https://) the MCP Lambda posts real-time frames to. Set on the MCP Lambda as CAINBAN_WS_API_ENDPOINT; not a client URL."),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("TableName"), &awscdk.CfnOutputProps{
 		Value:       table.TableName(),
