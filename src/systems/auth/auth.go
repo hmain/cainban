@@ -159,6 +159,12 @@ type Tenant struct {
 	// fail closed rather than run with an empty prefix (which would collapse all
 	// tenants into one partition). See Resolver.Resolve.
 	Unscoped bool
+	// ReadOnly is true when the request authenticated with a read-only widget
+	// token (see the mcp package's widget_token path) rather than a user JWT.
+	// A read-only tenant may invoke only the read tools (list_tasks, get_task,
+	// list_activity); any write tool (create_task, update_*, delete_*, …) is
+	// rejected BEFORE it runs. A normal user JWT always resolves ReadOnly=false.
+	ReadOnly bool
 }
 
 // PartitionPrefixFor returns the DynamoDB partition prefix for a repo. It is the

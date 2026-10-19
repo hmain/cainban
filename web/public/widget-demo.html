@@ -112,6 +112,35 @@ data-theme       "light" | "dark" (optional; omit to follow the OS)
 data-poll        refresh interval in seconds (optional; 0 disables; default 30)
 data-bar         "true" | "false" mini-board bar (optional; default true)</pre>
 
+    <h2>Private boards: read-only tokens</h2>
+    <p>
+      A public MCP server rejects an unauthenticated read. To surface a
+      <strong>private</strong> board, mint a <em>read-only widget token</em> and
+      pass it as <code>data-token</code>. A widget token:
+    </p>
+    <ul>
+      <li>is scoped to exactly <strong>one</strong> repo;</li>
+      <li>can call only the read tools (<code>list_tasks</code>,
+        <code>get_task</code>, <code>list_activity</code>) — never a write;</li>
+      <li>has a <code>wt_</code> prefix and an expiry (default 30 days, max 365);</li>
+      <li>can be revoked by id, so a leaked token can be cut off.</li>
+    </ul>
+    <p>
+      Create one from an authenticated MCP client (you must already be
+      authorized for the repo) via the <code>create_widget_token</code> tool,
+      list them with <code>list_widget_tokens</code>, and revoke with
+      <code>revoke_widget_token</code>. Then embed it:
+    </p>
+    <pre>&lt;div data-cainban-widget
+     data-repo="owner/repo"
+     data-api="https://mcp.example.com"
+     data-token="wt_abc123..."&gt;&lt;/div&gt;</pre>
+    <p>
+      The token is sent as <code>Authorization: Bearer wt_…</code>. Because it is
+      read-only and single-repo, a write attempt is rejected server-side with
+      <code>403 Forbidden</code> before it runs.
+    </p>
+
     <p>
       Inject widgets after load? Call
       <code>window.cainbanWidget.mount()</code> to upgrade any new

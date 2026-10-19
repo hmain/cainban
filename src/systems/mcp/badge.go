@@ -298,9 +298,9 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		// Validate signature
 		var expiry int64
 		if expStr != "" {
-			fmt.Sscanf(expStr, "%d", &expiry)
+			_, _ = fmt.Sscanf(expStr, "%d", &expiry)
 		}
-		
+
 		// Check if signing is configured
 		if badgeSecret() == "" {
 			// Signing not configured - return "not configured" badge
@@ -308,7 +308,7 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 			_, _ = w.Write([]byte(renderNotConfiguredBadge(label, style)))
 			return
 		}
-		
+
 		if !ValidateBadgeSignature(repo, sig, expiry) {
 			// Invalid or missing signature
 			w.WriteHeader(http.StatusOK)
