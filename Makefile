@@ -62,9 +62,20 @@ pretoken:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
 		-o .build/pretoken/bootstrap ./cmd/cainban-pretoken
 
+# Build the API Gateway WebSocket API Lambda bootstrap (pure Go, arm64,
+# provided.al2023). Output goes to .build/ws/bootstrap, packaged by the CDK
+# stack via Code.fromAsset("../.build/ws"). This is the $connect/$disconnect/
+# $default handler that manages the WebSocket connection registry in DynamoDB
+# for the serverless real-time push path (the MCP Lambda does the actual push).
+.PHONY: ws
+ws:
+	mkdir -p .build/ws
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
+		-o .build/ws/bootstrap ./cmd/cainban-ws-lambda
+
 # Build every Lambda bundle the CDK stack packages. Run before `cdk synth`/`cdk deploy`.
 .PHONY: bundles
-bundles: lambda pretoken connect
+bundles: lambda pretoken connect ws
 
 # Build the Phase 4 connect API Lambda bootstrap (pure Go, arm64,
 # provided.al2023). Output goes to .build/connect/bootstrap, packaged by the CDK

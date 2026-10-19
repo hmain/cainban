@@ -273,7 +273,7 @@ flowchart TB
     MCP -.-> Core
 ```
 
-It's all Go — the CLI, the three Lambdas, and the CDK infra share one language. Storage is pluggable behind `CAINBAN_BACKEND`: SQLite locally (needs CGO), DynamoDB in the serverless path (pure Go). The domain logic lives in `src/systems/` (`auth`, `board`, `task`, `mcp`, `store`, `storage`, `dynamo`, `grants`, `github`, `connect`, `crypter`, `secrets`), the TUI uses [Bubble Tea](https://github.com/charmbracelet/bubbletea), and the serverless side is three arm64 `provided.al2023` Lambdas (`cainban-mcp`, `cainban-pretoken`, `cainban-connect`) deployed by an AWS CDK (Go) app in [`infra/`](infra/), plus a Cognito pool, two DynamoDB tables, and a React/Vite SPA in `web/` on Amplify.
+It's all Go — the CLI, the three Lambdas, and the CDK infra share one language. Storage is pluggable behind `CAINBAN_BACKEND`: SQLite locally (needs CGO), DynamoDB in the serverless path (pure Go). The domain logic lives in `src/systems/` (`auth`, `board`, `task`, `mcp`, `store`, `storage`, `dynamo`, `grants`, `github`, `connect`, `crypter`, `secrets`), the TUI uses [Bubble Tea](https://github.com/charmbracelet/bubbletea), and the serverless side is four arm64 `provided.al2023` Lambdas (`cainban-mcp`, `cainban-pretoken`, `cainban-connect`, `cainban-ws`) deployed by an AWS CDK (Go) app in [`infra/`](infra/), plus a Cognito pool, two DynamoDB tables, an API Gateway WebSocket API for real-time push, and a React/Vite SPA in `web/` on Amplify.
 
 Markdown rendering via [Glow](https://github.com/charmbracelet/glow) is still on the TODO list.
 
@@ -545,6 +545,46 @@ sequenceDiagram
     D-->>L: items (tenant-isolated)
     L-->>C: 200 result
 ```
+
+### Real-time updates (WebSocket API)
+
+The serverless deployment pushes live task-activity to connected browsers over
+an **API Gateway WebSocket API**. The in-process `/ws/{owner}/{repo}` endpoint
+(used by the long-running server) can't run on Lambda — an API Gateway HTTP API
+doesn't proxy WebSocket upgrades, and a Lambda has no persistent process to hold
+the connection — so the serverless path splits the work in two:
+
+- **`cainban-ws` Lambda** handles the WebSocket routes `$connect`, `$disconnect`
+  and `$default`. It only manages the connection *registry* in the existing
+  `cainban` DynamoDB table (co-located per repo partition); it never streams.
+- **`cainban-mcp` Lambda** does the actual push: when a tool mutates a task, its
+  broadcaster lists the repo's connections and posts the frame to each via the
+  **API Gateway Management API** (`PostToConnection`). Stale connections (410
+  Gone) are pruned automatically.
+
+Auth matches the MCP path exactly. The browser WebSocket API can't set headers,
+so the client connects with the bearer token and target repo as query-string
+parameters, and the token is validated **signature-first** at `$connect` and
+authorized against its signed `repos` claim *before* any connection row is
+stored — a token that doesn't grant the repo is rejected at connect:
+
+```
+wss://<WsApiUrl>?repo=<owner>/<repo>&token=<Cognito JWT>
+```
+
+The wire frame is identical to the in-process hub's
+(`{"type":"event","event":{…}}`), so the frontend adapter
+(`web/src/board/wsAdapter.ts`) is unchanged. The stack publishes two outputs:
+`WsApiUrl` (the `wss://` URL the SPA connects to — use as `VITE_WS_URL`) and
+`WsManagementEndpoint` (the `https://` Management API endpoint, set on the MCP
+Lambda as `CAINBAN_WS_API_ENDPOINT`; wired automatically by the CDK stack). When
+`CAINBAN_WS_API_ENDPOINT` is unset the MCP Lambda keeps its in-process-hub
+default (a no-op on Lambda), so the WebSocket API is self-contained.
+
+Deploying is the same gated flow as the rest of the stack — `make bundles` now
+also builds the WS Lambda (`make ws` → `.build/ws/bootstrap`), and `make deploy`
+provisions the WebSocket API, routes, stage and IAM grant alongside everything
+else.
 
 Everything deploy-related — the full stack, IAM surface, env vars, the auth
 design, the pre-token trigger, and the grants model — is documented in
