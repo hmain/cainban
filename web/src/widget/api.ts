@@ -21,7 +21,28 @@ export interface WidgetConfig {
   api: string;
   /** Target board as owner/repo. */
   repo: string;
-  /** Optional read-only bearer token for authed MCP servers. */
+  /**
+   * Optional read-only bearer token for authed MCP servers (private boards).
+   *
+   * This is a cainban READ-ONLY WIDGET TOKEN — a `wt_`-prefixed credential that
+   * is distinct from a user login token:
+   *
+   *   - it is scoped to exactly ONE repo;
+   *   - it may call only the read tools (list_tasks, get_task, list_activity) —
+   *     the server rejects any write with 403 before it runs;
+   *   - it carries an expiry (default 30 days, max 365) and can be revoked by id.
+   *
+   * Mint one from an authenticated MCP client with the `create_widget_token`
+   * tool (you must already be authorized for the repo), list them with
+   * `list_widget_tokens`, and revoke with `revoke_widget_token`. The embedder
+   * passes it via the `data-token` attribute, and it is sent here as
+   * `Authorization: Bearer wt_...`. Omit it for a server that permits public
+   * reads; it is required for a private board.
+   *
+   * NOTE: a widget token is still a bearer credential embedded in a public page.
+   * Keep its scope minimal (one repo, read-only) and revoke it if the page or
+   * token is compromised.
+   */
   token?: string;
 }
 
