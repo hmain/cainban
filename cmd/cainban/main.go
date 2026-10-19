@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -69,6 +70,8 @@ func main() {
 		handleMCP(os.Args[2:])
 	case "connect-agent":
 		handleConnectAgent(os.Args[2:])
+	case "connect":
+		handleConnect(os.Args[2:])
 	case "token":
 		handleToken(os.Args[2:])
 	case "version":
@@ -102,6 +105,7 @@ func printUsage() {
 	fmt.Println("  cainban mcp                          Start MCP server (stdio, default)")
 	fmt.Println("  cainban mcp --http :PORT             Start MCP server (stateless HTTP, 127.0.0.1)")
 	fmt.Println("  cainban connect-agent --mcp-url URL  Auto-configure an AI agent for a cainban MCP server")
+	fmt.Println("  cainban connect --mcp-url URL        🪄 One-command setup: discover, authenticate, configure")
 	fmt.Println("  cainban token --repos owner/repo     Mint a local API token for stdio MCP")
 	fmt.Println("  cainban version                      Show version")
 	fmt.Println()
@@ -1010,6 +1014,208 @@ func handleConnectAgent(args []string) {
 		fmt.Fprintf(os.Stderr, "  2. Reload your client's MCP servers, then authenticate in the browser.\n")
 		fmt.Fprintf(os.Stderr, "  3. Verify with list_tasks (an empty board is success; 403 = connect the repo first).\n")
 	}
+}
+
+// handleConnect implements `cainban connect`: the unified, magical onboarding
+// command that combines discovery, OAuth authentication, client detection, and
+// config writing into a single command.
+//
+// Flags:
+//
+//	--mcp-url URL    (required) the cainban MCP server base URL
+//	--client NAME    MCP client to configure (auto-detected if omitted)
+//	--no-browser     skip opening browser, print URL instead
+//	--skip-oauth     skip OAuth flow, just write config (for pre-authenticated users)
+//
+// The command:
+//  1. Discovers the MCP server's configuration
+//  2. Detects the installed MCP client (or uses --client)
+//  3. Runs the OAuth flow with a styled success page
+//  4. Writes the config to the detected client's config file
+//  5. Prints success message with next steps
+func handleConnect(args []string) {
+	mcpURL := ""
+	clientOverride := ""
+	noBrowser := false
+	skipOAuth := false
+
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		next := func() string {
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "Error: %s requires a value\n", a)
+				os.Exit(1)
+			}
+			i++
+			return args[i]
+		}
+		switch {
+		case a == "--mcp-url":
+			mcpURL = next()
+		case strings.HasPrefix(a, "--mcp-url="):
+			mcpURL = strings.TrimPrefix(a, "--mcp-url=")
+		case a == "--client":
+			clientOverride = next()
+		case strings.HasPrefix(a, "--client="):
+			clientOverride = strings.TrimPrefix(a, "--client=")
+		case a == "--no-browser":
+			noBrowser = true
+		case a == "--skip-oauth":
+			skipOAuth = true
+		case a == "-h" || a == "--help":
+			fmt.Println("Usage: cainban connect --mcp-url URL [--client NAME] [--no-browser] [--skip-oauth]")
+			fmt.Println()
+			fmt.Println("Connect cainban to your AI agent in one command.")
+			fmt.Println()
+			fmt.Println("Flags:")
+			fmt.Println("  --mcp-url URL    cainban MCP server URL (from the connect page)")
+			fmt.Println("  --client NAME    MCP client: claude, cursor, vscode, kiro (auto-detected)")
+			fmt.Println("  --no-browser     print OAuth URL instead of opening browser")
+			fmt.Println("  --skip-oauth     skip OAuth, just write config")
+			os.Exit(0)
+		default:
+			fmt.Fprintf(os.Stderr, "Error: unknown connect argument %q\n", a)
+			fmt.Fprintln(os.Stderr, "Usage: cainban connect --mcp-url URL [--client NAME]")
+			os.Exit(1)
+		}
+	}
+
+	if strings.TrimSpace(mcpURL) == "" {
+		fmt.Fprintln(os.Stderr, "Error: --mcp-url is required")
+		fmt.Fprintln(os.Stderr, "Usage: cainban connect --mcp-url URL [--client NAME]")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Get the MCP URL from the cainban connect page.")
+		os.Exit(1)
+	}
+
+	// Step 1: Discover MCP server configuration
+	fmt.Fprintln(os.Stderr, "🔍 Discovering MCP server...")
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	cfg, err := mcp.DiscoverClientConfig(ctx, mcpURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "✓ MCP server discovered")
+
+	// Step 2: Detect or validate MCP client
+	client := clientOverride
+	if client == "" {
+		client = mcp.DetectMCPClient()
+	}
+	if client == "" {
+		fmt.Fprintln(os.Stderr, "⚠️  Could not detect MCP client. Specify with --client (claude, cursor, vscode, kiro)")
+		fmt.Fprintln(os.Stderr, "")
+		// Still show the config for manual use
+		rendered, _ := cfg.RenderConfig("json")
+		fmt.Println(rendered)
+		os.Exit(1)
+	}
+	fmt.Fprintf(os.Stderr, "✓ Detected MCP client: %s\n", client)
+
+	// Step 3: Run OAuth flow (unless skipped)
+	if !skipOAuth {
+		fmt.Fprintln(os.Stderr, "🔐 Starting OAuth authentication...")
+
+		// Parse callback port from the redirect URI hint (default 3334)
+		callbackPort := 3334
+		if cfg.RedirectURIHint != "" {
+			// Extract port from http://127.0.0.1:PORT/path
+			if parts := strings.Split(cfg.RedirectURIHint, ":"); len(parts) >= 3 {
+				portPart := strings.Split(parts[2], "/")[0]
+				if p, err := strconv.Atoi(portPart); err == nil {
+					callbackPort = p
+				}
+			}
+		}
+
+		flowCfg := mcp.OAuthFlowConfig{
+			CallbackPort:    callbackPort,
+			CallbackPath:    "/oauth/callback",
+			AuthorizeURL:    cfg.AuthorizationEndpoint,
+			TokenURL:        cfg.TokenEndpoint,
+			ClientID:        cfg.ClientID,
+			Scopes:          []string{"openid", "email", "profile"},
+			SkipBrowserOpen: noBrowser,
+		}
+
+		flow := mcp.NewOAuthFlow(flowCfg)
+
+		if noBrowser {
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "Open this URL in your browser:")
+			fmt.Fprintln(os.Stderr, flow.AuthorizeURL())
+			fmt.Fprintln(os.Stderr, "")
+		} else {
+			fmt.Fprintln(os.Stderr, "Opening browser for authentication...")
+			if err := mcp.OpenBrowser(flow.AuthorizeURL()); err != nil {
+				fmt.Fprintln(os.Stderr, "")
+				fmt.Fprintln(os.Stderr, "Could not open browser. Please visit:")
+				fmt.Fprintln(os.Stderr, flow.AuthorizeURL())
+				fmt.Fprintln(os.Stderr, "")
+			}
+		}
+
+		flowCtx, flowCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer flowCancel()
+
+		result, err := flow.Run(flowCtx)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "❌ OAuth failed: %v\n", err)
+			os.Exit(1)
+		}
+		_ = result // We don't need to store the tokens; the MCP client handles token management
+		fmt.Fprintln(os.Stderr, "✓ Authentication complete")
+	}
+
+	// Step 4: Build and write config
+	fmt.Fprintf(os.Stderr, "📝 Writing config for %s...\n", client)
+
+	// Get the appropriate config format for this client
+	formatMap := map[string]string{
+		"claude": "claude",
+		"cursor": "cursor",
+		"vscode": "vscode",
+		"kiro":   "kiro-ide",
+	}
+	format := formatMap[client]
+	if format == "" {
+		format = "json"
+	}
+
+	rendered, err := cfg.RenderConfig(format)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error rendering config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Parse the rendered config to get the server config
+	var serverConfig map[string]any
+	if err := json.Unmarshal([]byte(rendered), &serverConfig); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error parsing config: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Write to client's config file
+	if err := mcp.WriteMCPConfig(client, "cainban", serverConfig); err != nil {
+		fmt.Fprintf(os.Stderr, "❌ Error writing config: %v\n", err)
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "Manual config (copy to your MCP client):")
+		fmt.Println(rendered)
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stderr, "✓ Config written")
+
+	// Success!
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "🎉 cainban is ready!")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "Next steps:")
+	fmt.Fprintln(os.Stderr, "  1. Start a new session in your AI agent (some clients require this)")
+	fmt.Fprintln(os.Stderr, "  2. Run `list_tasks` to verify the connection")
+	fmt.Fprintln(os.Stderr, "  3. Start managing your board with natural language!")
 }
 
 // handleToken implements `cainban token`: mints a local API token for stdio MCP.
