@@ -17,7 +17,7 @@ import {
  * Target: ~150 lines (down from 824)
  *
  * Structure:
- * 1. Hero CTA: `npx cainban connect`
+ * 1. Hero CTA: install the `cainban` binary, then `cainban connect`
  * 2. Install badges (placeholder)
  * 3. Repo connection (simplified)
  * 4. Single expandable for manual setup fallback
@@ -47,7 +47,12 @@ export function ConnectPageSimplified() {
 function HeroCTA() {
   const [copied, setCopied] = useState(false);
 
-  const command = `npx cainban connect --mcp-url ${MCP_API}`;
+  // `cainban` is a Go binary distributed via GitHub Releases / `go install`,
+  // NOT an npm package — `npx cainban` 404s on the npm registry. Install it
+  // first, then run the one-command connect flow.
+  const installCommand = `go install github.com/hmain/cainban/cmd/cainban@latest`;
+  const connectCommand = `cainban connect --mcp-url ${MCP_API}`;
+  const command = `${installCommand}\n${connectCommand}`;
 
   const copyCommand = async () => {
     await navigator.clipboard.writeText(command);
@@ -57,23 +62,31 @@ function HeroCTA() {
 
   return (
     <section className="card hero-cta">
-      <h3>One command to connect</h3>
+      <h3>Two commands to connect</h3>
       <p className="hint">
-        Run this in your terminal to discover, authenticate, and configure
-        cainban in one step:
+        Install the cainban CLI, then run connect to discover, authenticate, and
+        configure cainban in one step:
       </p>
       <div className="command-box">
         <code className="command">{command}</code>
         <button
           className="copy-btn"
           onClick={() => void copyCommand()}
-          aria-label="Copy command"
+          aria-label="Copy commands"
         >
           {copied ? "✓ Copied" : "Copy"}
         </button>
       </div>
       <p className="hint small">
-        The CLI auto-detects your AI client (Claude, Cursor, VS Code, Kiro) and
+        Prefer a pre-built binary? Grab one from{" "}
+        <a
+          href="https://github.com/hmain/cainban/releases/latest"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          GitHub Releases
+        </a>
+        . The CLI auto-detects your AI client (Claude, Cursor, VS Code, Kiro) and
         writes the config for you.
       </p>
     </section>
