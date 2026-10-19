@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="168" height="20" role="img" aria-label="Connect with cainban">
+  <title>Connect with cainban</title>
+  <linearGradient id="s" x2="0" y2="100%">
+    <stop offset="0" stop-color="#fff" stop-opacity=".12"/>
+    <stop offset="1" stop-opacity=".12"/>
+  </linearGradient>
+  <clipPath id="r"><rect width="168" height="20" rx="4" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="98" height="20" fill="#0f1116"/>
+    <rect x="98" width="70" height="20" fill="#2563eb"/>
+    <rect width="168" height="20" fill="url(#s)"/>
+  </g>
+  <g transform="translate(8 5.5)">
+    <rect x="0" y="0" width="2.4" height="9" rx="0.7" fill="#4c8bf5"/>
+    <rect x="3.6" y="0" width="2.4" height="6" rx="0.7" fill="#9aa2b1"/>
+    <rect x="7.2" y="0" width="2.4" height="4" rx="0.7" fill="#4cd07d"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="60" y="15" fill="#010101" fill-opacity=".3">Connect with</text>
+    <text x="60" y="14">Connect with</text>
+    <text x="133" y="15" fill="#010101" fill-opacity=".3">cainban</text>
+    <text x="133" y="14">cainban</text>
+  </g>
+</svg>

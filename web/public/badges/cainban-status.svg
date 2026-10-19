@@ -1,0 +1,33 @@
+<!--
+  cainban-status.svg — dynamic status badge TEMPLATE.
+
+  This static file is the fallback rendering. To serve a live board count,
+  have an endpoint return this SVG with the two __STATUS__ placeholders and the
+  message-rect width (the `width="56"` on the #msg rect and the overall svg
+  `width`) recomputed from the status string (~6.5px per character + padding).
+  Example status strings: "3 in progress", "12 tasks", "idle".
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="110" height="20" role="img" aria-label="cainban: board">
+  <title>cainban: board</title>
+  <linearGradient id="s" x2="0" y2="100%">
+    <stop offset="0" stop-color="#fff" stop-opacity=".12"/>
+    <stop offset="1" stop-opacity=".12"/>
+  </linearGradient>
+  <clipPath id="r"><rect width="110" height="20" rx="4" fill="#fff"/></clipPath>
+  <g clip-path="url(#r)">
+    <rect width="54" height="20" fill="#0f1116"/>
+    <rect id="msg" x="54" width="56" height="20" fill="#4cd07d"/>
+    <rect width="110" height="20" fill="url(#s)"/>
+  </g>
+  <g transform="translate(6 5.5)">
+    <rect x="0" y="0" width="2.2" height="9" rx="0.7" fill="#4c8bf5"/>
+    <rect x="3.4" y="0" width="2.2" height="6" rx="0.7" fill="#9aa2b1"/>
+    <rect x="6.8" y="0" width="2.2" height="4" rx="0.7" fill="#4cd07d"/>
+  </g>
+  <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
+    <text x="34" y="15" fill="#010101" fill-opacity=".3">cainban</text>
+    <text x="34" y="14">cainban</text>
+    <text x="82" y="15" fill="#010101" fill-opacity=".3">board</text>
+    <text x="82" y="14">board</text>
+  </g>
+</svg>
