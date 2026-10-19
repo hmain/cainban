@@ -1183,3 +1183,81 @@ dialog.task-detail::backdrop {
   border-radius: 4px;
   font-size: 0.85em;
 }
+
+
+/* ------------------------------------------------------------------ */
+/* Enhanced Activity Feed (Phase 7: agent/human distinction)           */
+/* ------------------------------------------------------------------ */
+
+.activity-filter {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0.75rem 0;
+  flex-wrap: wrap;
+}
+
+.activity-filter-btn {
+  background: var(--bg-inset);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.activity-filter-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.activity-filter-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.activity-filter-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Activity item with actor icon */
+.activity-item {
+  grid-template-columns: auto auto 1fr;
+  grid-template-areas:
+    "icon badge body"
+    "icon badge meta";
+}
+
+.activity-actor-icon {
+  grid-area: icon;
+  font-size: 1.1rem;
+  align-self: center;
+}
+
+.activity-item.agent {
+  border-left: 3px solid var(--accent);
+}
+
+.activity-item.human {
+  border-left: 3px solid var(--muted);
+}
+
+/* Action-specific badge colors */
+.activity-badge.activity-deleted {
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.activity-badge.activity-restored {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.activity-badge.activity-linked,
+.activity-badge.activity-unlinked {
+  color: var(--accent);
+  border-color: var(--accent);
+}
