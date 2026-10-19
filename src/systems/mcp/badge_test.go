@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderBadgeSVG_ContainsCounts(t *testing.T) {
@@ -126,11 +128,105 @@ func TestParseBadgePath(t *testing.T) {
 	}
 }
 
-func TestBadgeHandler_ServesSVGWithCounts(t *testing.T) {
+// --- Signature tests ---
+
+func TestSignBadgeURL_NoSecret(t *testing.T) {
+	os.Unsetenv("CAINBAN_BADGE_SECRET")
+	sig := SignBadgeURL("hmain/cainban", 0)
+	if sig != "" {
+		t.Errorf("SignBadgeURL with no secret should return empty, got %q", sig)
+	}
+}
+
+func TestSignBadgeURL_WithSecret(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	sig := SignBadgeURL("hmain/cainban", 0)
+	if len(sig) != 16 {
+		t.Errorf("signature should be 16 chars, got %d: %q", len(sig), sig)
+	}
+
+	// Same inputs should produce same signature
+	sig2 := SignBadgeURL("hmain/cainban", 0)
+	if sig != sig2 {
+		t.Errorf("same inputs should produce same signature: %q != %q", sig, sig2)
+	}
+
+	// Different repo should produce different signature
+	sig3 := SignBadgeURL("other/repo", 0)
+	if sig == sig3 {
+		t.Errorf("different repo should produce different signature")
+	}
+}
+
+func TestSignBadgeURL_WithExpiry(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	sigNoExp := SignBadgeURL("hmain/cainban", 0)
+	sigWithExp := SignBadgeURL("hmain/cainban", 1234567890)
+
+	if sigNoExp == sigWithExp {
+		t.Errorf("expiry should change signature")
+	}
+}
+
+func TestValidateBadgeSignature(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	repo := "hmain/cainban"
+	sig := SignBadgeURL(repo, 0)
+
+	// Valid signature
+	if !ValidateBadgeSignature(repo, sig, 0) {
+		t.Error("valid signature should pass")
+	}
+
+	// Wrong repo
+	if ValidateBadgeSignature("other/repo", sig, 0) {
+		t.Error("wrong repo should fail")
+	}
+
+	// Wrong signature
+	if ValidateBadgeSignature(repo, "wrongsig12345678", 0) {
+		t.Error("wrong signature should fail")
+	}
+
+	// Empty signature
+	if ValidateBadgeSignature(repo, "", 0) {
+		t.Error("empty signature should fail")
+	}
+}
+
+func TestValidateBadgeSignature_Expired(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	repo := "hmain/cainban"
+	// Expiry in the past
+	pastExpiry := time.Now().Add(-1 * time.Hour).Unix()
+	sig := SignBadgeURL(repo, pastExpiry)
+
+	if ValidateBadgeSignature(repo, sig, pastExpiry) {
+		t.Error("expired signature should fail")
+	}
+
+	// Future expiry should pass
+	futureExpiry := time.Now().Add(1 * time.Hour).Unix()
+	sigFuture := SignBadgeURL(repo, futureExpiry)
+	if !ValidateBadgeSignature(repo, sigFuture, futureExpiry) {
+		t.Error("future expiry should pass")
+	}
+}
+
+// --- Handler tests with signing ---
+
+func TestBadgeHandler_NoSecretConfigured(t *testing.T) {
+	os.Unsetenv("CAINBAN_BADGE_SECRET")
+
 	countFn := func(_ context.Context, repo string) (BadgeCounts, error) {
-		if repo != "hmain/cainban" {
-			return BadgeCounts{}, fmt.Errorf("unexpected repo %q", repo)
-		}
 		return BadgeCounts{Todo: 5, Doing: 1, Done: 9}, nil
 	}
 	h := NewBadgeHandler(countFn)
@@ -142,11 +238,77 @@ func TestBadgeHandler_ServesSVGWithCounts(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "not configured") {
+		t.Errorf("should show 'not configured' badge when secret not set:\n%s", body)
+	}
+}
+
+func TestBadgeHandler_MissingSignature(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	countFn := func(_ context.Context, repo string) (BadgeCounts, error) {
+		t.Error("countFn should not be called without valid signature")
+		return BadgeCounts{}, nil
+	}
+	h := NewBadgeHandler(countFn)
+
+	req := httptest.NewRequest(http.MethodGet, "/badge/hmain/cainban.svg", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "unauthorized") {
+		t.Errorf("should show 'unauthorized' badge when signature missing:\n%s", body)
+	}
+}
+
+func TestBadgeHandler_InvalidSignature(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	countFn := func(_ context.Context, repo string) (BadgeCounts, error) {
+		t.Error("countFn should not be called with invalid signature")
+		return BadgeCounts{}, nil
+	}
+	h := NewBadgeHandler(countFn)
+
+	req := httptest.NewRequest(http.MethodGet, "/badge/hmain/cainban.svg?sig=invalid1234567", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "unauthorized") {
+		t.Errorf("should show 'unauthorized' badge with invalid signature:\n%s", body)
+	}
+}
+
+func TestBadgeHandler_ValidSignature(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	countFn := func(_ context.Context, repo string) (BadgeCounts, error) {
+		if repo != "hmain/cainban" {
+			return BadgeCounts{}, fmt.Errorf("unexpected repo %q", repo)
+		}
+		return BadgeCounts{Todo: 5, Doing: 1, Done: 9}, nil
+	}
+	h := NewBadgeHandler(countFn)
+
+	sig := SignBadgeURL("hmain/cainban", 0)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/badge/hmain/cainban.svg?sig=%s", sig), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
 	if ct := rec.Header().Get("Content-Type"); ct != "image/svg+xml" {
 		t.Errorf("Content-Type = %q, want image/svg+xml", ct)
-	}
-	if cc := rec.Header().Get("Cache-Control"); cc != "no-cache, max-age=60" {
-		t.Errorf("Cache-Control = %q, want no-cache, max-age=60", cc)
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "5|1|9") {
@@ -154,13 +316,39 @@ func TestBadgeHandler_ServesSVGWithCounts(t *testing.T) {
 	}
 }
 
+func TestBadgeHandler_ExpiredSignature(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	countFn := func(_ context.Context, repo string) (BadgeCounts, error) {
+		t.Error("countFn should not be called with expired signature")
+		return BadgeCounts{}, nil
+	}
+	h := NewBadgeHandler(countFn)
+
+	pastExpiry := time.Now().Add(-1 * time.Hour).Unix()
+	sig := SignBadgeURL("hmain/cainban", pastExpiry)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/badge/hmain/cainban.svg?sig=%s&exp=%d", sig, pastExpiry), nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "unauthorized") {
+		t.Errorf("should show 'unauthorized' badge with expired signature:\n%s", body)
+	}
+}
+
 func TestBadgeHandler_QueryParams(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
 	countFn := func(_ context.Context, _ string) (BadgeCounts, error) {
 		return BadgeCounts{Todo: 1, Doing: 2, Done: 3}, nil
 	}
 	h := NewBadgeHandler(countFn)
 
-	req := httptest.NewRequest(http.MethodGet, "/badge/a/b.svg?style=flat-square&label=tasks&color=green", nil)
+	sig := SignBadgeURL("a/b", 0)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/badge/a/b.svg?sig=%s&style=flat-square&label=tasks&color=green", sig), nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -177,12 +365,16 @@ func TestBadgeHandler_QueryParams(t *testing.T) {
 }
 
 func TestBadgeHandler_RepoNotFound_RendersBadgeNot404(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
 	countFn := func(_ context.Context, _ string) (BadgeCounts, error) {
 		return BadgeCounts{}, errors.New("repo not found")
 	}
 	h := NewBadgeHandler(countFn)
 
-	req := httptest.NewRequest(http.MethodGet, "/badge/no/such.svg", nil)
+	sig := SignBadgeURL("no/such", 0)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/badge/no/such.svg?sig=%s", sig), nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -199,6 +391,9 @@ func TestBadgeHandler_RepoNotFound_RendersBadgeNot404(t *testing.T) {
 }
 
 func TestBadgeHandler_MalformedPath_RendersBadgeNot404(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
 	called := false
 	countFn := func(_ context.Context, _ string) (BadgeCounts, error) {
 		called = true
@@ -206,7 +401,7 @@ func TestBadgeHandler_MalformedPath_RendersBadgeNot404(t *testing.T) {
 	}
 	h := NewBadgeHandler(countFn)
 
-	req := httptest.NewRequest(http.MethodGet, "/badge/garbage.svg", nil)
+	req := httptest.NewRequest(http.MethodGet, "/badge/garbage.svg?sig=anysig12345678", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 

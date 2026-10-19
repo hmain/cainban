@@ -2,14 +2,70 @@ package mcp
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/store"
 	"github.com/hmain/cainban/src/systems/task"
 )
+
+// Badge URL Signing
+//
+// To prevent unauthorized enumeration of repos and exposure of task counts,
+// badge URLs must include a valid signature. Only authorized users (via the
+// create_badge_url MCP tool) can generate valid signatures.
+//
+// URL format: /badge/{owner}/{repo}.svg?sig={signature}&exp={expiry}
+// - sig: HMAC-SHA256(secret, repo+exp) hex-encoded, first 16 chars
+// - exp: Unix timestamp when signature expires (optional, default: no expiry)
+//
+// The signing secret comes from CAINBAN_BADGE_SECRET env var. If unset,
+// badge signing is disabled and all badges return "not configured".
+
+// badgeSecret returns the HMAC secret for badge URL signing, or empty if unset.
+func badgeSecret() string {
+	return os.Getenv("CAINBAN_BADGE_SECRET")
+}
+
+// SignBadgeURL generates a signature for a badge URL. repo must be normalized.
+// expiry is a Unix timestamp; 0 means no expiry.
+func SignBadgeURL(repo string, expiry int64) string {
+	secret := badgeSecret()
+	if secret == "" {
+		return ""
+	}
+	msg := repo
+	if expiry > 0 {
+		msg = fmt.Sprintf("%s:%d", repo, expiry)
+	}
+	h := hmac.New(sha256.New, []byte(secret))
+	h.Write([]byte(msg))
+	return hex.EncodeToString(h.Sum(nil))[:16] // truncate to 16 chars
+}
+
+// ValidateBadgeSignature checks if sig is valid for the given repo and expiry.
+func ValidateBadgeSignature(repo, sig string, expiry int64) bool {
+	secret := badgeSecret()
+	if secret == "" {
+		return false // signing not configured
+	}
+	if sig == "" {
+		return false
+	}
+	// Check expiry
+	if expiry > 0 && time.Now().Unix() > expiry {
+		return false // expired
+	}
+	expected := SignBadgeURL(repo, expiry)
+	return hmac.Equal([]byte(sig), []byte(expected))
+}
 
 // BadgeCounts is the per-status task tally a status badge renders. It is the
 // only data the badge endpoint exposes about a board — three integers, never a
@@ -197,13 +253,16 @@ func roundUp(f float64) int {
 // on, so the handler can be tested without a real store.
 type CountFunc func(ctx context.Context, repo string) (BadgeCounts, error)
 
-// NewBadgeHandler returns the PUBLIC (no-auth) badge HTTP handler. It parses
-// owner/repo from the request path, fetches counts via countFn, and writes a
-// shields.io-style SVG. A repo that cannot be read renders a "not found" badge
-// with HTTP 200 (so an <img> embed still shows something) rather than a 404.
+// NewBadgeHandler returns the PUBLIC badge HTTP handler with signature validation.
+// It parses owner/repo from the request path, validates the ?sig= parameter,
+// fetches counts via countFn, and writes a shields.io-style SVG.
 //
-// The handler is intentionally store-agnostic: NewStatelessBadgeCounter wires
-// the real DynamoDB/SQLite-backed counter, while tests pass a stub.
+// Security: Without a valid signature, the handler returns a generic "unauthorized"
+// badge (HTTP 200 so embeds degrade gracefully). This prevents:
+// - Repo enumeration (can't probe which repos exist)
+// - Activity inference (can't see task counts without a signed URL)
+//
+// Signed URLs are generated via the create_badge_url MCP tool (requires auth).
 func NewBadgeHandler(countFn CountFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -217,6 +276,8 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		style := q.Get("style")
 		color := q.Get("color")
 		label := q.Get("label")
+		sig := q.Get("sig")
+		expStr := q.Get("exp")
 		if strings.TrimSpace(label) == "" {
 			label = defaultBadgeLabel
 		}
@@ -230,7 +291,28 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		if err != nil {
 			// Malformed path: still a 200 SVG so an embed degrades gracefully.
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(RenderBadgeSVG(label, BadgeCounts{}, style, color)))
+			_, _ = w.Write([]byte(renderUnauthorizedBadge(label, style)))
+			return
+		}
+
+		// Validate signature
+		var expiry int64
+		if expStr != "" {
+			fmt.Sscanf(expStr, "%d", &expiry)
+		}
+		
+		// Check if signing is configured
+		if badgeSecret() == "" {
+			// Signing not configured - return "not configured" badge
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(renderNotConfiguredBadge(label, style)))
+			return
+		}
+		
+		if !ValidateBadgeSignature(repo, sig, expiry) {
+			// Invalid or missing signature
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(renderUnauthorizedBadge(label, style)))
 			return
 		}
 
@@ -251,8 +333,24 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 // renderNotFoundBadge renders a gray "not found" badge for a repo that cannot
 // be read. It reuses the label half and shows "not found" in the message half.
 func renderNotFoundBadge(label, style string) string {
+	return renderErrorBadge(label, "not found", "#9f9f9f", style)
+}
+
+// renderUnauthorizedBadge renders a red "unauthorized" badge when the signature
+// is missing or invalid.
+func renderUnauthorizedBadge(label, style string) string {
+	return renderErrorBadge(label, "unauthorized", "#e05d44", style)
+}
+
+// renderNotConfiguredBadge renders an orange badge when CAINBAN_BADGE_SECRET
+// is not set (signing not configured).
+func renderNotConfiguredBadge(label, style string) string {
+	return renderErrorBadge(label, "not configured", "#fe7d37", style)
+}
+
+// renderErrorBadge renders a badge with the given error message and color.
+func renderErrorBadge(label, msg, color, style string) string {
 	st := resolveStyle(style)
-	msg := "not found"
 	labelW := roundUp(textWidth(label))
 	msgW := roundUp(textWidth(msg))
 	total := labelW + msgW
@@ -270,7 +368,7 @@ func renderNotFoundBadge(label, style string) string {
   <clipPath id="r"><rect width="%d" height="20" rx="%s" fill="#fff"/></clipPath>
   <g clip-path="url(#r)">
     <rect width="%d" height="20" fill="#555"/>
-    <rect x="%d" width="%d" height="20" fill="#9f9f9f"/>
+    <rect x="%d" width="%d" height="20" fill="%s"/>
     <rect width="%d" height="20" fill="url(#s)"/>
   </g>
   <g fill="#fff" text-anchor="middle" font-family="Verdana,Geneva,DejaVu Sans,sans-serif" font-size="11">
@@ -285,7 +383,7 @@ func renderNotFoundBadge(label, style string) string {
 		st.gradTop, st.gradBottom,
 		total, st.radius,
 		labelW,
-		labelW, msgW,
+		labelW, msgW, color,
 		total,
 		labelX, esc,
 		labelX, esc,

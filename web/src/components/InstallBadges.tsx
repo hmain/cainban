@@ -141,6 +141,9 @@ export function InstallBadges({
 
   // The dynamic status badge is per-repo and lives on the MCP API, so render it
   // only when both a repo and an MCP origin are known.
+  // Note: The actual badge URL requires a signature - this preview shows the
+  // base URL format; users must generate signed URLs via the create_badge_url
+  // MCP tool for README embedding.
   const dyn =
     repo && mcpBase
       ? dynamicBadgeUrls(base, mcpBase, repo)
@@ -158,34 +161,28 @@ export function InstallBadges({
           </div>
           <p className="hint small">
             Live <code>todo|doing|done</code> counts for{" "}
-            <code>{repo}</code>, served by the MCP API. Supports{" "}
-            <code>?style=</code>, <code>?label=</code> and <code>?color=</code>.
+            <code>{repo}</code>. <strong>Requires a signed URL</strong> — use
+            the <code>create_badge_url</code> MCP tool to generate embeddable
+            URLs. Supports <code>?style=</code>, <code>?label=</code> and{" "}
+            <code>?color=</code> customization.
           </p>
 
           <div className="badge-snippet">
-            <span className="badge-snippet-label">Markdown</span>
+            <span className="badge-snippet-label">Generate via MCP</span>
             <code className="badge-snippet-code">
-              {markdownSnippet("cainban live board status", dyn.img, dyn.link)}
+              {`{ "name": "create_badge_url", "arguments": { "repo": "${repo}" } }`}
             </code>
             <CopyButton
-              text={markdownSnippet(
-                "cainban live board status",
-                dyn.img,
-                dyn.link,
-              )}
-              label="Markdown"
+              text={`{ "name": "create_badge_url", "arguments": { "repo": "${repo}" } }`}
+              label="MCP call"
             />
           </div>
 
           <div className="badge-snippet">
-            <span className="badge-snippet-label">HTML</span>
+            <span className="badge-snippet-label">URL format (unsigned preview)</span>
             <code className="badge-snippet-code">
-              {htmlSnippet("cainban live board status", dyn.img, dyn.link)}
+              {dyn.img}?sig=YOUR_SIGNATURE
             </code>
-            <CopyButton
-              text={htmlSnippet("cainban live board status", dyn.img, dyn.link)}
-              label="HTML"
-            />
           </div>
         </section>
       )}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"strings"
@@ -52,7 +53,33 @@ type Server struct {
 	// (ServeHTTP). It is nil on the unauthenticated loopback dev path, where
 	// there is no token to validate and the WS route is simply not mounted.
 	wsResolver *auth.Resolver
+	// broadcaster, when set (SetBroadcaster), fans activity events out over an
+	// EXTERNAL transport instead of (well, in addition to) the in-process hub.
+	// It is how the MCP Lambda — which has no persistent WebSocket server —
+	// pushes updates to API Gateway WebSocket connections via the API Gateway
+	// Management API. It is nil on the long-running-server path, where the
+	// in-process hub does the fan-out. See SetBroadcaster.
+	broadcaster ActivityBroadcaster
 }
+
+// ActivityBroadcaster fans a single activity event out to the real-time clients
+// watching a repo over whatever transport the deployment uses. The in-process
+// hub is the default (long-running server); the MCP Lambda supplies an
+// API-Gateway-Management-API implementation (src/systems/mcp/wsconn) so a
+// serverless deployment pushes the same frames. It is best-effort observability:
+// an error is logged by the broadcaster, never surfaced to the tool call.
+type ActivityBroadcaster interface {
+	// Broadcast delivers one activity event to the connections watching repo.
+	// `event` is the serialized wire activity (activityToWS output); the
+	// implementation marshals the standard { "type":"event", "event":... } frame.
+	Broadcast(ctx context.Context, repo string, event interface{}) (int, error)
+}
+
+// SetBroadcaster installs an external activity broadcaster (e.g. the API Gateway
+// WebSocket broadcaster on Lambda). When set, broadcastActivity routes through
+// it; when nil, the in-process hub is used. Safe to call once at server
+// construction before any request is served.
+func (s *Server) SetBroadcaster(b ActivityBroadcaster) { s.broadcaster = b }
 
 // New creates a new stateless cainban MCP server.
 //
@@ -181,6 +208,17 @@ func (s *Server) HandlerWithAuthChallenge(resolver *auth.Resolver, resourceMetad
 	return AuthMiddlewareWithChallenge(resolver, resourceMetadataURL, s.Handler())
 }
 
+// HandlerWithWidgetAuth is HandlerWithAuthChallenge extended with the
+// READ-ONLY widget-token path (see auth_middleware.go). A request whose bearer
+// token is a `wt_` widget token is validated by this server's HMAC secret
+// (CAINBAN_WIDGET_SECRET), resolves to a read-only single-repo tenant, and may
+// invoke only the read tools; a user JWT is handled exactly as
+// HandlerWithAuthChallenge. This is the public Lambda entrypoint so the same
+// endpoint serves both full-access agents and embeddable read-only widgets.
+func (s *Server) HandlerWithWidgetAuth(resolver *auth.Resolver, resourceMetadataURL string) http.Handler {
+	return AuthMiddlewareWithWidget(resolver, resourceMetadataURL, s.Handler())
+}
+
 // SetWSResolver enables the authenticated real-time WebSocket endpoint on the
 // long-running HTTP server (ServeHTTP) by supplying the signature-first auth
 // resolver used to validate the token in each WS auth frame. Leave it unset for
@@ -236,6 +274,16 @@ func (s *Server) recordActivity(ctx context.Context, ts store.TaskStore, ev task
 func (s *Server) broadcastActivity(ctx context.Context, ev task.ActivityEvent) {
 	repo := repoFromCtx(ctx)
 	if repo == "" {
+		return
+	}
+	// On a serverless deployment the external broadcaster (API Gateway
+	// WebSocket) owns the fan-out; on the long-running server the in-process hub
+	// does. They are mutually exclusive by deployment, so prefer the external
+	// one when installed and fall back to the hub otherwise.
+	if s.broadcaster != nil {
+		if _, err := s.broadcaster.Broadcast(ctx, repo, activityToWS(ev)); err != nil {
+			log.Printf("cainban: activity broadcast for %s: %v", repo, err)
+		}
 		return
 	}
 	s.hub.Broadcast(repo, ev)
@@ -596,6 +644,30 @@ func (s *Server) registerTools(mcpServer *mcp.Server) {
 		Description: "List every task link on the board (both directions), in board-scoped task ids. Use to render the dependency graph.",
 		Annotations: readOnly("List links"),
 	}, s.handleListLinks)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "create_widget_token",
+		Description: "Mint a READ-ONLY, repo-scoped bearer token for the embeddable board widget. The token can call only the read tools (list_tasks, get_task, list_activity) and is scoped to one repo. Returns the token string ONCE (store it); its metadata is kept for revocation.",
+		Annotations: writer("Create widget token", false /*idempotent — mints a new token each call*/, false /*destructive*/),
+	}, s.handleCreateWidgetToken)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "list_widget_tokens",
+		Description: "List the widget tokens for a repo you are authorized for, with their id, timestamps and revoked/expired state.",
+		Annotations: readOnly("List widget tokens"),
+	}, s.handleListWidgetTokens)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "revoke_widget_token",
+		Description: "Revoke a widget token by id so it can no longer read the board. Only the repo owner or the token's creator may revoke it.",
+		Annotations: writer("Revoke widget token", true /*idempotent*/, true /*destructive*/),
+	}, s.handleRevokeWidgetToken)
+
+	mcp.AddTool(mcpServer, &mcp.Tool{
+		Name:        "create_badge_url",
+		Description: "Generate a signed badge URL for embedding in README files. The signature prevents unauthorized enumeration of repos and task counts. Returns the full URL including signature; the URL expires after the given duration (default: 30 days, max: 1 year).",
+		Annotations: readOnly("Create badge URL"),
+	}, s.handleCreateBadgeURL)
 }
 
 // ptrBool returns a pointer to b, for the SDK annotation fields that are
@@ -637,6 +709,28 @@ func actorFromCtx(ctx context.Context) string {
 		return t.Actor
 	}
 	return ""
+}
+
+// isReadOnlyTenant reports whether the request's tenant is read-only (a widget
+// token). A read-only tenant may invoke only the read tools; every write
+// handler calls readOnlyToolDenied first as defense in depth behind the HTTP
+// edge gate (auth_middleware.go), so a write is blocked even on a path that did
+// not go through that gate.
+func isReadOnlyTenant(ctx context.Context) bool {
+	if t, ok := tenantFromContext(ctx); ok && t != nil {
+		return t.ReadOnly
+	}
+	return false
+}
+
+// readOnlyToolDenied returns an MCP tool error result when the request's tenant
+// is read-only, or nil when the write may proceed. Write handlers return it
+// early: `if r := readOnlyToolDenied(ctx); r != nil { return r, nil, nil }`.
+func readOnlyToolDenied(ctx context.Context) *mcp.CallToolResult {
+	if isReadOnlyTenant(ctx) {
+		return toolError("this is a read-only token; write operations are not permitted")
+	}
+	return nil
 }
 
 // repoFromCtx returns the resolved, AUTHORIZED repo for the request, or "" when
@@ -808,6 +902,9 @@ type ListLinksArgs struct {
 // Tool handlers. Each resolves its board database per request.
 
 func (s *Server) handleCreateTask(ctx context.Context, req *mcp.CallToolRequest, args CreateTaskArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
@@ -920,6 +1017,9 @@ func (s *Server) handleListTasks(ctx context.Context, req *mcp.CallToolRequest, 
 }
 
 func (s *Server) handleUpdateTaskStatus(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskStatusArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	if !task.IsValidStatus(args.Status) {
 		return toolError("invalid status %q; valid values are todo, doing, done", args.Status), nil, nil
 	}
@@ -1037,6 +1137,9 @@ func (s *Server) handleGetTask(ctx context.Context, req *mcp.CallToolRequest, ar
 }
 
 func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskPriorityArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	if !task.IsValidPriority(args.Priority) {
 		return toolError("invalid priority; valid values are none, low, medium, high, critical (or 0-4)"), nil, nil
 	}
@@ -1087,6 +1190,9 @@ func (s *Server) handleUpdateTaskPriority(ctx context.Context, req *mcp.CallTool
 }
 
 func (s *Server) handleUpdateTask(ctx context.Context, req *mcp.CallToolRequest, args UpdateTaskArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
@@ -1428,6 +1534,9 @@ func (s *Server) handleListActivity(ctx context.Context, req *mcp.CallToolReques
 // and its links. A missing task is an EXPECTED outcome returned as an isError
 // tool result, not a transport error, so the model can recover.
 func (s *Server) handleDeleteTask(ctx context.Context, req *mcp.CallToolRequest, args DeleteTaskArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
@@ -1477,6 +1586,9 @@ func (s *Server) handleDeleteTask(ctx context.Context, req *mcp.CallToolRequest,
 // by board task id and resolved through the store's own RestoreTask, which
 // no-ops cleanly on a task that was never deleted.
 func (s *Server) handleRestoreTask(ctx context.Context, req *mcp.CallToolRequest, args RestoreTaskArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	taskSystem, closeFn, err := s.resolveTaskSystemForRepo(ctx, "", args.Repo)
 	if err != nil {
 		return nil, nil, err
@@ -1547,6 +1659,9 @@ const validLinkTypes = "blocks, blocked_by, related, depends_on"
 
 // handleLinkTasks creates a directional link between two tasks.
 func (s *Server) handleLinkTasks(ctx context.Context, req *mcp.CallToolRequest, args LinkTasksArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	if !task.IsValidLinkType(args.LinkType) {
 		return toolError("invalid link type %q; valid values are %s", args.LinkType, validLinkTypes), nil, nil
 	}
@@ -1592,6 +1707,9 @@ func (s *Server) handleLinkTasks(ctx context.Context, req *mcp.CallToolRequest, 
 
 // handleUnlinkTasks removes a specific link between two tasks.
 func (s *Server) handleUnlinkTasks(ctx context.Context, req *mcp.CallToolRequest, args UnlinkTasksArgs) (*mcp.CallToolResult, any, error) {
+	if r := readOnlyToolDenied(ctx); r != nil {
+		return r, nil, nil
+	}
 	if !task.IsValidLinkType(args.LinkType) {
 		return toolError("invalid link type %q; valid values are %s", args.LinkType, validLinkTypes), nil, nil
 	}
