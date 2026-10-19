@@ -34,6 +34,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
@@ -67,7 +68,13 @@ func main() {
 	// are DERIVED from env (CAINBAN_MCP_RESOURCE + CAINBAN_AUTH_ISSUER), never
 	// hardcoded.
 	authed := server.HandlerWithAuthChallenge(resolver, resourceMetadataURL())
-	handler := mcp.PublicMux(resourceMetadataConfig(), authServerMetadataConfig(), clientConfigConfig(), authed)
+	// Public, unauthenticated dynamic status badge endpoint
+	// (GET /badge/{owner}/{repo}.svg). It is wired onto the PublicMux alongside
+	// the well-known discovery routes and BEFORE the authed MCP routes, so it
+	// never passes through the JWT authorizer. It exposes only per-status task
+	// counts, nothing else.
+	badge := http.HandlerFunc(server.HandleBadge)
+	handler := mcp.PublicMux(resourceMetadataConfig(), authServerMetadataConfig(), clientConfigConfig(), badge, authed)
 	adapter := httpadapter.NewV2(handler)
 
 	// This Lambda is fronted by an API Gateway v2 HTTP API (payload format 2.0),

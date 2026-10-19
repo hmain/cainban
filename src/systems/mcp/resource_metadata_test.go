@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,7 +108,10 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	m := newMWSigner(t)
 	// A protected handler that must NEVER run unauthenticated.
 	protected := AuthMiddlewareWithChallenge(m.resolver(t), resourceMetaURLFor(testMcpResource), &spyHandler{})
-	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), testClientCfg(), protected)
+	badge := NewBadgeHandler(func(context.Context, string) (BadgeCounts, error) {
+		return BadgeCounts{Todo: 1, Doing: 2, Done: 3}, nil
+	})
+	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), testClientCfg(), badge, protected)
 
 	// (a) well-known: public 200. The Lambda sees the bare route path (API
 	// Gateway routes by path; no stage/host prefix reaches the handler).
@@ -132,6 +136,18 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	mux.ServeHTTP(ccRec, ccReq)
 	if ccRec.Code != http.StatusOK {
 		t.Errorf("client-config status = %d, want 200 (must be public, no auth)", ccRec.Code)
+	}
+
+	// (a4) the dynamic status badge is ALSO public: 200, no token, and never
+	// reaches the auth gate (the spy handler never fires).
+	badgeReq := httptest.NewRequest(http.MethodGet, BadgePathPrefix+"hmain/cainban.svg", nil)
+	badgeRec := httptest.NewRecorder()
+	mux.ServeHTTP(badgeRec, badgeReq)
+	if badgeRec.Code != http.StatusOK {
+		t.Errorf("badge status = %d, want 200 (must be public, no auth)", badgeRec.Code)
+	}
+	if ct := badgeRec.Header().Get("Content-Type"); ct != "image/svg+xml" {
+		t.Errorf("badge Content-Type = %q, want image/svg+xml", ct)
 	}
 
 	// (b) some other route without a token: 401 (auth gate ran).

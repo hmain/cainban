@@ -41,12 +41,16 @@ func listToolsWire(t *testing.T) []*mcp.Tool {
 // (9 -> 10); the CRUD-completeness pass added delete_task, restore_task,
 // search_tasks (10 -> 13); the task-links pass added link_tasks, unlink_tasks,
 // get_task_links (13 -> 16); the dependency-graph pass added the read-only
-// list_links tool (16 -> 17).
+// list_links tool (16 -> 17); the widget-auth feature added create_widget_token,
+// list_widget_tokens, revoke_widget_token (18 -> 21); the signed-badges feature
+// added the read-only create_badge_url tool (21 -> 22).
 func TestToolsListStable(t *testing.T) {
 	want := []string{
 		"change_board",
 		"change_repo",
+		"create_badge_url",
 		"create_task",
+		"create_widget_token",
 		"delete_task",
 		"get_task",
 		"get_task_links",
@@ -55,7 +59,9 @@ func TestToolsListStable(t *testing.T) {
 		"list_boards",
 		"list_links",
 		"list_tasks",
+		"list_widget_tokens",
 		"restore_task",
+		"revoke_widget_token",
 		"search_tasks",
 		"unlink_tasks",
 		"update_task",
@@ -110,15 +116,18 @@ func TestToolInputSchemasPresent(t *testing.T) {
 // tools do not. A new tool added without classification here fails the test.
 func TestToolOutputSchemasPresent(t *testing.T) {
 	schemaTools := map[string]bool{
-		"list_tasks":     true,
-		"get_task":       true,
-		"list_boards":    true,
-		"whoami":         true,
-		"change_repo":    true,
-		"search_tasks":   true,
-		"get_task_links": true,
-		"list_activity":  true,
-		"list_links":     true,
+		"list_tasks":          true,
+		"get_task":            true,
+		"list_boards":         true,
+		"whoami":              true,
+		"change_repo":         true,
+		"search_tasks":        true,
+		"get_task_links":      true,
+		"list_activity":       true,
+		"list_links":          true,
+		"create_widget_token": true,
+		"list_widget_tokens":  true,
+		"create_badge_url":    true,
 	}
 	noSchemaTools := map[string]bool{
 		"create_task":          true,
@@ -130,6 +139,7 @@ func TestToolOutputSchemasPresent(t *testing.T) {
 		"link_tasks":           true,
 		"unlink_tasks":         true,
 		"change_board":         true,
+		"revoke_widget_token":  true,
 	}
 
 	for _, tl := range listToolsWire(t) {
@@ -256,16 +266,18 @@ func schemaHasType(node map[string]any, want string) bool {
 // classified — an unannotated or mis-annotated tool fails here.
 func TestToolAnnotationsClassified(t *testing.T) {
 	readOnlyTools := map[string]bool{
-		"list_tasks":     true,
-		"get_task":       true,
-		"list_boards":    true,
-		"list_activity":  true,
-		"whoami":         true,
-		"change_board":   true,
-		"change_repo":    true,
-		"search_tasks":   true,
-		"get_task_links": true,
-		"list_links":     true,
+		"list_tasks":         true,
+		"get_task":           true,
+		"list_boards":        true,
+		"list_activity":      true,
+		"whoami":             true,
+		"change_board":       true,
+		"change_repo":        true,
+		"search_tasks":       true,
+		"get_task_links":     true,
+		"list_links":         true,
+		"list_widget_tokens": true,
+		"create_badge_url":   true,
 	}
 	writers := map[string]bool{
 		"create_task":          true,
@@ -276,6 +288,8 @@ func TestToolAnnotationsClassified(t *testing.T) {
 		"restore_task":         true,
 		"link_tasks":           true,
 		"unlink_tasks":         true,
+		"create_widget_token":  true,
+		"revoke_widget_token":  true,
 	}
 
 	for _, tl := range listToolsWire(t) {

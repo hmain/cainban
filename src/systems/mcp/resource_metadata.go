@@ -127,7 +127,7 @@ func NewResourceMetadataHandler(cfg ResourceMetadataConfig) http.Handler {
 // (McpApiUrl origin + CAINBAN_AUTH_ISSUER + CAINBAN_HOSTED_UI_DOMAIN +
 // CAINBAN_MCP_CLI_CLIENT_ID). authed is the fully-authenticated MCP handler
 // (Server.HandlerWithAuth).
-func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetadataConfig, clientCfg ClientConfigConfig, authed http.Handler) http.Handler {
+func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetadataConfig, clientCfg ClientConfigConfig, badge http.Handler, authed http.Handler) http.Handler {
 	metadata := NewResourceMetadataHandler(resourceCfg)
 	authServerMeta := NewAuthServerMetadataHandler(authServerCfg)
 	clientConfig := NewClientConfigHandler(clientCfg)
@@ -144,6 +144,15 @@ func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetad
 	// per-client config snippets so an agent (or the connect page) can configure
 	// itself in one fetch instead of hand-assembling JSON.
 	mux.Handle(WellKnownClientConfigPath, clientConfig)
+	// Dynamic status badges — PUBLIC, no auth. A badge exposes only the three
+	// per-status task counts (todo|doing|done) for the repo named in the URL,
+	// nothing else, so README embedding needs no token. Mounted as a subtree so
+	// the "<owner>/<repo>.svg" path tail is matched here and never falls through
+	// to the authenticated MCP handler. A nil badge handler (tests/dev paths
+	// that don't wire it) simply leaves the route unmounted.
+	if badge != nil {
+		mux.Handle(BadgePathPrefix, badge)
+	}
 	// Everything else (root, /{proxy+}, tool calls) goes through the JWT auth +
 	// tenant-resolution gate. "/" is the ServeMux catch-all.
 	//
