@@ -110,7 +110,7 @@ func NewGitHubDeviceStartHandler(cfg GitHubAuthConfig) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 }
 
@@ -153,7 +153,7 @@ func NewGitHubDevicePollHandler(cfg GitHubAuthConfig) http.Handler {
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("Cache-Control", "no-store")
 				// Return 200 with error in body (GitHub's pattern).
-				json.NewEncoder(w).Encode(resp)
+				_ = json.NewEncoder(w).Encode(resp)
 				return
 			}
 			// Other error (network, etc.).
@@ -169,6 +169,6 @@ func NewGitHubDevicePollHandler(cfg GitHubAuthConfig) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
-		json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 }

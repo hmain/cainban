@@ -263,7 +263,6 @@ func bearerToken(req *http.Request) (string, error) {
 	return strings.TrimSpace(h[len(prefix):]), nil
 }
 
-
 // checkGitHubRepoPermission checks if the token has write access to a repo
 // by calling GitHub's /repos/:owner/:repo endpoint and checking the permissions
 // object. This is a fallback when no PermissionChecker is configured.
@@ -289,7 +288,7 @@ func checkGitHubRepoPermission(ctx context.Context, token, repo string) (bool, e
 	if err != nil {
 		return false, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotFound {
 		return false, nil // Repo doesn't exist or no access

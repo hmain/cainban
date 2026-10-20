@@ -60,7 +60,7 @@ func (v *GitHubValidator) Validate(ctx context.Context, token string) (*Identity
 	if err != nil {
 		return nil, unauthenticated("GitHub API unreachable", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(resp.Body)
 
