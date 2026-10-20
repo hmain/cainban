@@ -1,144 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  Navigate,
-  Route,
-  Routes,
-  useParams,
-  useLocation,
-  Link,
-} from "react-router";
-import { signInWithRedirect, signOut, fetchAuthSession } from "aws-amplify/auth";
-import { Hub } from "aws-amplify/utils";
-import { ENTRA_PROVIDER_NAME } from "./amplify";
-import { Board } from "./components/Board";
-import { ActivityFeed } from "./components/ActivityFeed";
+import { Route, Routes, Navigate, Link } from "react-router";
 import { ThemeToggle } from "./components/ThemeToggle";
-import { ConnectPageSimplified as ConnectPage } from "./pages/ConnectPageSimplified";
-import { BadgesPage } from "./pages/BadgesPage";
-import { AdminSetupPage } from "./pages/AdminSetupPage";
 import { GitHubConnectPage } from "./pages/GitHubConnectPage";
-import { RepoRail } from "./shell/RepoRail";
-import { NotConnected } from "./shell/NotConnected";
-import {
-  useConnectedRepos,
-  lastViewedRepo,
-  rememberLastRepo,
-  type ReposState,
-} from "./shell/useConnectedRepos";
+import { BadgesPage } from "./pages/BadgesPage";
 
-type AuthState = "loading" | "signed-out" | "signed-in";
+/**
+ * Cainban SPA - GitHub-only authentication
+ *
+ * This SPA exists for ONE purpose: help users get their MCP config.
+ * The board viewing functionality has been removed since MCP clients
+ * (Claude, Cursor, VS Code) are the primary interface.
+ *
+ * Routes:
+ * - / (home) → redirects to /connect
+ * - /connect → GitHub device flow to get MCP config
+ * - /badges → README badge generator
+ */
 
 export function App() {
-  const [authState, setAuthState] = useState<AuthState>("loading");
-  const [email, setEmail] = useState<string>("");
-
-  const refreshUser = useCallback(async () => {
-    try {
-      // Read the session + email from the ID TOKEN, not fetchUserAttributes()
-      // (which needs the cognito user.admin scope the SPA doesn't request). The
-      // email is a claim in the ID token (email scope + Entra attribute map).
-      const session = await fetchAuthSession();
-      const idToken = session.tokens?.idToken;
-      if (!idToken) {
-        setAuthState("signed-out");
-        return;
-      }
-      const claimEmail = idToken.payload?.email;
-      setEmail(typeof claimEmail === "string" ? claimEmail : "");
-      setAuthState("signed-in");
-    } catch {
-      setAuthState("signed-out");
-    }
-  }, []);
-
-  useEffect(() => {
-    void refreshUser();
-    const unsub = Hub.listen("auth", ({ payload }) => {
-      if (
-        payload.event === "signedIn" ||
-        payload.event === "signInWithRedirect" ||
-        payload.event === "signedOut"
-      ) {
-        void refreshUser();
-      }
-    });
-    return unsub;
-  }, [refreshUser]);
-
-  if (authState === "loading") {
-    return (
-      <main className="container">
-        <p>Loading…</p>
-      </main>
-    );
-  }
-
-  if (authState === "signed-out") {
-    // Handle public routes that dont need auth
-    const path = window.location.pathname;
-    if (path === "/connect/github") {
-      return (
-        <main className="container">
-          <GitHubConnectPage />
-        </main>
-      );
-    }
-
-    return (
-      <main className="container">
-        <header>
-          <h1>cainban</h1>
-          <p className="subtitle">Watch your repos board move as agents work it.</p>
-          <div className="signed-out-theme">
-            <ThemeToggle />
-          </div>
-        </header>
-        <SignedOut />
-      </main>
-    );
-  }
-
-  return <SignedInShell email={email} />;
-}
-
-function SignedOut() {
-  const [error, setError] = useState<string>("");
-  const onSignIn = async () => {
-    setError("");
-    try {
-      await signInWithRedirect({ provider: { custom: ENTRA_PROVIDER_NAME } });
-    } catch (e) {
-      setError(String(e));
-    }
-  };
   return (
-    <section aria-labelledby="signin-heading" className="card">
-      <h2 id="signin-heading">Sign in</h2>
-      <p className="hint">For the web dashboard:</p>
-      <button className="primary" onClick={() => void onSignIn()}>
-        Sign in with Awiant (Entra)
-      </button>
-      {error && (
-        <p role="alert" className="error">
-          {error}
-        </p>
-      )}
-      <hr style={{ margin: "1.5rem 0", border: "none", borderTop: "1px solid var(--color-border)" }} />
-      <p className="hint">For MCP clients (Claude, Cursor, VS Code):</p>
-      <Link to="/connect/github" className="btn">
-        Connect with GitHub →
-      </Link>
-    </section>
-  );
-}
-
-// SignedInShell owns the repo-scoped layout: a header, a persistent repo rail,
-// and the routed main area. The connected-repo set is loaded once here and
-// shared with the rail, the `/` redirect, and the board's not-connected guard.
-function SignedInShell({ email }: { email: string }) {
-  const repos = useConnectedRepos();
-  return (
-    <div className="app-shell">
+    <div className="app-shell simple">
       <header className="app-header">
         <Link className="brand" to="/">
           cainban
@@ -150,101 +30,37 @@ function SignedInShell({ email }: { email: string }) {
           <Link className="link" to="/badges">
             Badges
           </Link>
-          <span className="muted">{email}</span>
           <ThemeToggle />
-          <button className="link" onClick={() => void signOut()}>
-            Sign out
-          </button>
         </div>
       </header>
 
-      <div className="app-body">
-        <RepoRail repos={repos} current={useCurrentRepo()} reload={repos.reload} />
-        <main className="app-main container">
-          <Routes>
-            <Route path="/" element={<HomeRedirect repos={repos} />} />
-            <Route path="/r/:owner/:repo" element={<BoardRoute repos={repos} />} />
-            <Route
-              path="/r/:owner/:repo/activity"
-              element={<ActivityRoute repos={repos} />}
-            />
-            <Route path="/connect" element={<ConnectPage />} />
-            <Route path="/connect/github" element={<GitHubConnectPage />} />
-            <Route path="/badges" element={<BadgesPage />} />
-            <Route path="/admin/setup" element={<AdminSetupPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </main>
-      </div>
+      <main className="app-main container">
+        <Routes>
+          <Route path="/" element={<Navigate to="/connect" replace />} />
+          <Route path="/connect" element={<GitHubConnectPage />} />
+          <Route path="/connect/github" element={<Navigate to="/connect" replace />} />
+          <Route path="/badges" element={<BadgesPage />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </main>
+
+      <footer className="app-footer">
+        <p className="hint">
+          cainban is an MCP server for kanban boards. Connect your AI agent to manage tasks.
+        </p>
+      </footer>
     </div>
   );
 }
 
-// useCurrentRepo reads owner/repo from the active pathname (reactively, via
-// useLocation) so the rail's selected marker updates on navigation. Returns
-// null when not on a board route.
-function useCurrentRepo(): string | null {
-  const { pathname } = useLocation();
-  const m = pathname.match(/^\/r\/([^/]+)\/([^/]+)/);
-  return m ? `${decodeURIComponent(m[1])}/${decodeURIComponent(m[2])}` : null;
-}
-
-// HomeRedirect implements the `/` rule: with repos, go to the last-viewed board
-// (if still connected) else the first repo; with none, go to Connect.
-function HomeRedirect({ repos }: { repos: ReposState }) {
-  if (repos.status === "loading") return <p className="hint">Loading…</p>;
-  if (repos.status === "error") {
-    return (
-      <p role="alert" className="error">
-        Couldn’t load your repos.
-      </p>
-    );
-  }
-  if (repos.repos.length === 0) return <Navigate to="/connect" replace />;
-  const last = lastViewedRepo();
-  const target =
-    last && repos.repos.includes(last) ? last : repos.repos[0];
-  return <Navigate to={`/r/${target}`} replace />;
-}
-
-function isConnected(repos: ReposState, full: string): boolean {
-  return repos.status === "ready" && repos.repos.includes(full);
-}
-
-function BoardRoute({ repos }: { repos: ReposState }) {
-  const { owner, repo } = useParams();
-  const full = owner && repo ? `${owner}/${repo}` : "";
-  // Hook must run unconditionally (before any early return). A "" full is a
-  // harmless no-op write guarded inside the effect.
-  useRememberRepo(full);
-  if (!owner || !repo) return <Navigate to="/" replace />;
-  if (repos.status === "loading") return <p className="hint">Loading board…</p>;
-  if (!isConnected(repos, full)) return <NotConnected repo={full} />;
-  return <Board owner={owner} repo={repo} />;
-}
-
-function ActivityRoute({ repos }: { repos: ReposState }) {
-  const { owner, repo } = useParams();
-  if (!owner || !repo) return <Navigate to="/" replace />;
-  const full = `${owner}/${repo}`;
-  if (repos.status === "loading") return <p className="hint">Loading…</p>;
-  if (!isConnected(repos, full)) return <NotConnected repo={full} />;
+function NotFound() {
   return (
-    <section className="activity-route">
-      <div className="account-row">
-        <h2>{full} — activity</h2>
-        <Link className="link" to={`/r/${full}`}>
-          ← Back to board
-        </Link>
-      </div>
-      <ActivityFeed repo={full} />
+    <section className="card">
+      <h2>Page not found</h2>
+      <p>The page you're looking for doesn't exist.</p>
+      <Link to="/connect" className="btn primary">
+        Go to Connect
+      </Link>
     </section>
   );
-}
-
-// useRememberRepo persists the last-viewed board for the `/` redirect.
-function useRememberRepo(full: string) {
-  useEffect(() => {
-    if (full) rememberLastRepo(full);
-  }, [full]);
 }
