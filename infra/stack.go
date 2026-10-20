@@ -10,7 +10,6 @@ import (
 	"github.com/aws/aws-cdk-go/awscdk/v2/awscognito"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsdynamodb"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awsiam"
-	"github.com/aws/aws-cdk-go/awscdk/v2/awskms"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslambda"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awslogs"
 	"github.com/aws/aws-cdk-go/awscdk/v2/awssecretsmanager"
@@ -54,41 +53,12 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	})
 
-	// --- DynamoDB grants table (Phase 4) ---------------------------------
+	// --- Secrets Manager: GitHub App credentials ----------------------------
 	//
-	// A SEPARATE table from the "cainban" tenant-data table. Grants are keyed by
-	// SUBJECT (PK=USER#<cognitoSub>, SK=GRANT#<owner>/<repo>) — a disjoint
-	// keyspace and a different access path (the pre-token trigger queries by
-	// user; it never touches board/task data). A separate table is chosen over
-	// reusing the single "cainban" table so the pre-token Lambda's IAM can be
-	// scoped to the grants table ARN ALONE (least privilege — a token-minting
-	// trigger structurally cannot read task data), and so PITR/backup boundaries
-	// stay clean per concern. Cost is identical: PAY_PER_REQUEST (on-demand),
-	// zero at rest. Same durability posture as the main table (PITR + RETAIN).
-	// See src/systems/grants for the key design and fallback/fail-closed rules.
-	grantsTable := awsdynamodb.NewTable(stack, jsii.String("GrantsTable"), &awsdynamodb.TableProps{
-		TableName: jsii.String("cainban-grants"),
-		PartitionKey: &awsdynamodb.Attribute{
-			Name: jsii.String("PK"),
-			Type: awsdynamodb.AttributeType_STRING,
-		},
-		SortKey: &awsdynamodb.Attribute{
-			Name: jsii.String("SK"),
-			Type: awsdynamodb.AttributeType_STRING,
-		},
-		BillingMode:   awsdynamodb.BillingMode_PAY_PER_REQUEST,
-		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
-		PointInTimeRecoverySpecification: &awsdynamodb.PointInTimeRecoverySpecification{
-			PointInTimeRecoveryEnabled: jsii.Bool(true),
-		},
-	})
-
-	// --- Secrets Manager: GitHub App credentials (Phase 4, P4.2) ---------
-	//
-	// A PLACEHOLDER secret for the GitHub App's credentials — the App id, OAuth
-	// client id/secret, and RSA PRIVATE KEY that the connect/verify flow (P4.3)
-	// uses to call the GitHub API and prove a principal's access to owner/repo
-	// before a grant is written (see src/systems/github, src/systems/secrets).
+	// The GitHub App credentials secret is used by the MCP Lambda to fetch repo
+	// metadata (e.g., default branch) via the GitHub API. Authorization is now
+	// handled by GitHub-native permission checks (see src/systems/ghperm), so
+	// this secret is only needed for repo metadata lookups, not for grants.
 	//
 	// It is created EMPTY on purpose: NO real secret value lives in code, this
 	// repo, or the synthesized template. After deploy an operator fills it in
@@ -96,15 +66,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	//
 	//	{"app_id":"…","client_id":"…","client_secret":"…","private_key":"-----BEGIN RSA PRIVATE KEY-----\n…"}
 	//
-	// The `generate_string_key`/template here only seeds a well-formed empty
-	// JSON envelope so the secret exists with the right shape; it contains no
-	// credential. RETAIN so a `cdk destroy` never drops an operator-filled key.
-	//
-	// P4.2 only CREATES the secret and wires least-privilege read access ready
-	// for P4.3 — the connect Lambda that consumes it is built in P4.3, not here.
-	// For now the read grant is attached to the existing MCP Lambda's role (the
-	// function that P4.3 extends with the connect routes), scoped to THIS secret
-	// ARN alone.
+	// RETAIN so a `cdk destroy` never drops an operator-filled key.
 	githubAppSecret := awssecretsmanager.NewSecret(stack, jsii.String("GitHubAppSecret"), &awssecretsmanager.SecretProps{
 		SecretName:  jsii.String("cainban/github-app"),
 		Description: jsii.String("cainban GitHub App credentials (Phase 4) — PLACEHOLDER; operator fills app_id/client_id/client_secret/private_key post-deploy. No secret value in code/CDK."),
@@ -446,6 +408,11 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// never invents a grant; it needs no permissions beyond basic CloudWatch
 	// Logs (it reads only the attributes Cognito hands it in the event).
 	//
+	// NOTE: With GitHub-native permissions enabled (CAINBAN_USE_GITHUB_PERMISSIONS=true),
+	// authorization is checked at runtime via the GitHub API (see src/systems/ghperm).
+	// The pre-token trigger still surfaces the GitHub identity (github_user, github_token)
+	// for the resolver, but repo authorization is no longer stored in custom:repos.
+	//
 	// Build the bootstrap into ../.build/pretoken (see `make pretoken`), mirroring
 	// the MCP Lambda's ../.build/lambda asset. Same runtime/arch: provided.al2023
 	// + arm64 + pure-Go bootstrap.
@@ -457,34 +424,15 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		MemorySize:   jsii.Number(128),
 		Timeout:      awscdk.Duration_Seconds(jsii.Number(5)),
 		// Frugality: cap concurrency so a burst of token issuance (or abuse)
-		// cannot fan out Lambda + on-demand DynamoDB cost. This is a fast
-		// per-request trigger; 5 is ample at dev scale.
+		// cannot fan out Lambda cost. This is a fast per-request trigger; 5 is
+		// ample at dev scale.
 		ReservedConcurrentExecutions: jsii.Number(5),
-		// Phase 4: the trigger reads grants from the grants table. Name + region
-		// come from env; the custom:repos attribute remains a read fallback when
-		// the table has nothing for a subject (and if this env were unset the
-		// trigger degrades to the attribute-only path — it never fails token
-		// issuance on missing config).
-		Environment: &map[string]*string{
-			"CAINBAN_GRANTS_TABLE":  grantsTable.TableName(),
-			"CAINBAN_GRANTS_REGION": stack.Region(),
-		},
-		Code: awslambda.Code_FromAsset(jsii.String("../.build/pretoken"), nil),
+		// No DynamoDB access needed — the trigger only reflects Cognito
+		// attributes into token claims. GitHub-native permissions are checked
+		// at request time by the resolver, not at token generation.
+		Environment: &map[string]*string{},
+		Code:        awslambda.Code_FromAsset(jsii.String("../.build/pretoken"), nil),
 	})
-
-	// Least-privilege: the pre-token trigger only READS grants — it issues
-	// GetItem (default_repo META item) + Query (a subject's GRANT# items). Grant
-	// ONLY those two actions, scoped to the grants table ARN alone. It gets NO
-	// write actions and NO access to the "cainban" tenant-data table, so a
-	// token-minting trigger structurally cannot mutate grants or read task data.
-	preTokenFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-		Effect: awsiam.Effect_ALLOW,
-		Actions: jsii.Strings(
-			"dynamodb:GetItem",
-			"dynamodb:Query",
-		),
-		Resources: &[]*string{grantsTable.TableArn()},
-	}))
 
 	// Attach as the pool's PreTokenGeneration trigger. LambdaVersion V2_0 lets
 	// the handler write the overrides to BOTH the ID token AND the ACCESS token
@@ -547,10 +495,13 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			// handler when unset; audience is the app client id.
 			"CAINBAN_AUTH_ISSUER":   issuer,
 			"CAINBAN_AUTH_AUDIENCE": authAudiencesCsv,
-			// Phase 4 (P4.2): the name of the placeholder GitHub App creds
-			// secret. The connect/verify flow (P4.3) loads the App credentials
-			// from this secret at runtime via src/systems/secrets — never from
-			// code or env. Wired now so P4.3 needs no infra change to read it.
+			// GitHub-native permissions: check GitHub API for repo access at
+			// runtime (cached 5 minutes) instead of using token claims.
+			// See src/systems/ghperm and docs/rfc-github-permission-cache.md.
+			"CAINBAN_USE_GITHUB_PERMISSIONS": jsii.String("true"),
+			// GitHub App credentials (App id, OAuth client id/secret, private key)
+			// are loaded at runtime from this Secrets Manager secret for fetching
+			// repo metadata (e.g., default branch). Never from code or env.
 			"CAINBAN_GITHUB_APP_SECRET": githubAppSecret.SecretName(),
 			// Badge and widget signing secrets (HMAC-SHA256). Lambda reads them
 			// from Secrets Manager at startup; the name is passed via env var.
@@ -581,15 +532,12 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Resources: &[]*string{table.TableArn()},
 	}))
 
-	// Phase 4 (P4.2): least-privilege READ of the GitHub App creds secret.
+	// Least-privilege READ of the GitHub App creds secret.
 	// Grant ONLY secretsmanager:GetSecretValue, scoped to THIS secret's ARN
 	// alone — not "secretsmanager:*", not a wildcard resource. This is the one
 	// call src/systems/secrets makes. `Secret.GrantRead` attaches exactly that
 	// (GetSecretValue + DescribeSecret) on this secret ARN to the function's
-	// role; no other secret is reachable. Wired onto the existing MCP Lambda now
-	// so the P4.3 connect flow (hosted on this same function) can load the App
-	// credentials without an infra change; the pre-token trigger is deliberately
-	// NOT granted this (it never touches GitHub).
+	// role; no other secret is reachable.
 	githubAppSecret.GrantRead(fn.Role(), nil)
 
 	// Grant read access to badge and widget signing secrets.
@@ -943,212 +891,6 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
 	})
 
-	// --- Connect API Lambda (Phase 4, P4.3) ------------------------------
-	//
-	// A SEPARATE function from the MCP Lambda. The connect flow has a distinct
-	// job (human OAuth + server-side repo verification + grant writes) and a
-	// distinct IAM surface (Secrets Manager read + grants-table read/WRITE, and
-	// crucially NO access to the "cainban" board/task data table). Keeping it
-	// its own function keeps each function's blast radius and least-privilege
-	// IAM minimal, and lets the connect endpoint be a browser-facing redirect
-	// surface without touching the MCP data path. Same runtime/arch as the other
-	// functions: provided.al2023 + arm64 + pure-Go bootstrap (CGO off — no
-	// SQLite here). Built into ../.build/connect (see `make connect`/`bundles`).
-
-	// KMS customer-managed key that encrypts the user GitHub OAuth REFRESH token
-	// stored on the grants IDENTITY#github item (Option A: /connect/available-repos
-	// mints a short-lived user access token from it at list time). The plaintext
-	// refresh token NEVER lands in DynamoDB — only its KMS ciphertext, bound to
-	// the subject via KMS EncryptionContext. Key rotation is enabled; the connect
-	// Lambda is granted ONLY kms:Encrypt/kms:Decrypt on THIS key (below).
-	connectRefreshKey := awskms.NewKey(stack, jsii.String("ConnectRefreshTokenKey"), &awskms.KeyProps{
-		Alias:             jsii.String("cainban/connect-refresh-token"),
-		Description:       jsii.String("Encrypts the stored GitHub OAuth refresh token for the cainban connect flow (Option A available-repos)."),
-		EnableKeyRotation: jsii.Bool(true),
-		RemovalPolicy:     awscdk.RemovalPolicy_DESTROY,
-	})
-
-	connectFn := awslambda.NewFunction(stack, jsii.String("ConnectFunction"), &awslambda.FunctionProps{
-		FunctionName: jsii.String("cainban-connect"),
-		Runtime:      awslambda.Runtime_PROVIDED_AL2023(),
-		Architecture: awslambda.Architecture_ARM_64(),
-		Handler:      jsii.String("bootstrap"),
-		MemorySize:   jsii.Number(256),
-		Timeout:      awscdk.Duration_Seconds(jsii.Number(30)),
-		// Frugality: the connect API is low-frequency (interactive OAuth +
-		// grant writes), so a small cap prevents any burst from scaling out
-		// GitHub-verify calls and grants-table writes. 5 is ample.
-		ReservedConcurrentExecutions: jsii.Number(5),
-		Environment: &map[string]*string{
-			// Same Cognito pool as the MCP Lambda — the connect API validates
-			// the SAME signature-first JWT before any GitHub/secret/grant action.
-			"CAINBAN_AUTH_ISSUER":   issuer,
-			"CAINBAN_AUTH_AUDIENCE": authAudiencesCsv,
-			// GitHub App credentials (App id, OAuth client id/secret, private
-			// key) are loaded at runtime from this Secrets Manager secret —
-			// never from code or env.
-			"CAINBAN_GITHUB_APP_SECRET": githubAppSecret.SecretName(),
-			// Grants table: the connect API READS and WRITES grants here (the
-			// pre-token trigger only reads). Region for the DynamoDB client.
-			"CAINBAN_GRANTS_TABLE":  grantsTable.TableName(),
-			"CAINBAN_GRANTS_REGION": stack.Region(),
-			// KMS key id used to encrypt/decrypt the stored refresh token
-			// (Option A). Required at cold start — no plaintext-fallback path.
-			"CAINBAN_CONNECT_KMS_KEY_ID": connectRefreshKey.KeyId(),
-			// Optional GitHub App slug so available-repos can pick THIS App's
-			// installation when a user can see several. The App id (from the
-			// secret) is the primary discriminator; this is a secondary hint.
-			"CAINBAN_GITHUB_APP_SLUG": jsii.String(ctxOr("githubAppSlug", "")),
-			// Where the OAuth callback sends the browser after a successful
-			// identity link — set to the connect-page SPA so the user lands back
-			// in the app instead of seeing the raw JSON confirmation. Supplied at
-			// deploy: -c connectSuccessUrl=https://<amplify-app>/ (empty => the
-			// callback returns a JSON {linked:true} confirmation instead).
-			"CAINBAN_CONNECT_SUCCESS_URL": jsii.String(ctxOr("connectSuccessUrl", "")),
-			// GitHub OAuth redirect_uri: the callback URL passed to GitHub's
-			// authorize endpoint so GitHub knows which of the App's registered
-			// callbacks to use. Required when the GitHub App has multiple callback
-			// URLs (e.g. dev + prod). Supplied at deploy:
-			// -c connectCallbackUrl=https://<api-gw>/connect/github/callback
-			// Empty => rely on the App's default callback (single-env only).
-			"CAINBAN_CONNECT_REDIRECT_URI": jsii.String(ctxOr("connectCallbackUrl", "")),
-		},
-		Code: awslambda.Code_FromAsset(jsii.String("../.build/connect"), nil),
-	})
-
-	// Least-privilege DynamoDB: the connect API issues GetItem/Query (read a
-	// subject's grants + linked identity) and PutItem/DeleteItem (write/revoke a
-	// grant, persist the linked identity) on the GRANTS table ONLY. It is
-	// deliberately NOT granted anything on the "cainban" data table — the
-	// connect flow never touches board/task data. UpdateItem is not granted
-	// because the grants store never issues it (item put/delete only).
-	connectFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-		Effect: awsiam.Effect_ALLOW,
-		Actions: jsii.Strings(
-			"dynamodb:GetItem",
-			"dynamodb:Query",
-			"dynamodb:PutItem",
-			"dynamodb:DeleteItem",
-		),
-		Resources: &[]*string{grantsTable.TableArn()},
-	}))
-
-	// Least-privilege secret read: ONLY GetSecretValue (+ DescribeSecret) on the
-	// GitHub App secret ARN alone — the connect Lambda loads the App credentials
-	// at runtime to mint App JWTs, exchange OAuth codes, and call the GitHub API.
-	githubAppSecret.GrantRead(connectFn.Role(), nil)
-
-	// Least-privilege KMS: grant EXACTLY kms:Encrypt + kms:Decrypt on the
-	// refresh-token key ARN alone — the connect Lambda encrypts the stored
-	// refresh token at link time and decrypts it at list time via direct
-	// Encrypt/Decrypt (the token is well under the 4 KB direct-encrypt limit).
-	// GrantEncryptDecrypt would additionally add GenerateDataKey*/ReEncrypt*,
-	// which the code never issues; an explicit two-action statement keeps the
-	// surface to exactly what is used. No key-management actions are granted.
-	connectFn.AddToRolePolicy(awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
-		Effect: awsiam.Effect_ALLOW,
-		Actions: jsii.Strings(
-			"kms:Encrypt",
-			"kms:Decrypt",
-		),
-		Resources: &[]*string{connectRefreshKey.KeyArn()},
-	}))
-
-	// --- API Gateway v2 HTTP API + Cognito JWT authorizer (Connect) ------
-	//
-	// REPLACES the connect Function URL (AuthType AWS_IAM) for the same reason
-	// as the MCP endpoint: the SigV4 signature and the Cognito JWT both want the
-	// Authorization header. The connect API now sits behind an HTTP API with a
-	// managed Cognito JWT authorizer as the DEFAULT — every /connect route
-	// requires `Authorization: Bearer <jwt>` (no SigV4) — with ONE exception:
-	//
-	//   GET /connect/github/callback is AUTHORIZER-EXEMPT. It is a browser
-	//   redirect from GitHub's OAuth (GitHub -> this callback URL) and CANNOT
-	//   carry a Cognito JWT. Its authenticity comes from the HMAC-signed,
-	//   sub-bound, expiring `state` param (see src/systems/connect/state.go +
-	//   handler.go handleCallback): the state is verified with a key derived
-	//   from the App's OAuth client secret and is bound to the sub that started
-	//   the flow. Putting the JWT authorizer on the callback would break the
-	//   browser redirect (GitHub sends no bearer token), so that one route uses
-	//   HttpNoneAuthorizer while every other route inherits the JWT authorizer.
-	//
-	// Issuer + audience are derived from the SAME Cognito constructs as the MCP
-	// authorizer (userPool / userPoolClient) — never hardcoded.
-	connectAuthorizer := awsapigatewayv2authorizers.NewHttpJwtAuthorizer(
-		jsii.String("ConnectJwtAuthorizer"),
-		issuer,
-		&awsapigatewayv2authorizers.HttpJwtAuthorizerProps{
-			AuthorizerName: jsii.String("cainban-connect-jwt"),
-			JwtAudience:    &[]*string{userPoolClient.UserPoolClientId(), spaClient.UserPoolClientId(), mcpCliClient.UserPoolClientId()},
-			IdentitySource: jsii.Strings("$request.header.Authorization"),
-		},
-	)
-
-	connectIntegration := awsapigatewayv2integrations.NewHttpLambdaIntegration(
-		jsii.String("ConnectIntegration"),
-		connectFn,
-		&awsapigatewayv2integrations.HttpLambdaIntegrationProps{
-			PayloadFormatVersion: awsapigatewayv2.PayloadFormatVersion_VERSION_2_0(),
-		},
-	)
-
-	connectAPI := awsapigatewayv2.NewHttpApi(stack, jsii.String("ConnectHttpApi"), &awsapigatewayv2.HttpApiProps{
-		ApiName:           jsii.String("cainban-connect"),
-		Description:       jsii.String("Connect API (Phase 4 P4.3) — HTTP API + Cognito JWT authorizer; /connect/github/callback is authorizer-exempt (HMAC state auth)"),
-		DefaultAuthorizer: connectAuthorizer,
-		CorsPreflight: &awsapigatewayv2.CorsPreflightOptions{
-			AllowOrigins: jsii.Strings("*"),
-			AllowMethods: &[]awsapigatewayv2.CorsHttpMethod{awsapigatewayv2.CorsHttpMethod_ANY},
-			AllowHeaders: jsii.Strings("content-type", "authorization"),
-		},
-	})
-
-	// Authenticated /connect routes — inherit the default JWT authorizer.
-	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
-		Path:        jsii.String("/connect/github/start"),
-		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
-		Integration: connectIntegration,
-	})
-	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
-		Path:        jsii.String("/connect/repo"),
-		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_POST, awsapigatewayv2.HttpMethod_DELETE},
-		Integration: connectIntegration,
-	})
-	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
-		Path:        jsii.String("/connect/repos"),
-		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
-		Integration: connectIntegration,
-	})
-	// Option A: list the repos the signed-in user can access through the App
-	// installation. Cognito-JWT-authed under the SAME default authorizer as the
-	// other authenticated /connect routes (NOT the callback exemption).
-	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
-		Path:        jsii.String("/connect/available-repos"),
-		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
-		Integration: connectIntegration,
-	})
-	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
-		Path:        jsii.String("/connect/app-info"),
-		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
-		Integration: connectIntegration,
-	})
-
-	// The GitHub OAuth callback — EXEMPT from the JWT authorizer. HttpNoneAuthorizer
-	// explicitly removes the default authorizer for this one route. Auth here is
-	// the HMAC-signed sub-bound state param verified inside handleCallback.
-	connectAPI.AddRoutes(&awsapigatewayv2.AddRoutesOptions{
-		Path:        jsii.String("/connect/github/callback"),
-		Methods:     &[]awsapigatewayv2.HttpMethod{awsapigatewayv2.HttpMethod_GET},
-		Integration: connectIntegration,
-		Authorizer:  awsapigatewayv2.NewHttpNoneAuthorizer(),
-	})
-
-	awslogs.NewLogGroup(stack, jsii.String("ConnectLogGroup"), &awslogs.LogGroupProps{
-		LogGroupName:  jsii.String("/aws/lambda/cainban-connect"),
-		Retention:     awslogs.RetentionDays_ONE_MONTH,
-		RemovalPolicy: awscdk.RemovalPolicy_DESTROY,
-	})
-
 	// --- Outputs ----------------------------------------------------------
 	awscdk.NewCfnOutput(stack, jsii.String("McpApiUrl"), &awscdk.CfnOutputProps{
 		Value:       mcpAPI.Url(),
@@ -1161,10 +903,6 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		}),
 		Description: jsii.String("RFC 9728 Protected Resource Metadata (MCP OAuth step a) — PUBLIC (AuthorizationType NONE), returns {resource, authorization_servers, scopes_supported, bearer_methods_supported}. mcpAPI.Url() ends with '/', so this is <McpApiUrl>.well-known/oauth-protected-resource."),
 	})
-	awscdk.NewCfnOutput(stack, jsii.String("ConnectApiUrl"), &awscdk.CfnOutputProps{
-		Value:       connectAPI.Url(),
-		Description: jsii.String("Connect API endpoint (Phase 4 P4.3) — HTTP API + Cognito JWT authorizer; /connect/* require Authorization: Bearer <jwt>. The GitHub App Callback URL is <this>connect/github/callback (authorizer-exempt; HMAC state auth)."),
-	})
 	awscdk.NewCfnOutput(stack, jsii.String("WsApiUrl"), &awscdk.CfnOutputProps{
 		Value:       wsStage.Url(),
 		Description: jsii.String("Real-time WebSocket endpoint the browser connects to (wss://). Connect with ?repo=<owner/repo>&token=<jwt>; the token is validated signature-first at $connect and authorized against its repos claim. The SPA uses this as VITE_WS_URL."),
@@ -1176,14 +914,6 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	awscdk.NewCfnOutput(stack, jsii.String("TableName"), &awscdk.CfnOutputProps{
 		Value:       table.TableName(),
 		Description: jsii.String("DynamoDB table backing cainban"),
-	})
-	awscdk.NewCfnOutput(stack, jsii.String("GrantsTableName"), &awscdk.CfnOutputProps{
-		Value:       grantsTable.TableName(),
-		Description: jsii.String("DynamoDB grants table (Phase 4) — read by the pre-token trigger"),
-	})
-	awscdk.NewCfnOutput(stack, jsii.String("GitHubAppSecretName"), &awscdk.CfnOutputProps{
-		Value:       githubAppSecret.SecretName(),
-		Description: jsii.String("Secrets Manager secret holding GitHub App credentials (Phase 4) — PLACEHOLDER; operator fills post-deploy (see docs/github-app-setup.md)"),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("UserPoolId"), &awscdk.CfnOutputProps{
 		Value:       userPool.UserPoolId(),

@@ -99,6 +99,9 @@ type claims struct {
 	IssuedAt    int64         `json:"iat"`
 	Repos       reposClaim    `json:"repos"`
 	DefaultRepo string        `json:"default_repo"`
+	// GitHub-native auth claims (from Cognito GitHub federation)
+	GitHubUser  string `json:"github_user"`
+	GitHubToken string `json:"github_token"`
 }
 
 // reposClaim decodes the `repos` claim from EITHER of two on-the-wire shapes,
@@ -303,6 +306,8 @@ func (v *Validator) Validate(rawToken string) (*Identity, error) {
 		Email:       c.Email,
 		Repos:       repos,
 		DefaultRepo: defaultRepo,
+		GitHubUser:  strings.TrimSpace(c.GitHubUser),
+		GitHubToken: strings.TrimSpace(c.GitHubToken),
 	}, nil
 }
 
