@@ -23,6 +23,13 @@ func (m *mockGitHubClient) GetRepoPermission(ctx context.Context, userToken, own
 	return m.permission, m.err
 }
 
+func (m *mockGitHubClient) GetCollaboratorPermission(ctx context.Context, appToken, owner, repo, username string) (Permission, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, username+"@"+owner+"/"+repo)
+	return m.permission, m.err
+}
+
 func (m *mockGitHubClient) callCount() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
