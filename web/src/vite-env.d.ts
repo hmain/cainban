@@ -14,8 +14,6 @@ interface ImportMetaEnv {
    * (derived from stack output HostedUiDomain).
    */
   readonly VITE_COGNITO_DOMAIN: string;
-  /** Connect API base URL (stack output ConnectApiUrl), trailing slash ok. */
-  readonly VITE_CONNECT_API: string;
   /** MCP API base URL (stack output McpApiUrl), shown for the client config. */
   readonly VITE_MCP_API: string;
   /**

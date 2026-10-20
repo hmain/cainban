@@ -1,26 +1,17 @@
 import { useState, useCallback, useEffect } from "react";
 import { Link } from "react-router";
 import { MCP_API, MCP_CLI_CLIENT_ID, MCP_OAUTH_REDIRECT_URI } from "../amplify";
-import {
-  connectRepo,
-  listRepos,
-  listAvailableRepos,
-  getAppInstallUrl,
-  type AvailableRepo,
-} from "../connectApi";
+import { getLocalRepos, addLocalRepo, removeLocalRepo } from "../connectApi";
 
 /**
  * ConnectPageSimplified implements Phase 5 of RFC magical-onboarding:
  * a simplified connect page that emphasizes the CLI command and reduces
  * the cognitive load of the manual setup process.
  *
- * Target: ~150 lines (down from 824)
- *
- * Structure:
- * 1. Hero CTA: install the `cainban` binary, then `cainban connect`
- * 2. Install badges (placeholder)
- * 3. Repo connection (simplified)
- * 4. Single expandable for manual setup fallback
+ * With GitHub-native permissions, users don't "connect" repos via an API call.
+ * Instead, they add repos to a local list, and the backend checks GitHub
+ * permissions at request time. This page lets users manage their local repo
+ * list and set up the MCP client.
  */
 export function ConnectPageSimplified() {
   return (
@@ -34,7 +25,7 @@ export function ConnectPageSimplified() {
 
       <HeroCTA />
       <InstallBadges />
-      <RepoConnection />
+      <RepoList />
 
       <details className="card manual-fallback">
         <summary>Manual setup (if the CLI doesn't work)</summary>
@@ -118,122 +109,103 @@ function InstallBadges() {
   );
 }
 
-function RepoConnection() {
-  const [repos, setRepos] = useState<AvailableRepo[]>([]);
-  const [loading, setLoading] = useState(true);
+function RepoList() {
+  const [repos, setRepos] = useState<string[]>([]);
+  const [newRepo, setNewRepo] = useState("");
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
-  const [connecting, setConnecting] = useState<string | null>(null);
-  const [installUrl, setInstallUrl] = useState("");
 
-  const loadRepos = useCallback(async () => {
-    setLoading(true);
-    setError("");
-    try {
-      setInstallUrl(await getAppInstallUrl());
-      const [availableResult, grantedResult] = await Promise.all([
-        listAvailableRepos().catch(() => ({ ok: false, repos: [] as AvailableRepo[], needsLink: false, reason: "" })),
-        listRepos().catch(() => ({ repos: [] as string[], github_login: null })),
-      ]);
-      const grantedSet = new Set(grantedResult.repos);
-      const merged = availableResult.repos.map((r: AvailableRepo) => ({
-        ...r,
-        already_granted: grantedSet.has(r.full_name),
-      }));
-      setRepos(merged);
-    } catch (e) {
-      setError("Couldn't load repos. Make sure you've linked your GitHub identity.");
-    } finally {
-      setLoading(false);
-    }
+  const loadRepos = useCallback(() => {
+    setRepos(getLocalRepos().sort((a, b) => a.localeCompare(b)));
   }, []);
 
   useEffect(() => {
-    void loadRepos();
+    loadRepos();
   }, [loadRepos]);
 
-  const onConnect = async (fullName: string) => {
-    const [owner, repo] = fullName.split("/");
-    setConnecting(fullName);
+  const onAddRepo = (e: React.FormEvent) => {
+    e.preventDefault();
     setError("");
     setSuccess("");
-    try {
-      const result = await connectRepo(owner, repo);
-      if (result.status === 200) {
-        setSuccess(`Connected ${fullName}!`);
-        setRepos((prev) =>
-          prev.map((r) =>
-            r.full_name === fullName ? { ...r, already_granted: true } : r
-          )
-        );
-        window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
-      } else {
-        setError(result.error || `Failed to connect ${fullName}`);
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setConnecting(null);
+
+    const trimmed = newRepo.trim();
+    if (!trimmed) return;
+
+    // Validate format: owner/repo
+    if (!trimmed.includes("/") || trimmed.split("/").length !== 2) {
+      setError("Enter a repo in owner/repo format (e.g., hmain/cainban)");
+      return;
+    }
+
+    if (addLocalRepo(trimmed)) {
+      setSuccess(`Added ${trimmed}. You'll need permission on GitHub to access it.`);
+      setNewRepo("");
+      loadRepos();
+      window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
+    } else {
+      setError(`${trimmed} is already in your list`);
     }
   };
 
-  const connected = repos.filter((r) => r.already_granted);
-  const available = repos.filter((r) => !r.already_granted);
+  const onRemoveRepo = (repo: string) => {
+    setError("");
+    setSuccess("");
+    if (removeLocalRepo(repo)) {
+      loadRepos();
+      window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
+    }
+  };
 
   return (
     <section className="card">
-      <h3>Connected repositories</h3>
-      {loading ? (
-        <p className="hint">Loading...</p>
-      ) : connected.length === 0 ? (
-        <p className="hint">No repos connected yet. Connect one below.</p>
+      <h3>Your repositories</h3>
+      <p className="hint">
+        Add repos you want to use with cainban. You'll need read access on GitHub
+        to view boards — the backend checks your permissions when you open a board.
+      </p>
+
+      <form className="add-repo-form" onSubmit={onAddRepo}>
+        <input
+          type="text"
+          value={newRepo}
+          onChange={(e) => setNewRepo(e.target.value)}
+          placeholder="owner/repo"
+          className="repo-input"
+          aria-label="Repository name"
+        />
+        <button type="submit" className="btn">
+          Add
+        </button>
+      </form>
+
+      {error && <p className="error">{error}</p>}
+      {success && <p className="success">{success}</p>}
+
+      {repos.length === 0 ? (
+        <p className="hint">No repos added yet. Add one above to get started.</p>
       ) : (
         <ul className="repo-list">
-          {connected.map((r) => (
-            <li key={r.full_name} className="repo connected">
-              <span className="repo-name">{r.full_name}</span>
-              <span className="status">✓ Connected</span>
+          {repos.map((repo) => (
+            <li key={repo} className="repo">
+              <Link to={`/board/${repo}`} className="repo-name">
+                {repo}
+              </Link>
+              <button
+                className="link remove-btn"
+                onClick={() => onRemoveRepo(repo)}
+                aria-label={`Remove ${repo}`}
+              >
+                Remove
+              </button>
             </li>
           ))}
         </ul>
       )}
 
-      {available.length > 0 && (
-        <>
-          <h4>Available to connect</h4>
-          <ul className="repo-list">
-            {available.slice(0, 5).map((r) => (
-              <li key={r.full_name} className="repo">
-                <span className="repo-name">{r.full_name}</span>
-                <button
-                  className="link"
-                  onClick={() => void onConnect(r.full_name)}
-                  disabled={connecting === r.full_name}
-                >
-                  {connecting === r.full_name ? "Connecting..." : "Connect"}
-                </button>
-              </li>
-            ))}
-          </ul>
-          {available.length > 5 && (
-            <p className="hint small">
-              {available.length - 5} more repos available
-            </p>
-          )}
-        </>
-      )}
-
-      {error && <p className="error">{error}</p>}
-      {success && <p className="success">{success}</p>}
-
-      {installUrl && (
-        <p className="hint small">
-          Don't see your repo?{" "}
-          <a href={installUrl} target="_blank" rel="noopener noreferrer">
-            Install the GitHub App
-          </a>
-        </p>
-      )}
+      <p className="hint small">
+        <strong>Note:</strong> If you don't have access to a repo on GitHub,
+        you'll see a permission error when opening its board.
+      </p>
     </section>
   );
 }

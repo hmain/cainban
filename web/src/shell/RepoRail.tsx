@@ -2,17 +2,15 @@ import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 import type { ReposState } from "./useConnectedRepos";
 import { rememberLastRepo } from "./useConnectedRepos";
-import { disconnectRepo, refreshIdToken } from "../connectApi";
+import { removeLocalRepo } from "../connectApi";
 
-// RepoRail is the persistent connected-repo navigation: a left rail on wide
-// screens (CSS) and a header dropdown on narrow screens. Selecting a repo
-// navigates to its board URL. The currently-viewed repo is marked selected.
+// RepoRail is the persistent repo navigation: a left rail on wide screens (CSS)
+// and a header dropdown on narrow screens. Selecting a repo navigates to its
+// board URL. The currently-viewed repo is marked selected.
 //
-// Each repo carries a Remove control. Removal is PER-USER: it revokes only this
-// user's grant (DELETE /connect/repo) and re-points their default on the
-// backend; it never deletes the shared board/tasks and never affects another
-// user — re-connecting restores the board. The control is confirm-guarded to
-// avoid a one-click accident.
+// With GitHub-native permissions, repos are stored locally — removing one from
+// the rail just removes it from the local list. The user can re-add it anytime
+// if they have GitHub access.
 export function RepoRail({
   repos,
   current,
@@ -27,41 +25,26 @@ export function RepoRail({
   const items =
     repos.status === "ready" ? repos.repos : ([] as string[]);
 
-  // Which repo is mid-confirm, and which is mid-DELETE, plus any error line.
+  // Which repo is mid-confirm
   const [confirming, setConfirming] = useState<string | null>(null);
-  const [removing, setRemoving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const doRemove = async (full: string) => {
-    const [owner, repo] = full.split("/");
-    if (!owner || !repo) return;
-    setRemoving(full);
+  const doRemove = (full: string) => {
     setError(null);
-    try {
-      const res = await disconnectRepo(owner, repo);
-      if (res.status !== 200) {
-        setError(res.error || `Couldn’t remove ${full} (${res.status}).`);
-        setRemoving(null);
-        return;
-      }
-      // If we just removed the repo we're viewing, don't let the `/` redirect
-      // bounce back to it: clear it as last-viewed, then navigate home.
-      if (current === full) {
-        rememberLastRepo(""); // overwrite so lastViewedRepo no longer names it
-        navigate("/");
-      }
-      setConfirming(null);
-      setRemoving(null);
-      reload(); // refresh the rail from the server (source of truth)
-      // Re-mint the token so its repos claim drops the removed repo.
-      await refreshIdToken();
-      // Notify other mounted views (the Connect page's repo list) that the
-      // grant set changed, so they refresh without needing a tab blur/focus.
-      window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
-    } catch (e) {
-      setError(String(e));
-      setRemoving(null);
+    const removed = removeLocalRepo(full);
+    if (!removed) {
+      setError(`Couldn't remove ${full}.`);
+      return;
     }
+    // If we just removed the repo we're viewing, navigate home
+    if (current === full) {
+      rememberLastRepo(""); // clear so redirect doesn't bounce back
+      navigate("/");
+    }
+    setConfirming(null);
+    reload();
+    // Notify other components that the repo list changed
+    window.dispatchEvent(new CustomEvent("cainban:repos-changed"));
   };
 
   return (
@@ -69,19 +52,19 @@ export function RepoRail({
       <div className="repo-rail-head">
         <span className="repo-rail-title">Repos</span>
         <Link className="link" to="/connect">
-          + Connect
+          + Add
         </Link>
       </div>
 
       {repos.status === "loading" && <p className="hint">Loading…</p>}
       {repos.status === "error" && (
         <p role="alert" className="error">
-          Couldn’t load your repos.
+          Couldn't load your repos.
         </p>
       )}
       {repos.status === "ready" && items.length === 0 && (
         <p className="hint">
-          No connected repos yet. <Link to="/connect">Connect one</Link>.
+          No repos yet. <Link to="/connect">Add one</Link>.
         </p>
       )}
 
@@ -112,16 +95,13 @@ export function RepoRail({
                   <button
                     type="button"
                     className="link repo-rail-confirm-yes"
-                    disabled={removing === full}
-                    onClick={() => void doRemove(full)}
-                    title="Removes your access only; the board and its tasks stay for anyone else and return if you re-connect"
+                    onClick={() => doRemove(full)}
                   >
-                    {removing === full ? "Removing…" : "Yes"}
+                    Yes
                   </button>
                   <button
                     type="button"
                     className="link repo-rail-confirm-no"
-                    disabled={removing === full}
                     onClick={() => {
                       setConfirming(null);
                       setError(null);
@@ -135,7 +115,7 @@ export function RepoRail({
                   type="button"
                   className="repo-rail-remove"
                   aria-label={`Remove ${full}`}
-                  title={`Remove ${full} (your access only)`}
+                  title={`Remove ${full}`}
                   onClick={() => {
                     setConfirming(full);
                     setError(null);
@@ -149,9 +129,7 @@ export function RepoRail({
         </ul>
       )}
 
-      {/* Narrow: a dropdown (CSS shows one or the other). The remove control
-          lives in the wide list; on narrow screens a user removes from the
-          board header's own affordance (future) — keeping the dropdown minimal. */}
+      {/* Narrow: a dropdown (CSS shows one or the other). */}
       {items.length > 0 && (
         <label className="repo-rail-select">
           <span className="sr-only">Select a repository</span>
