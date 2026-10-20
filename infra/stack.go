@@ -53,40 +53,13 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	})
 
-	// --- Secrets Manager: GitHub App credentials ----------------------------
+	// --- Secrets Manager: Signing secrets ---------------------------------
 	//
-	// The GitHub App credentials secret is used by the MCP Lambda to fetch repo
-	// metadata (e.g., default branch) via the GitHub API. Authorization is now
-	// handled by GitHub-native permission checks (see src/systems/ghperm), so
-	// this secret is only needed for repo metadata lookups, not for grants.
-	//
-	// It is created EMPTY on purpose: NO real secret value lives in code, this
-	// repo, or the synthesized template. After deploy an operator fills it in
-	// (see docs/github-app-setup.md) with the JSON shape the loader expects:
-	//
-	//	{"app_id":"…","client_id":"…","client_secret":"…","private_key":"-----BEGIN RSA PRIVATE KEY-----\n…"}
-	//
-	// RETAIN so a `cdk destroy` never drops an operator-filled key.
-	githubAppSecret := awssecretsmanager.NewSecret(stack, jsii.String("GitHubAppSecret"), &awssecretsmanager.SecretProps{
-		SecretName:  jsii.String("cainban/github-app"),
-		Description: jsii.String("cainban GitHub App credentials (Phase 4) — PLACEHOLDER; operator fills app_id/client_id/client_secret/private_key post-deploy. No secret value in code/CDK."),
-		GenerateSecretString: &awssecretsmanager.SecretStringGenerator{
-			// Seed an empty JSON envelope; the generated key is a throwaway
-			// field the operator overwrites. No real credential is generated.
-			SecretStringTemplate: jsii.String(`{"app_id":"","client_id":"","client_secret":"","private_key":""}`),
-			GenerateStringKey:    jsii.String("_placeholder"),
-		},
-		RemovalPolicy: awscdk.RemovalPolicy_RETAIN,
-	})
-
-	// Badge URL signing secret (HMAC-SHA256). Created out of band:
+	// Badge and widget signing secrets (HMAC-SHA256). Created out of band:
 	//   aws secretsmanager create-secret --name cainban/badge-secret --secret-string "$(openssl rand -hex 32)"
-	// RETAIN so cdk destroy doesn't delete it.
-	badgeSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("BadgeSecret"), jsii.String("cainban/badge-secret"))
-
-	// Widget token signing secret (HMAC-SHA256). Created out of band:
 	//   aws secretsmanager create-secret --name cainban/widget-secret --secret-string "$(openssl rand -hex 32)"
-	// RETAIN so cdk destroy doesn't delete it.
+	// RETAIN so cdk destroy doesn't delete them.
+	badgeSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("BadgeSecret"), jsii.String("cainban/badge-secret"))
 	widgetSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("WidgetSecret"), jsii.String("cainban/widget-secret"))
 
 	// --- Cognito user pool (identity provider) ---------------------------
@@ -130,51 +103,35 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		GenerateSecret: jsii.Bool(false),
 	})
 
-	// --- Entra ID (and future) OIDC federation --------------------------
+	// --- GitHub-only authentication (direct token) ------------------------
 	//
-	// Browser users sign in through an external OIDC identity provider (the
-	// customer's Microsoft Entra ID tenant) via the Cognito Hosted UI, rather
-	// than with a Cognito-native password. This does NOT touch the machine
-	// McpClient above (USER_PASSWORD/SRP for CLI/agent callers) — federation is
-	// added purely for the browser SPA client created below.
+	// Cognito does NOT natively support GitHub as a federated identity provider
+	// (valid ProviderTypes are: Facebook, Google, LoginWithAmazon, OIDC, SAML,
+	// SignInWithApple — GitHub is not in this list and the API rejects it).
 	//
-	// A federated user still becomes a normal Cognito user with a stable pool
-	// `sub`, and the pre-token trigger + grants table key off that SAME `sub`
-	// exactly as for a native user (see src/systems/auth: authorization is the
-	// validated `repos` claim, sourced from grants keyed by the Cognito sub).
-	// So federation changes only HOW a user authenticates, never how they are
-	// authorized — no change to the pre-token trigger, grants, or validator.
+	// Instead of federation, cainban accepts GitHub access tokens DIRECTLY:
+	//   - Client obtains a GitHub token (via OAuth Device Flow or web flow)
+	//   - Client sends `Authorization: Bearer <github_token>` to the MCP API
+	//   - Lambda validates the token with GET /user (confirms token is valid)
+	//   - Lambda uses the same token for repo permission checks (ghperm)
 	//
-	// SaaS-pluggability: providers are declared as a slice of specs and created
-	// in a loop. Onboarding a second customer's OIDC IdP (another Entra tenant,
-	// Okta, etc.) is ADDING an oidcProviderSpec entry + its own placeholder
-	// secret — not rewriting this block. Each spec's client secret lives in its
-	// OWN Secrets Manager secret (RETAIN, placeholder), never in code/context.
-
-	// oidcProviderSpec declares one federated OIDC identity provider. issuer and
-	// clientId are non-secret and come from CDK context (placeholder-safe so
-	// synth works before a real tenant is known); the client SECRET is read from
-	// the named Secrets Manager secret at deploy/runtime, never from code.
-	type oidcProviderSpec struct {
-		// name is the Cognito provider name browser clients reference in
-		// SupportedIdentityProviders (letters/digits/_ only; no spaces).
-		name string
-		// providerConstructID is the CDK construct id for this IdP.
-		providerConstructID string
-		// issuer is the OIDC issuer URL, e.g.
-		// https://login.microsoftonline.com/<tenant>/v2.0 — from context.
-		issuer string
-		// clientId is the app (client) id registered in the external IdP — from
-		// context, non-secret.
-		clientId string
-		// secret is the Secrets Manager secret holding {"client_id","client_secret"}
-		// for this provider (placeholder, RETAIN). Its client_secret is passed to
-		// the OIDC provider as the ClientSecret.
-		secret awssecretsmanager.ISecret
-	}
+	// This is SIMPLER than federation because:
+	//   - No Cognito federation complexity (which doesn't work with GitHub anyway)
+	//   - User's GitHub token is directly available for permission checks
+	//   - No token translation or claim mapping needed
+	//   - Works with any client that can do GitHub OAuth
+	//
+	// The Lambda validates GitHub tokens by calling the GitHub API; invalid/expired
+	// tokens return 401. Repo authorization is checked per-request via ghperm
+	// (CAINBAN_USE_GITHUB_PERMISSIONS=true).
+	//
+	// GitHub OAuth credentials (for the device flow endpoint) are stored in
+	// Secrets Manager (cainban/github-oauth). Create it out of band:
+	//   aws secretsmanager create-secret --name cainban/github-oauth \
+	//     --secret-string '{"client_id":"<OAuth App client id>","client_secret":"<secret>"}'
 
 	// Placeholder-safe context reader: returns the -c value if present, else the
-	// supplied placeholder default so `cdk synth` runs before the real tenant is
+	// supplied placeholder default so `cdk synth` runs before the real values are
 	// known. NEVER used for secrets — those live in Secrets Manager.
 	ctxOr := func(key, def string) string {
 		if v := stack.Node().TryGetContext(jsii.String(key)); v != nil {
@@ -185,57 +142,15 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		return def
 	}
 
-	// Awiant's Entra OIDC placeholder secret. Created EMPTY on purpose — no real
-	// secret in code/CDK/context. The operator fills client_id/client_secret
-	// post-deploy (the OIDC provider reads client_secret from here). RETAIN so a
-	// The Entra OIDC client credentials live in a Secrets Manager secret the
-	// operator fills out of band (never in code/CDK). Because a Cognito OIDC
-	// provider is REJECTED at create time if its client_secret resolves empty,
-	// the secret must already hold a real value when this stack creates the
-	// provider — so the stack REFERENCES an existing secret (created + filled by
-	// the operator) rather than creating an empty placeholder it would then fail
-	// to use on the first deploy. Create it once out of band:
-	//   aws secretsmanager create-secret --name cainban/entra-oidc \
-	//     --secret-string '{"client_id":"<id>","client_secret":"<secret>"}'
-	// then deploy. `cdk destroy` never touches it (not stack-owned).
-	entraOidcSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("EntraOidcSecret"), jsii.String("cainban/entra-oidc"))
+	// GitHub OAuth credentials for the device flow endpoint (Lambda reads these
+	// to initiate device auth and exchange codes). Created by operator.
+	githubOauthSecret := awssecretsmanager.Secret_FromSecretNameV2(stack, jsii.String("GitHubOauthSecret"), jsii.String("cainban/github-oauth"))
 
-	// The SaaS-pluggable provider list. Wire Awiant's Entra as the first (only)
-	// element today; a second customer is one more append here.
-	oidcProviders := []oidcProviderSpec{
-		{
-			name:                "EntraAwiant",
-			providerConstructID: "EntraOidcProvider",
-			// Placeholder issuer/clientId keep synth working pre-tenant. Supply
-			// real values at deploy: -c entraIssuer=https://login.microsoftonline.com/<tenant>/v2.0 -c entraClientId=<appId>
-			issuer:   ctxOr("entraIssuer", "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"),
-			clientId: ctxOr("entraClientId", "PLACEHOLDER_ENTRA_CLIENT_ID"),
-			secret:   entraOidcSecret,
-		},
-	}
-
-	// Create each provider and collect them so the SPA client can list them as
-	// supported identity providers (and depend on them for correct ordering).
-	oidcSupported := []awscognito.UserPoolClientIdentityProvider{}
-	createdOidcProviders := []awscognito.IUserPoolIdentityProvider{}
-	for _, spec := range oidcProviders {
-		provider := awscognito.NewUserPoolIdentityProviderOidc(stack, jsii.String(spec.providerConstructID), &awscognito.UserPoolIdentityProviderOidcProps{
-			UserPool:  userPool,
-			Name:      jsii.String(spec.name),
-			IssuerUrl: jsii.String(spec.issuer),
-			ClientId:  jsii.String(spec.clientId),
-			// The provider reads the client secret from the placeholder Secrets
-			// Manager secret; the operator fills it post-deploy. Never inline.
-			ClientSecret: spec.secret.SecretValueFromJson(jsii.String("client_secret")).UnsafeUnwrap(),
-			Scopes:       jsii.Strings("openid", "email", "profile"),
-			// GET keeps the userinfo request simple and is what Entra expects.
-			AttributeRequestMethod: awscognito.OidcAttributeRequestMethod_GET,
-			AttributeMapping: &awscognito.AttributeMapping{
-				Email: awscognito.ProviderAttribute_Other(jsii.String("email")),
-			},
-		})
-		createdOidcProviders = append(createdOidcProviders, provider)
-		oidcSupported = append(oidcSupported, awscognito.UserPoolClientIdentityProvider_Custom(jsii.String(spec.name)))
+	// With direct GitHub tokens, app clients use COGNITO as the only provider
+	// (for any local Cognito users), OR accept GitHub tokens directly at the API.
+	// The Hosted UI shows Cognito login only; GitHub auth bypasses it entirely.
+	cognitoSupported := []awscognito.UserPoolClientIdentityProvider{
+		awscognito.UserPoolClientIdentityProvider_COGNITO(),
 	}
 
 	// --- Hosted UI domain (free Cognito prefix domain) ------------------
@@ -243,12 +158,14 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// A free Cognito-hosted prefix domain (no custom-domain cost, no ACM cert).
 	// The prefix must be globally unique across the region; a deterministic
 	// account-derived suffix avoids collisions without needing a real tenant.
-	// The Hosted UI is where signInWithRedirect sends the browser: it presents
-	// the Entra IdP button and, on return, exchanges the code for tokens.
+	// The Hosted UI is where signInWithRedirect sends the browser for Cognito
+	// native login (username/password). GitHub auth bypasses the Hosted UI
+	// entirely — users auth directly with GitHub and send the token to the API.
 	hostedDomain := userPool.AddDomain(jsii.String("HostedUiDomain"), &awscognito.UserPoolDomainOptions{
 		CognitoDomain: &awscognito.CognitoDomainOptions{
 			// Deterministic, globally-unique-per-region prefix derived from the
 			// account id so it does not collide with another AWS account's pool.
+			// Keep the old prefix (with emawiant) to avoid domain replacement.
 			DomainPrefix: awscdk.Fn_Join(jsii.String("-"), &[]*string{
 				jsii.String("cainban-emawiant"),
 				stack.Account(),
@@ -256,20 +173,20 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	})
 
-	// The Hosted UI base URL and the exact Entra redirect (reply) URI the
-	// operator must register in the Entra app registration.
+	// The Hosted UI base URL and the exact GitHub redirect (reply) URI.
 	hostedUiBaseURL := hostedDomain.BaseUrl(nil)
-	entraRedirectURI := awscdk.Fn_Join(jsii.String(""), &[]*string{hostedUiBaseURL, jsii.String("/oauth2/idpresponse")})
+	_ = awscdk.Fn_Join(jsii.String(""), &[]*string{hostedUiBaseURL, jsii.String("/oauth2/idpresponse")})
 
 	// --- SPA app client (public, PKCE) ----------------------------------
 	//
 	// A SEPARATE public client for the browser SPA — the machine McpClient is
 	// left untouched. No secret is generated (public PKCE client). It uses the
-	// authorization-code grant with openid/email/profile and lists the federated
-	// OIDC provider(s) as supported identity providers, so the Hosted UI offers
-	// the Entra sign-in. Callback/logout URLs come from context with a localhost
-	// dev default + a placeholder for the Amplify URL (filled after first
-	// Amplify deploy — see web/README.md).
+	// authorization-code grant with openid/email/profile. With direct GitHub
+	// auth, this client supports Cognito native login only; GitHub users bypass
+	// Cognito entirely and send their GitHub token directly to the API.
+	// Callback/logout URLs come from context with a localhost dev default +
+	// a placeholder for the Amplify URL (filled after first Amplify deploy —
+	// see web/README.md).
 	spaCallbacks := splitCsv(ctxOr("spaCallbackUrls", "http://localhost:5173/,https://localhost/"))
 	spaLogouts := splitCsv(ctxOr("spaLogoutUrls", "http://localhost:5173/,https://localhost/"))
 
@@ -299,15 +216,8 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			CallbackUrls: &spaCallbacks,
 			LogoutUrls:   &spaLogouts,
 		},
-		SupportedIdentityProviders: &oidcSupported,
+		SupportedIdentityProviders: &cognitoSupported,
 	})
-
-	// The SPA client references the OIDC provider(s) by name in
-	// SupportedIdentityProviders, so the providers must exist first. Add an
-	// explicit construct dependency so synth/deploy order is correct.
-	for _, p := range createdOidcProviders {
-		spaClient.Node().AddDependency(p)
-	}
 
 	// --- MCP CLI app client (public, PKCE) — Claude Code ----------------
 	//
@@ -315,7 +225,8 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// from both the machine McpClient (USER_PASSWORD/SRP) and the browser SPA
 	// client — so the CLI's loopback callback URLs never mingle with the SPA's
 	// hosted callbacks. No secret (public PKCE client). Authorization-code grant,
-	// openid/email/profile, Entra-federated (same Hosted UI login as the SPA).
+	// openid/email/profile, Cognito native login. GitHub users bypass Cognito
+	// entirely — they use GitHub Device Flow and send the GitHub token directly.
 	//
 	// Claude Code's OAuth callback is a LOOPBACK redirect the CLI opens on the
 	// user's machine: http://localhost:<PORT>/callback (and the 127.0.0.1
@@ -377,11 +288,8 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			CallbackUrls: &mcpCliCallbacks,
 			LogoutUrls:   &mcpCliLogouts,
 		},
-		SupportedIdentityProviders: &oidcSupported,
+		SupportedIdentityProviders: &cognitoSupported,
 	})
-	for _, p := range createdOidcProviders {
-		mcpCliClient.Node().AddDependency(p)
-	}
 
 	// Both app clients issue tokens against this pool: the machine/CLI MCP
 	// client AND the browser SPA client. The JWT authorizers and the in-Lambda
@@ -496,17 +404,15 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 			"CAINBAN_AUTH_ISSUER":   issuer,
 			"CAINBAN_AUTH_AUDIENCE": authAudiencesCsv,
 			// GitHub-native permissions: check GitHub API for repo access at
-			// runtime (cached 5 minutes) instead of using token claims.
+			// runtime (cached 5 minutes) using the user's own GitHub token.
 			// See src/systems/ghperm and docs/rfc-github-permission-cache.md.
 			"CAINBAN_USE_GITHUB_PERMISSIONS": jsii.String("true"),
-			// GitHub App credentials (App id, OAuth client id/secret, private key)
-			// are loaded at runtime from this Secrets Manager secret for fetching
-			// repo metadata (e.g., default branch). Never from code or env.
-			"CAINBAN_GITHUB_APP_SECRET": githubAppSecret.SecretName(),
 			// Badge and widget signing secrets (HMAC-SHA256). Lambda reads them
 			// from Secrets Manager at startup; the name is passed via env var.
 			"CAINBAN_BADGE_SECRET_NAME":  badgeSecret.SecretName(),
 			"CAINBAN_WIDGET_SECRET_NAME": widgetSecret.SecretName(),
+			// GitHub OAuth secret for device flow authentication.
+			"CAINBAN_GITHUB_OAUTH_SECRET_NAME": githubOauthSecret.SecretName(),
 		},
 		// Build the Go binary into the asset directory. The command runs in a
 		// local shell (no Docker) via TryBundle returning false is not used;
@@ -532,17 +438,12 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Resources: &[]*string{table.TableArn()},
 	}))
 
-	// Least-privilege READ of the GitHub App creds secret.
-	// Grant ONLY secretsmanager:GetSecretValue, scoped to THIS secret's ARN
-	// alone — not "secretsmanager:*", not a wildcard resource. This is the one
-	// call src/systems/secrets makes. `Secret.GrantRead` attaches exactly that
-	// (GetSecretValue + DescribeSecret) on this secret ARN to the function's
-	// role; no other secret is reachable.
-	githubAppSecret.GrantRead(fn.Role(), nil)
-
 	// Grant read access to badge and widget signing secrets.
 	badgeSecret.GrantRead(fn.Role(), nil)
 	widgetSecret.GrantRead(fn.Role(), nil)
+
+	// Grant read access to GitHub OAuth secret for device flow.
+	githubOauthSecret.GrantRead(fn.Role(), nil)
 
 	// --- API Gateway v2 HTTP API + Cognito JWT authorizer (MCP) ----------
 	//
@@ -929,25 +830,21 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		Value:       hostedUiBaseURL,
 		Description: jsii.String("Cognito Hosted UI base URL (free prefix domain). The SPA's signInWithRedirect targets this; also the OAuth base for the SPA client."),
 	})
-	awscdk.NewCfnOutput(stack, jsii.String("EntraRedirectUri"), &awscdk.CfnOutputProps{
-		Value:       entraRedirectURI,
-		Description: jsii.String("EXACT redirect (reply) URI to register in the Entra app registration: <HostedUiDomain>/oauth2/idpresponse"),
+	awscdk.NewCfnOutput(stack, jsii.String("GitHubDeviceFlowUri"), &awscdk.CfnOutputProps{
+		Value:       awscdk.Fn_Join(jsii.String(""), &[]*string{mcpAPI.Url(), jsii.String("auth/github/device")}),
+		Description: jsii.String("GitHub Device Flow endpoint: POST to initiate device auth, then poll for token. CLI clients use this instead of Cognito."),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("SpaClientId"), &awscdk.CfnOutputProps{
 		Value:       spaClient.UserPoolClientId(),
-		Description: jsii.String("Cognito app client id for the browser SPA (public, PKCE, authorization-code grant, Entra federated). Use as VITE_USER_POOL_CLIENT_ID."),
+		Description: jsii.String("Cognito app client id for the browser SPA (public, PKCE, authorization-code grant, GitHub federated). Use as VITE_USER_POOL_CLIENT_ID."),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("McpCliClientId"), &awscdk.CfnOutputProps{
 		Value:       mcpCliClient.UserPoolClientId(),
-		Description: jsii.String("Cognito app client id for CLI MCP clients (Claude Code): public, PKCE, authorization-code grant, no secret, Entra federated, loopback callbacks. Pass to `claude mcp add --client-id <this>` (see docs/mcp-oauth-setup.md)."),
+		Description: jsii.String("Cognito app client id for CLI MCP clients (Claude Code): public, PKCE, authorization-code grant, no secret, Cognito login, loopback callbacks. For GitHub auth, use the Device Flow endpoint instead."),
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("SpaOauthScopes"), &awscdk.CfnOutputProps{
 		Value:       jsii.String("openid email profile"),
 		Description: jsii.String("OAuth scopes granted to the SPA client."),
-	})
-	awscdk.NewCfnOutput(stack, jsii.String("EntraOidcSecretName"), &awscdk.CfnOutputProps{
-		Value:       entraOidcSecret.SecretName(),
-		Description: jsii.String("Secrets Manager secret holding the Entra OIDC client credentials — PLACEHOLDER; operator fills client_id/client_secret post-deploy."),
 	})
 
 	// --- Amplify Hosting service role ------------------------------------

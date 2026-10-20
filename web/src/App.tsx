@@ -15,6 +15,8 @@ import { ActivityFeed } from "./components/ActivityFeed";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { ConnectPageSimplified as ConnectPage } from "./pages/ConnectPageSimplified";
 import { BadgesPage } from "./pages/BadgesPage";
+import { AdminSetupPage } from "./pages/AdminSetupPage";
+import { GitHubConnectPage } from "./pages/GitHubConnectPage";
 import { RepoRail } from "./shell/RepoRail";
 import { NotConnected } from "./shell/NotConnected";
 import {
@@ -72,11 +74,21 @@ export function App() {
   }
 
   if (authState === "signed-out") {
+    // Handle public routes that dont need auth
+    const path = window.location.pathname;
+    if (path === "/connect/github") {
+      return (
+        <main className="container">
+          <GitHubConnectPage />
+        </main>
+      );
+    }
+
     return (
       <main className="container">
         <header>
           <h1>cainban</h1>
-          <p className="subtitle">Watch your repo’s board move as agents work it.</p>
+          <p className="subtitle">Watch your repos board move as agents work it.</p>
           <div className="signed-out-theme">
             <ThemeToggle />
           </div>
@@ -102,6 +114,7 @@ function SignedOut() {
   return (
     <section aria-labelledby="signin-heading" className="card">
       <h2 id="signin-heading">Sign in</h2>
+      <p className="hint">For the web dashboard:</p>
       <button className="primary" onClick={() => void onSignIn()}>
         Sign in with Awiant (Entra)
       </button>
@@ -110,6 +123,11 @@ function SignedOut() {
           {error}
         </p>
       )}
+      <hr style={{ margin: "1.5rem 0", border: "none", borderTop: "1px solid var(--color-border)" }} />
+      <p className="hint">For MCP clients (Claude, Cursor, VS Code):</p>
+      <Link to="/connect/github" className="btn">
+        Connect with GitHub →
+      </Link>
     </section>
   );
 }
@@ -151,7 +169,9 @@ function SignedInShell({ email }: { email: string }) {
               element={<ActivityRoute repos={repos} />}
             />
             <Route path="/connect" element={<ConnectPage />} />
+            <Route path="/connect/github" element={<GitHubConnectPage />} />
             <Route path="/badges" element={<BadgesPage />} />
+            <Route path="/admin/setup" element={<AdminSetupPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

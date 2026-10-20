@@ -1373,3 +1373,388 @@ dialog.task-detail::backdrop {
     flex-basis: 100%;
   }
 }
+
+
+/* Admin Setup Page */
+.admin-setup-page {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.admin-setup-page .setup-intro {
+  background: var(--bg-inset);
+  border-left: 4px solid var(--accent);
+}
+
+.admin-setup-page .step {
+  position: relative;
+}
+
+.admin-setup-page .step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  background: var(--accent);
+  color: var(--accent-text);
+  border-radius: 50%;
+  font-weight: 600;
+  font-size: 14px;
+  margin-right: 8px;
+}
+
+.admin-setup-page .settings-table {
+  width: 100%;
+  margin: 16px 0;
+  border-collapse: collapse;
+}
+
+.admin-setup-page .settings-table td {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+}
+
+.admin-setup-page .settings-table td.label {
+  width: 200px;
+  font-weight: 500;
+  background: var(--bg-inset);
+}
+
+.admin-setup-page .copyable-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-setup-page .copyable-value code {
+  background: var(--bg-inset);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: monospace;
+}
+
+.admin-setup-page .copy-inline {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  font-size: 14px;
+  opacity: 0.7;
+}
+
+.admin-setup-page .copy-inline:hover {
+  opacity: 1;
+}
+
+.admin-setup-page .steps-list {
+  margin: 12px 0;
+  padding-left: 24px;
+}
+
+.admin-setup-page .steps-list li {
+  margin: 8px 0;
+}
+
+.admin-setup-page .warning-box {
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  border: 1px solid var(--warn);
+  border-radius: 6px;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+
+.admin-setup-page .warning-box strong {
+  color: var(--warn);
+}
+
+.admin-setup-page .error-preview {
+  background: var(--bg);
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  margin-top: 8px;
+  color: var(--error);
+}
+
+.admin-setup-page .form-grid {
+  display: grid;
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.admin-setup-page .form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-weight: 500;
+}
+
+.admin-setup-page .input {
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 14px;
+  font-family: monospace;
+}
+
+.admin-setup-page .input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.admin-setup-page .command-box {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0;
+}
+
+.admin-setup-page .command-box .command {
+  flex: 1;
+  background: var(--bg-inset);
+  padding: 12px;
+  border-radius: 6px;
+  font-family: monospace;
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-x: auto;
+}
+
+.admin-setup-page .result-box {
+  padding: 12px 16px;
+  border-radius: 6px;
+  margin: 16px 0;
+}
+
+.admin-setup-page .result-box.success {
+  background: color-mix(in srgb, var(--ok) 15%, transparent);
+  border: 1px solid var(--ok);
+}
+
+.admin-setup-page .result-box.error {
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+  border: 1px solid var(--error);
+}
+
+.admin-setup-page .result-box pre {
+  background: var(--bg);
+  padding: 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  margin-top: 8px;
+  overflow-x: auto;
+}
+
+.admin-setup-page .next-steps {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.admin-setup-page .next-steps ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+
+.admin-setup-page .next-steps li {
+  margin: 6px 0;
+}
+
+.admin-setup-page .btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+
+.admin-setup-page .btn.primary {
+  background: var(--accent);
+  color: var(--accent-text);
+}
+
+.admin-setup-page .btn:hover {
+  opacity: 0.9;
+}
+
+.admin-setup-page .btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+
+/* GitHub Connect Page */
+.github-connect .device-flow-box {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 1rem 0;
+}
+
+.github-connect .device-flow-box p {
+  margin: 0.5rem 0;
+  font-weight: 500;
+}
+
+.github-connect .code-display {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.5rem 0 1.5rem;
+}
+
+.github-connect .user-code {
+  font-size: 2rem;
+  font-weight: bold;
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+  padding: 0.5rem 1rem;
+  background: var(--color-bg);
+  border: 2px solid var(--color-accent);
+  border-radius: 4px;
+}
+
+.github-connect .waiting-indicator {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 1.5rem;
+  color: var(--color-muted);
+}
+
+.github-connect .spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.github-connect .success-card {
+  border-color: var(--color-success, #22c55e);
+}
+
+.github-connect .success-card h3 {
+  color: var(--color-success, #22c55e);
+}
+
+.github-connect .repo-input-section {
+  margin: 1.5rem 0;
+}
+
+.github-connect .repo-input-section label {
+  display: block;
+}
+
+.github-connect .repo-input {
+  margin-top: 0.5rem;
+  padding: 0.5rem;
+  width: 100%;
+  max-width: 300px;
+  font-family: var(--font-mono);
+  font-size: 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  background: var(--color-bg);
+}
+
+.github-connect .client-selector {
+  margin: 1.5rem 0;
+}
+
+.github-connect .client-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.github-connect .client-buttons .btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+
+.github-connect .client-buttons .btn.active {
+  background: var(--color-accent);
+  color: white;
+}
+
+.github-connect .config-section {
+  margin: 1.5rem 0;
+}
+
+.github-connect .config-path {
+  margin-bottom: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.github-connect .config-box {
+  position: relative;
+}
+
+.github-connect .config-code {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 1rem;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  font-family: var(--font-mono);
+  margin: 0;
+}
+
+.github-connect .config-box .copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+}
+
+.github-connect .next-steps {
+  background: var(--color-surface);
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.github-connect .next-steps h4 {
+  margin: 0 0 0.5rem;
+}
+
+.github-connect .next-steps ol {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.github-connect .next-steps li {
+  margin: 0.25rem 0;
+}
+
+.github-connect .error-card {
+  border-color: var(--color-error, #ef4444);
+}
+
+.github-connect .error-message {
+  color: var(--color-error, #ef4444);
+  font-family: var(--font-mono);
+  padding: 0.5rem;
+  background: var(--color-surface);
+  border-radius: 4px;
+}
+
+.github-connect .btn.primary {
+  background: var(--color-accent);
+  color: white;
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+}

@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
 	"strings"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 
 	"github.com/hmain/cainban/src/systems/auth"
 	"github.com/hmain/cainban/src/systems/mcp"
@@ -37,6 +42,10 @@ const (
 	// identifier — not a secret. Optional: when unset the document's client_id
 	// is empty and the Claude command/snippets degrade gracefully.
 	envMcpCliClientID = "CAINBAN_MCP_CLI_CLIENT_ID"
+	// envGitHubOAuthSecretName is the Secrets Manager secret name holding the
+	// GitHub OAuth credentials (client_id, client_secret) for the device flow.
+	// Optional: when unset the GitHub auth endpoints are not mounted.
+	envGitHubOAuthSecretName = "CAINBAN_GITHUB_OAUTH_SECRET_NAME"
 )
 
 // resourceMetadataConfig builds the RFC 9728 protected-resource metadata config
@@ -162,4 +171,48 @@ func splitAudiences(raw string) []string {
 		}
 	}
 	return out
+}
+
+// githubAuthConfig loads the GitHub OAuth credentials from Secrets Manager for
+// the device flow endpoints. Returns an empty config if the secret name is not
+// set (graceful degradation — the endpoints simply won't be mounted).
+func githubAuthConfig(ctx context.Context) mcp.GitHubAuthConfig {
+	secretName := strings.TrimSpace(os.Getenv(envGitHubOAuthSecretName))
+	if secretName == "" {
+		return mcp.GitHubAuthConfig{}
+	}
+	secret, err := loadJSONSecret(ctx, secretName)
+	if err != nil {
+		// Log but don't fail — the endpoints just won't be available.
+		fmt.Fprintf(os.Stderr, "cainban-lambda: failed to load GitHub OAuth secret %q: %v\n", secretName, err)
+		return mcp.GitHubAuthConfig{}
+	}
+	return mcp.GitHubAuthConfig{
+		ClientID:     secret["client_id"],
+		ClientSecret: secret["client_secret"],
+	}
+}
+
+// loadJSONSecret loads a JSON object secret from Secrets Manager and returns it
+// as a map. Returns an error if the secret cannot be loaded or parsed.
+func loadJSONSecret(ctx context.Context, secretName string) (map[string]string, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
+	}
+	client := secretsmanager.NewFromConfig(cfg)
+	out, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+		SecretId: &secretName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get secret: %w", err)
+	}
+	if out.SecretString == nil || *out.SecretString == "" {
+		return nil, fmt.Errorf("secret %q has no SecretString", secretName)
+	}
+	var result map[string]string
+	if err := json.Unmarshal([]byte(*out.SecretString), &result); err != nil {
+		return nil, fmt.Errorf("parse secret JSON: %w", err)
+	}
+	return result, nil
 }
