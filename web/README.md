@@ -1,17 +1,18 @@
 # cainban connect-page SPA (`web/`)
 
-A minimal React + Vite + TypeScript single page that lets a user:
+> **Note:** The authorization model has changed. With GitHub-native permissions
+> enabled (`CAINBAN_USE_GITHUB_PERMISSIONS=true`), users can access any repo they
+> have push access to on GitHub — no separate "connect" step is required. The
+> Connect API has been removed. This SPA needs updates to work with the new model.
+
+A React + Vite + TypeScript single page that lets a user:
 
 1. **Sign in with Microsoft Entra ID** via the existing Cognito **Hosted UI**
    (`signInWithRedirect` → Entra → back with tokens).
-2. **Link a GitHub identity** (`GET /connect/github/start` with a bearer token,
-   then follow the returned 302 to GitHub).
-3. **Connect a GitHub repo** (`POST /connect/repo {owner,repo}` with the bearer).
-4. See **My connected repos** (`GET /connect/repos`).
-5. Copy a ready-to-paste **MCP client config** (MCP URL + `Authorization: Bearer`
+2. **View their kanban board** for any repo they have push access to on GitHub.
+3. Copy a ready-to-paste **MCP client config** (MCP URL + `Authorization: Bearer`
    + `X-Cainban-Repo`).
-6. Grab an embeddable **README badge** at `/badges` that links to the Connect
-   page — see [`docs/badges.md`](../docs/badges.md).
+4. Grab an embeddable **README badge** at `/badges` — see [`docs/badges.md`](../docs/badges.md).
 
 It is configured against the **existing** CDK-managed Cognito user pool and the
 **new** public SPA app client — it does **not** use Amplify `defineAuth`/`defineData`
@@ -30,7 +31,6 @@ has no client secret, which is expected.
 | `VITE_USER_POOL_ID` | `UserPoolId` | `eu-north-1_knwIJmOs6` |
 | `VITE_USER_POOL_CLIENT_ID` | `SpaClientId` | (the SPA client id) |
 | `VITE_COGNITO_DOMAIN` | `HostedUiDomain` (strip `https://`) | `cainban-emawiant-528757808822.auth.eu-north-1.amazoncognito.com` |
-| `VITE_CONNECT_API` | `ConnectApiUrl` | `https://64f3ievzmf.execute-api.eu-north-1.amazonaws.com/` |
 | `VITE_MCP_API` | `McpApiUrl` | `https://cl4qelp4hf.execute-api.eu-north-1.amazonaws.com/` |
 | `VITE_MCP_CLI_CLIENT_ID` (optional) | `McpCliClientId` | `79jr68h816vb3bcbgi6ueum2ht` |
 | `VITE_REDIRECT_URL` (optional) | your app URL | `http://localhost:5173/` |

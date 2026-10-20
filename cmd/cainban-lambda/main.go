@@ -105,7 +105,13 @@ func main() {
 	// never passes through the JWT authorizer. It exposes only per-status task
 	// counts, nothing else.
 	badge := http.HandlerFunc(server.HandleBadge)
-	handler := mcp.PublicMux(resourceMetadataConfig(), authServerMetadataConfig(), clientConfigConfig(), badge, authed)
+	// GitHub OAuth config for device flow endpoints. Loaded from Secrets Manager
+	// at cold start; empty config if not configured (graceful degradation).
+	githubAuth := githubAuthConfig(context.Background())
+	if githubAuth.ClientID != "" {
+		log.Printf("cainban-lambda: GitHub device flow enabled")
+	}
+	handler := mcp.PublicMux(resourceMetadataConfig(), authServerMetadataConfig(), clientConfigConfig(), githubAuth, badge, authed)
 	adapter := httpadapter.NewV2(handler)
 
 	// This Lambda is fronted by an API Gateway v2 HTTP API (payload format 2.0),

@@ -74,19 +74,9 @@ ws:
 		-o .build/ws/bootstrap ./cmd/cainban-ws-lambda
 
 # Build every Lambda bundle the CDK stack packages. Run before `cdk synth`/`cdk deploy`.
+# NOTE: connect Lambda was removed in Phase 5 (GitHub-native permissions).
 .PHONY: bundles
-bundles: lambda pretoken connect ws
-
-# Build the Phase 4 connect API Lambda bootstrap (pure Go, arm64,
-# provided.al2023). Output goes to .build/connect/bootstrap, packaged by the CDK
-# stack via Code.fromAsset("../.build/connect"). This is the Cognito-auth'd
-# GitHub-connect API: OAuth identity leg + server-side VerifyRepoAccess + grant
-# writes.
-.PHONY: connect
-connect:
-	mkdir -p .build/connect
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
-		-o .build/connect/bootstrap ./cmd/cainban-connect
+bundles: lambda pretoken ws
 
 # Verify the LIVE API edge after a deploy: asserts the CORS preflight succeeds
 # (unauthenticated OPTIONS -> 2xx with CORS headers) AND that the data path is

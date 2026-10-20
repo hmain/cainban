@@ -18,7 +18,24 @@ import (
 	"github.com/hmain/cainban/src/tui"
 )
 
-// Version information
+// Version information.
+//
+// version, commit, and date are overridden at build time via -ldflags
+// "-X main.version=... -X main.commit=... -X main.date=...". They MUST be
+// package-level vars (not consts) for the linker to set them. When they are
+// left at their defaults — a plain `go build` with no ldflags — handleVersion
+// falls back to the Version* consts and prints a "-dev" string.
+var (
+	version = "" // e.g. "v0.4.0" (set by goreleaser / release.yml)
+	commit  = "" // e.g. git short SHA
+	date    = "" // RFC3339 build timestamp
+	builtBy = "" // e.g. "goreleaser" (set by .goreleaser.yaml; currently unused in output)
+)
+
+// builtBy is referenced by .goreleaser.yaml's ldflags. Keep a trivial reference
+// so the linker's -X always has a live target and the var isn't flagged unused.
+var _ = builtBy
+
 const (
 	VersionMajor  = "0"
 	VersionMinor  = "2"
@@ -904,9 +921,20 @@ func handleTUI() {
 }
 
 func handleVersion() {
-	version := fmt.Sprintf("v%s.%s.%s-dev.%s", VersionMajor, VersionMinor, VersionPatch, VersionDev)
-	buildTime := time.Now().Format("2006-01-02 15:04:05 MST")
-	fmt.Printf("cainban %s\n", version)
+	// Prefer the ldflags-injected values from a release build; fall back to the
+	// dev consts for a plain `go build`.
+	ver := version
+	if ver == "" {
+		ver = fmt.Sprintf("v%s.%s.%s-dev.%s", VersionMajor, VersionMinor, VersionPatch, VersionDev)
+	}
+	buildTime := date
+	if buildTime == "" {
+		buildTime = time.Now().Format("2006-01-02 15:04:05 MST")
+	}
+	fmt.Printf("cainban %s\n", ver)
+	if commit != "" {
+		fmt.Printf("Commit: %s\n", commit)
+	}
 	fmt.Printf("Build: %s\n", VersionSuffix)
 	fmt.Printf("Compiled: %s\n", buildTime)
 	fmt.Println("\nFeatures:")

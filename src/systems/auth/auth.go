@@ -105,10 +105,19 @@ type Identity struct {
 	Email string
 	// Repos is the set of repos this token authorizes, from the validated
 	// `repos` claim. Membership in this set is the authorization decision.
+	// DEPRECATED: When UseGitHubPermissions is true, this field is ignored and
+	// authorization is checked via the GitHub API instead.
 	Repos map[string]struct{}
 	// DefaultRepo is the optional `default_repo` claim, used as the target when
 	// the client supplies none. It still must be a member of Repos to be usable.
 	DefaultRepo string
+	// GitHubUser is the GitHub username from Cognito GitHub federation.
+	// Used for GitHub-native permission checks when UseGitHubPermissions is true.
+	GitHubUser string
+	// GitHubToken is the GitHub access token from Cognito GitHub federation.
+	// Used for GitHub-native permission checks when UseGitHubPermissions is true.
+	// This token is short-lived and scoped to the user's GitHub permissions.
+	GitHubToken string
 }
 
 // authorizes reports whether the validated token grants the given repo.

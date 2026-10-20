@@ -46,6 +46,9 @@ type tokenClaims struct {
 	IssuedAt    int64    `json:"iat,omitempty"`
 	Repos       []string `json:"repos,omitempty"`
 	DefaultRepo string   `json:"default_repo,omitempty"`
+	// GitHub-native auth claims
+	GitHubUser  string `json:"github_user,omitempty"`
+	GitHubToken string `json:"github_token,omitempty"`
 }
 
 // sign builds a signed JWT with the given alg (default RS256) and claims.

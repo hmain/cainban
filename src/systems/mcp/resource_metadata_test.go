@@ -111,7 +111,7 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	badge := NewBadgeHandler(func(context.Context, string) (BadgeCounts, error) {
 		return BadgeCounts{Todo: 1, Doing: 2, Done: 3}, nil
 	})
-	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), testClientCfg(), badge, protected)
+	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), testClientCfg(), GitHubAuthConfig{}, badge, protected)
 
 	// (a) well-known: public 200. The Lambda sees the bare route path (API
 	// Gateway routes by path; no stage/host prefix reaches the handler).

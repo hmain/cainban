@@ -40,11 +40,9 @@ export function configureAmplify(): void {
 // targets this custom provider so the user goes straight to Entra.
 export const ENTRA_PROVIDER_NAME = "EntraAwiant";
 
-// Endpoint bases, normalized to no trailing slash for clean path joins.
-export const CONNECT_API = String(import.meta.env.VITE_CONNECT_API || "").replace(
-  /\/+$/,
-  "",
-);
+// MCP API endpoint base, normalized to no trailing slash for clean path joins.
+// (The Connect API has been removed — GitHub-native permissions check access at
+// request time via the GitHub API.)
 export const MCP_API = String(import.meta.env.VITE_MCP_API || "").replace(
   /\/+$/,
   "",

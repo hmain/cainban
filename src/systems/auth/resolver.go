@@ -1,9 +1,17 @@
 package auth
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"time"
+
+	"github.com/hmain/cainban/src/systems/ghperm"
 )
 
 // repoKeys returns the authorized repo set as a slice for diagnostic logging.
@@ -22,16 +30,36 @@ func repoKeys(m map[string]struct{}) []string {
 // trusted for AUTHORIZATION.
 const HeaderTargetRepo = "X-Cainban-Repo"
 
+// UseGitHubPermissions controls whether authorization uses live GitHub API
+// permission checks (true) or the legacy repos claim (false). Set via
+// CAINBAN_USE_GITHUB_PERMISSIONS=true environment variable.
+var UseGitHubPermissions = os.Getenv("CAINBAN_USE_GITHUB_PERMISSIONS") == "true"
+
 // Resolver is the single request-time entry point: it validates the bearer
 // token signature-first and resolves the authorized tenant. The transport calls
 // Resolve once per request BEFORE opening any store.
+//
+// The Resolver supports TWO token types:
+//  1. Cognito JWTs: validated via JWKS signature verification (the original path)
+//  2. GitHub tokens (gho_*, ghp_*, etc.): validated via GitHub's /user API
+//
+// GitHub tokens are detected by their prefix and always use GitHub API for both
+// authentication AND authorization (UseGitHubPermissions is implicitly true).
 type Resolver struct {
-	validator *Validator
+	validator       *Validator
+	githubValidator *GitHubValidator
+	permChecker     *ghperm.PermissionChecker // nil when UseGitHubPermissions is false
 }
 
-// NewResolver wraps a Validator.
+// NewResolver wraps a Validator. GitHub token validation is enabled by default.
 func NewResolver(v *Validator) *Resolver {
-	return &Resolver{validator: v}
+	return &Resolver{validator: v, githubValidator: NewGitHubValidator()}
+}
+
+// NewResolverWithGitHub creates a Resolver that uses GitHub for authorization.
+// The permChecker is used when UseGitHubPermissions is true.
+func NewResolverWithGitHub(v *Validator, permChecker *ghperm.PermissionChecker) *Resolver {
+	return &Resolver{validator: v, githubValidator: NewGitHubValidator(), permChecker: permChecker}
 }
 
 // Resolve is the full auth pipeline for one request:
@@ -42,8 +70,9 @@ func NewResolver(v *Validator) *Resolver {
 //  3. Determine the TARGET repo (identity): the explicit argRepo (an MCP tool
 //     arg) if non-empty, else the X-Cainban-Repo header, else the token's
 //     default_repo claim.
-//  4. AUTHORIZE the target against the validated `repos` claim. A target the
-//     token does not grant is a 403.
+//  4. AUTHORIZE the target: either via GitHub API (when UseGitHubPermissions is
+//     true) or via the validated `repos` claim. A target the caller cannot
+//     access is a 403.
 //  5. Return a Tenant carrying the isolating partition prefix.
 //
 // When the caller names NO repo (no arg, no header) AND the token carries no
@@ -57,18 +86,36 @@ func NewResolver(v *Validator) *Resolver {
 //
 // argRepo is the per-call target from an MCP tool argument; pass "" when the
 // caller relies on the header/default. Both header and arg are UNTRUSTED for
-// authorization — only membership in the validated claim grants access.
+// authorization — only membership in the validated claim (or GitHub API check)
+// grants access.
 func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 	token, err := bearerToken(req)
 	if err != nil {
 		return nil, err // 401, no identity, no store
 	}
 
-	// Signature-first: nothing below runs unless this passes.
-	identity, err := r.validator.Validate(token)
-	if err != nil {
-		return nil, err // 401
+	// Detect token type and validate accordingly.
+	var identity *Identity
+	var isGitHubToken bool
+
+	if IsGitHubToken(token) {
+		// GitHub token: validate via GitHub API
+		isGitHubToken = true
+		if r.githubValidator == nil {
+			return nil, unauthenticated("GitHub token validation not configured", nil)
+		}
+		identity, err = r.githubValidator.Validate(req.Context(), token)
+		if err != nil {
+			return nil, err // 401
+		}
+	} else {
+		// Cognito JWT: signature-first validation
+		identity, err = r.validator.Validate(token)
+		if err != nil {
+			return nil, err // 401
+		}
 	}
+	_ = isGitHubToken // used for authorization path selection below
 
 	target, err := r.resolveTarget(identity, req, argRepo)
 	if err != nil {
@@ -82,9 +129,10 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 		return &Tenant{Subject: identity.Subject, Actor: actorFor(identity), AuthorizedRepos: identity.sortedRepos(), Unscoped: true}, nil
 	}
 
-	if !identity.authorizes(target) {
-		log.Printf("cainban auth: 403 not authorized for target=%q (sub=%q repos=%v)", target, identity.Subject, repoKeys(identity.Repos))
-		return nil, forbidden("caller not authorized for repo " + target)
+	// Authorize the target repo.
+	// GitHub tokens ALWAYS use GitHub API for authorization (they have no claims).
+	if err := r.authorize(req.Context(), identity, target, isGitHubToken); err != nil {
+		return nil, err // 401 or 403
 	}
 
 	return &Tenant{
@@ -94,6 +142,71 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 		Actor:           actorFor(identity),
 		AuthorizedRepos: identity.sortedRepos(),
 	}, nil
+}
+
+// authorize checks whether the identity is permitted to access the target repo.
+// When forceGitHub is true (for GitHub tokens) or UseGitHubPermissions is true,
+// it uses the GitHub API (via PermissionChecker). Otherwise, it checks the legacy
+// repos claim.
+func (r *Resolver) authorize(ctx context.Context, identity *Identity, target string, forceGitHub bool) error {
+	if forceGitHub || UseGitHubPermissions {
+		return r.authorizeViaGitHub(ctx, identity, target)
+	}
+	return r.authorizeViaReposClaim(identity, target)
+}
+
+// authorizeViaGitHub checks GitHub API for write permission.
+// When a PermissionChecker is configured, it uses that. Otherwise, it falls back
+// to a direct GitHub API call using the token from the identity.
+func (r *Resolver) authorizeViaGitHub(ctx context.Context, identity *Identity, target string) error {
+	if identity.GitHubUser == "" {
+		log.Printf("cainban auth: 401 missing github_user (sub=%q)", identity.Subject)
+		return unauthenticated("missing GitHub identity", nil)
+	}
+	if identity.GitHubToken == "" {
+		log.Printf("cainban auth: 401 missing github_token (sub=%q)", identity.Subject)
+		return unauthenticated("missing GitHub token", nil)
+	}
+
+	// Use PermissionChecker if available, otherwise fall back to direct check
+	if r.permChecker != nil {
+		canWrite, err := r.permChecker.CanWrite(ctx, identity.GitHubUser, identity.GitHubToken, target)
+		if err != nil {
+			log.Printf("cainban auth: 401 GitHub permission check failed (sub=%q user=%q repo=%q): %v",
+				identity.Subject, identity.GitHubUser, target, err)
+			return unauthenticated("permission check failed", err)
+		}
+		if !canWrite {
+			log.Printf("cainban auth: 403 GitHub denies write access (sub=%q user=%q repo=%q)",
+				identity.Subject, identity.GitHubUser, target)
+			return forbidden("caller not authorized for repo " + target)
+		}
+		return nil
+	}
+
+	// Direct GitHub API check when no PermissionChecker configured
+	canWrite, err := checkGitHubRepoPermission(ctx, identity.GitHubToken, target)
+	if err != nil {
+		log.Printf("cainban auth: 401 GitHub permission check failed (sub=%q user=%q repo=%q): %v",
+			identity.Subject, identity.GitHubUser, target, err)
+		return unauthenticated("permission check failed", err)
+	}
+	if !canWrite {
+		log.Printf("cainban auth: 403 GitHub denies write access (sub=%q user=%q repo=%q)",
+			identity.Subject, identity.GitHubUser, target)
+		return forbidden("caller not authorized for repo " + target)
+	}
+	return nil
+}
+
+// authorizeViaReposClaim checks the legacy repos claim from the JWT.
+func (r *Resolver) authorizeViaReposClaim(identity *Identity, target string) error {
+	if !identity.authorizes(target) {
+		log.Printf("cainban auth: 403 not authorized for target=%q (sub=%q repos=%v)",
+			target, identity.Subject, repoKeys(identity.Repos))
+		return forbidden("caller not authorized for repo " + target)
+	}
+	return nil
 }
 
 // actorFor returns the human-readable caller id for audit: email when the
@@ -148,4 +261,58 @@ func bearerToken(req *http.Request) (string, error) {
 		return "", unauthenticated("Authorization header is not a Bearer token", nil)
 	}
 	return strings.TrimSpace(h[len(prefix):]), nil
+}
+
+// checkGitHubRepoPermission checks if the token has write access to a repo
+// by calling GitHub's /repos/:owner/:repo endpoint and checking the permissions
+// object. This is a fallback when no PermissionChecker is configured.
+func checkGitHubRepoPermission(ctx context.Context, token, repo string) (bool, error) {
+	parts := strings.Split(repo, "/")
+	if len(parts) != 2 {
+		return false, fmt.Errorf("invalid repo format: %s", repo)
+	}
+	owner, repoName := parts[0], parts[1]
+
+	url := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repoName)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "cainban")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return false, nil // Repo doesn't exist or no access
+	}
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	// Parse the response to check permissions
+	var repoResp struct {
+		Permissions struct {
+			Admin    bool `json:"admin"`
+			Maintain bool `json:"maintain"`
+			Push     bool `json:"push"`
+			Triage   bool `json:"triage"`
+			Pull     bool `json:"pull"`
+		} `json:"permissions"`
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(body, &repoResp); err != nil {
+		return false, err
+	}
+
+	// Write access requires push, maintain, or admin
+	return repoResp.Permissions.Push || repoResp.Permissions.Maintain || repoResp.Permissions.Admin, nil
 }
