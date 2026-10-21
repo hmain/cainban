@@ -3,6 +3,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/hmain/cainban/src/systems/github"
@@ -145,7 +146,9 @@ func NewGitHubDevicePollHandler(cfg GitHubAuthConfig) http.Handler {
 		tokens, err := oauth.PollDeviceToken(r.Context(), req.DeviceCode)
 		if err != nil {
 			// Check if it's a device auth error (pending, slow_down, expired, denied).
-			if dae, ok := err.(*github.DeviceAuthError); ok {
+			// errors.As (not a bare type assertion) so a wrapped error is still matched.
+			var dae *github.DeviceAuthError
+			if errors.As(err, &dae) {
 				resp := GitHubDevicePollPendingResponse{
 					Error:            dae.Code,
 					ErrorDescription: dae.Description,

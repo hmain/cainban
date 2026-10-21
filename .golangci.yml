@@ -18,6 +18,7 @@ linters:
     - sqlclosecheck
     - rowserrcheck
     - noctx
+    - errorlint
   settings:
     errcheck:
       check-type-assertions: false
