@@ -87,10 +87,13 @@ func NewGitHubDeviceStartHandler(cfg GitHubAuthConfig) http.Handler {
 			}
 		}
 
-		// Default scope for cainban: user identity + repo access.
+		// Default scope: user identity + repo access for private repos.
+		// The 'repo' scope is broad (full control) but required for private repo
+		// permission checks. The token is stored only on the user's machine in
+		// their MCP client config, never on cainban servers.
 		scope := req.Scope
 		if scope == "" {
-			scope = "user:email read:user repo"
+			scope = "read:user user:email repo"
 		}
 
 		dcr, err := oauth.StartDeviceFlow(r.Context(), scope)
