@@ -148,9 +148,11 @@ func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetad
 	// authenticate with GitHub directly (no Cognito federation). The device flow
 	// is ideal for CLI tools: user gets a code, visits github.com/login/device,
 	// enters the code, and the CLI polls until auth is complete.
+	// Wrapped with corsPreflightOr so browser-based clients (the web connect
+	// page) can make cross-origin requests without failing on preflight.
 	if githubAuthCfg.ClientID != "" {
-		mux.Handle("/auth/github/device", NewGitHubDeviceStartHandler(githubAuthCfg))
-		mux.Handle("/auth/github/device/poll", NewGitHubDevicePollHandler(githubAuthCfg))
+		mux.Handle("/auth/github/device", corsPreflightOr(NewGitHubDeviceStartHandler(githubAuthCfg)))
+		mux.Handle("/auth/github/device/poll", corsPreflightOr(NewGitHubDevicePollHandler(githubAuthCfg)))
 	}
 	// Dynamic status badges — PUBLIC, no auth. A badge exposes only the three
 	// per-status task counts (todo|doing|done) for the repo named in the URL,
