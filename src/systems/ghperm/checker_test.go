@@ -12,14 +12,22 @@ import (
 type mockGitHubClient struct {
 	mu         sync.Mutex
 	permission Permission
+	byToken    map[string]Permission // optional per-token responses
 	err        error
 	calls      []string // records "owner/repo" for each call
 }
 
+// byToken, when non-nil, maps a user token to the permission the mock returns,
+// so a test can give two different-scope tokens different answers.
 func (m *mockGitHubClient) GetRepoPermission(ctx context.Context, userToken, owner, repo string) (Permission, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, owner+"/"+repo)
+	if m.byToken != nil {
+		if p, ok := m.byToken[userToken]; ok {
+			return p, m.err
+		}
+	}
 	return m.permission, m.err
 }
 
@@ -43,7 +51,7 @@ func TestChecker_CacheHit(t *testing.T) {
 	ctx := context.Background()
 
 	// Pre-populate cache
-	cache.Set(ctx, "octocat", "acme/frontend", PermissionWrite, 5*time.Minute)
+	cache.Set(ctx, "octocat", TokenFingerprint("fake-token"), "acme/frontend", PermissionWrite, 5*time.Minute)
 
 	mockClient := &mockGitHubClient{permission: PermissionNone} // would deny if called
 	checker, err := NewChecker(CheckerConfig{
@@ -99,7 +107,7 @@ func TestChecker_CacheMiss_GitHubGrantsWrite(t *testing.T) {
 	}
 
 	// Should be cached now
-	entry := cache.Get(ctx, "octocat", "acme/frontend")
+	entry := cache.Get(ctx, "octocat", TokenFingerprint("fake-token"), "acme/frontend")
 	if entry == nil {
 		t.Fatal("expected cached entry")
 	}
@@ -134,7 +142,7 @@ func TestChecker_CacheMiss_GitHubDenies(t *testing.T) {
 	}
 
 	// Denial should also be cached (prevents enumeration)
-	entry := cache.Get(ctx, "octocat", "acme/frontend")
+	entry := cache.Get(ctx, "octocat", TokenFingerprint("fake-token"), "acme/frontend")
 	if entry == nil {
 		t.Fatal("expected denial to be cached")
 	}
@@ -167,7 +175,7 @@ func TestChecker_GitHubError_FailClosed(t *testing.T) {
 	}
 
 	// Error should NOT be cached
-	entry := cache.Get(ctx, "octocat", "acme/frontend")
+	entry := cache.Get(ctx, "octocat", TokenFingerprint("fake-token"), "acme/frontend")
 	if entry != nil {
 		t.Error("errors should not be cached")
 	}
@@ -222,7 +230,7 @@ func TestChecker_NormalizesRepo(t *testing.T) {
 	}
 
 	// Verify normalized in cache
-	entry := cache.Get(ctx, "octocat", "acme/frontend")
+	entry := cache.Get(ctx, "octocat", TokenFingerprint("fake-token"), "acme/frontend")
 	if entry == nil {
 		t.Error("expected entry under normalized key")
 	}
@@ -428,5 +436,98 @@ func TestChecker_EmptyToken(t *testing.T) {
 	_, err := checker.CanWrite(ctx, "user", "", "owner/repo")
 	if err == nil {
 		t.Error("expected error for empty token")
+	}
+}
+
+// TestChecker_DifferentTokenDoesNotReuseDecision is the RFC M3 guard against the
+// token-blind cache key: two tokens for the SAME login that differ in scope must
+// NOT share a cached decision. Token A has write; token B (a narrower token with
+// no access) must trigger its own GitHub check and get its own answer, not reuse
+// A's cached write.
+func TestChecker_DifferentTokenDoesNotReuseDecision(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	cache := NewMemoryCache(func() time.Time { return now })
+	ctx := context.Background()
+
+	mockClient := &mockGitHubClient{byToken: map[string]Permission{
+		"token-A-write": PermissionWrite,
+		"token-B-none":  PermissionNone,
+	}}
+	checker, err := NewChecker(CheckerConfig{Client: mockClient, Cache: cache, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatalf("NewChecker: %v", err)
+	}
+
+	// Token A: write, cached.
+	okA, err := checker.CanWrite(ctx, "octocat", "token-A-write", "acme/frontend")
+	if err != nil || !okA {
+		t.Fatalf("token A expected write, got ok=%v err=%v", okA, err)
+	}
+	// Token B (same user, different scope): MUST NOT reuse A's decision.
+	okB, err := checker.CanWrite(ctx, "octocat", "token-B-none", "acme/frontend")
+	if err != nil {
+		t.Fatalf("token B unexpected error: %v", err)
+	}
+	if okB {
+		t.Fatalf("token B reused token A's cached write — token-blind cache key (RFC M3)")
+	}
+	// Both tokens caused a GitHub call (no cross-token cache reuse).
+	if mockClient.callCount() != 2 {
+		t.Errorf("expected 2 GitHub calls (one per distinct token), got %d", mockClient.callCount())
+	}
+}
+
+// TestChecker_GrantTTLShorterThanDenialTTL is the RFC M3 guard for the
+// revocation window: a write GRANT is cached only for the short grantTTL (so a
+// revocation takes effect quickly), while a DENIAL is cached for the longer ttl.
+func TestChecker_GrantTTLShorterThanDenialTTL(t *testing.T) {
+	t.Parallel()
+	base := time.Date(2024, 1, 1, 12, 0, 0, 0, time.UTC)
+	clock := base
+	cache := NewMemoryCache(func() time.Time { return clock })
+	ctx := context.Background()
+
+	mockClient := &mockGitHubClient{permission: PermissionWrite}
+	checker, err := NewChecker(CheckerConfig{
+		Client:   mockClient,
+		Cache:    cache,
+		TTL:      5 * time.Minute,  // denial TTL
+		GrantTTL: 30 * time.Second, // grant TTL (short)
+		Now:      func() time.Time { return clock },
+	})
+	if err != nil {
+		t.Fatalf("NewChecker: %v", err)
+	}
+
+	// First check: GitHub grants write, cached under the short grantTTL.
+	if ok, _ := checker.CanWrite(ctx, "octocat", "tok", "acme/frontend"); !ok {
+		t.Fatal("expected initial write grant")
+	}
+	if mockClient.callCount() != 1 {
+		t.Fatalf("expected 1 GitHub call, got %d", mockClient.callCount())
+	}
+
+	// 20s later (< grantTTL): still cached, no new call.
+	clock = base.Add(20 * time.Second)
+	if ok, _ := checker.CanWrite(ctx, "octocat", "tok", "acme/frontend"); !ok {
+		t.Fatal("within grantTTL the grant should still be cached")
+	}
+	if mockClient.callCount() != 1 {
+		t.Errorf("within grantTTL expected no new GitHub call, got %d", mockClient.callCount())
+	}
+
+	// 45s later (> grantTTL, < denial TTL): grant expired, GitHub re-checked.
+	// Now GitHub denies (access revoked) — the short grant TTL is what let this
+	// revocation take effect well before the 5m denial TTL would have.
+	clock = base.Add(45 * time.Second)
+	mockClient.mu.Lock()
+	mockClient.permission = PermissionNone
+	mockClient.mu.Unlock()
+	if ok, _ := checker.CanWrite(ctx, "octocat", "tok", "acme/frontend"); ok {
+		t.Fatal("after grantTTL expiry the revoked access must be re-checked and denied")
+	}
+	if mockClient.callCount() != 2 {
+		t.Errorf("expected a 2nd GitHub call after grantTTL expiry, got %d", mockClient.callCount())
 	}
 }
