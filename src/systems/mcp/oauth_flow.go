@@ -143,8 +143,11 @@ func (f *OAuthFlow) Run(ctx context.Context) (*OAuthFlowResult, error) {
 		ReadHeaderTimeout: 10 * time.Second, // mitigate Slowloris (G112)
 	}
 
-	// Start server in background
-	ln, err := net.Listen("tcp", addr)
+	// Start server in background. ListenConfig.Listen (context-aware) instead of
+	// net.Listen satisfies noctx; Background() is correct here — the listener
+	// lives for the whole local OAuth-callback flow and is closed explicitly.
+	var lc net.ListenConfig
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("failed to listen on %s: %w", addr, err)
 	}

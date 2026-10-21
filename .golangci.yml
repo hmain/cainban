@@ -14,6 +14,10 @@ linters:
     - misspell
     - unconvert
     - gosec
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - noctx
   settings:
     errcheck:
       check-type-assertions: false
@@ -50,6 +54,21 @@ linters:
         linters:
           - gosec
         text: "(G104|G107|G204|G304|G703|G704|G705|G706)"
+      # Test files: httptest requests, net.Listen, and http.Get against local
+      # test servers don't need context plumbing or body-close rigor.
+      - path: _test\.go
+        linters:
+          - noctx
+          - bodyclose
+          - rowserrcheck
+      # Local SQLite CLI layer: the database/sql calls here (migrations, the
+      # single-process local board store) have no request context to thread —
+      # adding context.Context through the whole local storage/task layer is a
+      # tracked follow-up (RFC A3 note), not a security fix. The serverless path
+      # is DynamoDB (context-aware SDK), not this layer.
+      - path: src/systems/(storage|task)/
+        linters:
+          - noctx
 
 formatters:
   enable:

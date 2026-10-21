@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -185,7 +186,10 @@ func OpenBrowser(url string) error {
 		args = []string{url}
 	}
 
+	// Background context: this is a detached browser launch (.Start(), never
+	// waited on), so there is no deadline to carry — CommandContext is used
+	// only to satisfy noctx and keep one consistent exec entrypoint.
 	// #nosec G204 -- cmd is a fixed platform opener (open/xdg-open/cmd) and the
 	// only variable arg is a URL this CLI itself constructed; local operator action.
-	return exec.Command(cmd, args...).Start()
+	return exec.CommandContext(context.Background(), cmd, args...).Start()
 }

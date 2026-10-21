@@ -839,6 +839,9 @@ func (s *System) GetTaskLinks(taskID int) ([]TaskLink, error) {
 		}
 		links = append(links, link)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read task links: %w", err)
+	}
 
 	return links, nil
 }
