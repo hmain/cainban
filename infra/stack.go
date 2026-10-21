@@ -492,6 +492,14 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	)
 
+	// CORS allowed origins (RFC M6): derived from the SPA callback URLs in
+	// context (spaCallbackUrls) rather than a wildcard "*". Each callback URL is
+	// reduced to its scheme+host origin. The data plane is already gated by
+	// in-Lambda auth, but a wildcard origin is needless attack surface — scope it
+	// to the known SPA/connect origins. Falls back to the localhost+prod origins
+	// if context is unset so `cdk synth` still works.
+	corsOrigins := deriveCorsOrigins(ctxOr("spaCallbackUrls", "http://localhost:5173/,https://cainban.awiant.tech/"))
+
 	mcpAPI := awsapigatewayv2.NewHttpApi(stack, jsii.String("McpHttpApi"), &awsapigatewayv2.HttpApiProps{
 		ApiName:     jsii.String("cainban-mcp"),
 		Description: jsii.String("MCP Streamable-HTTP endpoint — HTTP API; auth enforced IN the Lambda so the 401 carries the RFC 9728 resource_metadata challenge (Authorization: Bearer <jwt>, no SigV4)"),
@@ -504,7 +512,7 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		// an auth page. See the data-route comment below.
 		DefaultAuthorizer: mcpAuthorizer,
 		CorsPreflight: &awsapigatewayv2.CorsPreflightOptions{
-			AllowOrigins: jsii.Strings("*"),
+			AllowOrigins: corsOrigins,
 			AllowMethods: &[]awsapigatewayv2.CorsHttpMethod{awsapigatewayv2.CorsHttpMethod_ANY},
 			// Authorization carries the bearer JWT; X-Cainban-Repo names the
 			// target repo; the MCP session/protocol headers are used by the
@@ -855,18 +863,43 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 	// the role is IaC — versioned, reviewable, and consistent with the rest of
 	// the stack. It does NOT connect the GitHub repo (that is a one-time console
 	// OAuth) and grants nothing to the SPA itself; it is only the build-time
-	// service identity. Uses the AWS-managed AdministratorAccess-Amplify policy,
-	// the documented managed policy for the Amplify service role.
+	// service identity. (RFC H1/C1) The AWS-managed AdministratorAccess-Amplify
+	// policy is near-admin; this role only needs to write its build logs. We
+	// attach a SCOPED inline policy instead: CloudWatch Logs for the Amplify
+	// build log groups only. Amplify manages its own build/artifact storage
+	// under the service-linked role it creates per app, so the custom service
+	// role does not need S3/CloudFront/Lambda/IAM breadth.
 	//
 	// Attach it to the Amplify app after deploy (console: App settings → General
 	// → Service role → select cainban-amplify-service-role; or
 	// `aws amplify update-app --app-id <id> --iam-service-role-arn <this output>`).
+	//
+	// NOTE: if a future Amplify build step needs an additional action, add that
+	// specific action here rather than reverting to the managed admin policy.
 	amplifyServiceRole := awsiam.NewRole(stack, jsii.String("AmplifyServiceRole"), &awsiam.RoleProps{
 		RoleName:    jsii.String("cainban-amplify-service-role"),
 		AssumedBy:   awsiam.NewServicePrincipal(jsii.String("amplify.amazonaws.com"), nil),
-		Description: jsii.String("Service role AWS Amplify Hosting assumes to build/deploy the cainban connect-page SPA."),
-		ManagedPolicies: &[]awsiam.IManagedPolicy{
-			awsiam.ManagedPolicy_FromAwsManagedPolicyName(jsii.String("AdministratorAccess-Amplify")),
+		Description: jsii.String("Service role AWS Amplify Hosting assumes to build/deploy the cainban connect-page SPA (scoped to CloudWatch Logs)."),
+		InlinePolicies: &map[string]awsiam.PolicyDocument{
+			"cainban-amplify-build-logs": awsiam.NewPolicyDocument(&awsiam.PolicyDocumentProps{
+				Statements: &[]awsiam.PolicyStatement{
+					awsiam.NewPolicyStatement(&awsiam.PolicyStatementProps{
+						Effect: awsiam.Effect_ALLOW,
+						Actions: jsii.Strings(
+							"logs:CreateLogGroup",
+							"logs:CreateLogStream",
+							"logs:PutLogEvents",
+							"logs:DescribeLogGroups",
+							"logs:DescribeLogStreams",
+						),
+						// Scoped to the Amplify build log groups in this account/region.
+						Resources: jsii.Strings(
+							"arn:aws:logs:*:*:log-group:/aws/amplify/*",
+							"arn:aws:logs:*:*:log-group:/aws/amplify/*:log-stream:*",
+						),
+					}),
+				},
+			}),
 		},
 	})
 	awscdk.NewCfnOutput(stack, jsii.String("AmplifyServiceRoleArn"), &awscdk.CfnOutputProps{
@@ -890,4 +923,42 @@ func splitCsv(csv string) []*string {
 		out = append(out, jsii.String(p))
 	}
 	return out
+}
+
+// deriveCorsOrigins turns a comma-separated list of SPA callback URLs (the
+// spaCallbackUrls context value, e.g. "http://localhost:5173/,https://app.example/")
+// into the set of scheme+host origins for the API Gateway CORS AllowOrigins
+// (RFC M6). It strips any path/query and a trailing slash so each entry is a
+// bare origin ("http://localhost:5173", "https://app.example"), de-duplicates,
+// and preserves order. If nothing usable is parsed it falls back to "*" so a
+// misconfigured context never breaks the preflight entirely (the data plane is
+// still auth-gated in-Lambda).
+func deriveCorsOrigins(csv string) *[]*string {
+	seen := map[string]bool{}
+	var origins []*string
+	for _, raw := range strings.Split(csv, ",") {
+		u := strings.TrimSpace(raw)
+		if u == "" {
+			continue
+		}
+		// Reduce to scheme://host[:port] by cutting at the first '/' after the
+		// scheme's "://".
+		origin := u
+		if i := strings.Index(u, "://"); i >= 0 {
+			rest := u[i+3:]
+			if j := strings.IndexByte(rest, '/'); j >= 0 {
+				origin = u[:i+3+j]
+			}
+		}
+		origin = strings.TrimRight(origin, "/")
+		if origin == "" || seen[origin] {
+			continue
+		}
+		seen[origin] = true
+		origins = append(origins, jsii.String(origin))
+	}
+	if len(origins) == 0 {
+		return jsii.Strings("*")
+	}
+	return &origins
 }
