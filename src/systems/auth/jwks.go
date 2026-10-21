@@ -27,7 +27,13 @@ type JWKSCache struct {
 	url        string
 	httpClient *http.Client
 	ttl        time.Duration
-	now        func() time.Time
+	// maxStale bounds how long a cached key may be served AFTER a failed
+	// refresh. Within [ttl, maxStale) a stale key is still returned so a
+	// transient JWKS outage does not cause a 401 storm; past maxStale the cache
+	// fails CLOSED, so a key the IdP rotated/revoked cannot validate tokens
+	// indefinitely just because refresh keeps failing (RFC M2).
+	maxStale time.Duration
+	now      func() time.Time
 
 	mu        sync.RWMutex
 	keys      map[string]*rsa.PublicKey
@@ -47,6 +53,13 @@ func WithTTL(ttl time.Duration) JWKSCacheOption {
 	return func(j *JWKSCache) { j.ttl = ttl }
 }
 
+// WithMaxStale overrides the max-stale ceiling (default 24h): the longest a
+// cached key may be served after refresh starts failing before the cache fails
+// closed. Must be >= ttl to be meaningful.
+func WithMaxStale(d time.Duration) JWKSCacheOption {
+	return func(j *JWKSCache) { j.maxStale = d }
+}
+
 // NewJWKSCache builds a JWKS cache for the given JWKS URL. For a Cognito user
 // pool the URL is
 // https://cognito-idp.<region>.amazonaws.com/<userPoolId>/.well-known/jwks.json.
@@ -55,6 +68,7 @@ func NewJWKSCache(jwksURL string, opts ...JWKSCacheOption) *JWKSCache {
 		url:        jwksURL,
 		httpClient: &http.Client{Timeout: 5 * time.Second},
 		ttl:        time.Hour,
+		maxStale:   24 * time.Hour,
 		now:        time.Now,
 		keys:       map[string]*rsa.PublicKey{},
 	}
@@ -76,13 +90,20 @@ func (j *JWKSCache) KeyByID(kid string) (*rsa.PublicKey, error) {
 	}
 
 	if err := j.refresh(context.Background()); err != nil {
-		// If the refresh failed but we still hold a cached key, use it rather
-		// than failing closed on a transient JWKS outage.
+		// Refresh failed. We may serve a cached key ONLY while the cache is
+		// within the max-stale ceiling — this rides out a transient JWKS outage
+		// without a 401 storm. Past the ceiling we fail CLOSED so a rotated or
+		// revoked key cannot validate tokens forever on a persistently failing
+		// refresh (RFC M2).
 		j.mu.RLock()
 		key, ok = j.keys[kid]
+		staleFor := j.now().Sub(j.fetchedAt)
 		j.mu.RUnlock()
-		if ok {
+		if ok && staleFor < j.maxStale {
 			return key, nil
+		}
+		if ok {
+			return nil, fmt.Errorf("jwks refresh failing and cache stale for %s (> max-stale %s); refusing key %q: %w", staleFor, j.maxStale, kid, err)
 		}
 		return nil, fmt.Errorf("jwks refresh failed and key %q not cached: %w", kid, err)
 	}
