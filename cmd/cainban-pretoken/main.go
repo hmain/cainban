@@ -137,28 +137,21 @@ func buildGitHubClaims(event events.CognitoEventUserPoolsPreTokenGenV2_0) map[st
 		out[claimGitHubUser] = githubUser
 	}
 
-	// Extract GitHub token from the trigger context
-	// Note: Cognito provides the provider tokens via different mechanisms:
-	// - For user pools with hosted UI: tokens are in the response
-	// - For direct federation: may need custom handling
-	// This is a placeholder - the actual token extraction depends on your
-	// Cognito configuration (hosted UI vs direct federation)
-	githubToken := extractGitHubToken(event)
-	if githubToken != "" {
-		out[claimGitHubToken] = githubToken
-	}
+	// SECURITY (RFC M1): the GitHub access token is a bearer credential and a
+	// Cognito JWT is SIGNED, not ENCRYPTED — any claim is base64-readable by any
+	// holder of the token. We therefore DO NOT mint the GitHub token into a
+	// claim. The GitHub-native auth path obtains the token at request time (the
+	// client presents it / server-side exchange), never from the JWT. See the
+	// resolver's GitHub path (src/systems/auth/resolver.go).
 
 	// Include default_repo if set (still useful for identifying which repo to use)
 	if def := strings.TrimSpace(attrs[attrDefaultRepo]); def != "" {
 		out[claimDefaultRepo] = def
 	}
 
-	// Log (without token) for debugging
+	// Log (never a token — none is read here) for debugging
 	if githubUser == "" {
 		log.Printf("cainban-pretoken: WARNING no GitHub username found in identities")
-	}
-	if githubToken == "" {
-		log.Printf("cainban-pretoken: WARNING no GitHub token available (federation may need configuration)")
 	}
 
 	return out
@@ -209,30 +202,10 @@ func extractGitHubUsername(attrs map[string]string) string {
 	return ""
 }
 
-// extractGitHubToken attempts to get the GitHub access token.
-// NOTE: Cognito's pre-token trigger does NOT directly receive the IdP tokens.
-// To get the GitHub token, you typically need one of:
-// 1. Store it during the post-authentication trigger
-// 2. Use Cognito Identity Pools to get AWS credentials + GitHub token
-// 3. Have the client pass it separately
-//
-// This function returns empty - the actual implementation depends on your
-// specific Cognito configuration. The resolver will fail closed (401) if
-// the token is missing.
-func extractGitHubToken(event events.CognitoEventUserPoolsPreTokenGenV2_0) string {
-	// Cognito pre-token trigger doesn't have direct access to IdP tokens.
-	// The token needs to be obtained through other means:
-	// - A post-authentication trigger that stores it
-	// - A custom attribute populated during sign-up
-	// - The client obtaining it separately and passing via API
-
-	// Check if stored in a custom attribute (if configured that way)
-	if token := strings.TrimSpace(event.Request.UserAttributes["custom:github_token"]); token != "" {
-		return token
-	}
-
-	return ""
-}
+// NOTE (RFC M1): a former extractGitHubToken helper read custom:github_token and
+// buildGitHubClaims minted it into a github_token claim. Both were removed — a
+// signed JWT must never carry a bearer token. The GitHub token is supplied at
+// request time, not via the token. Do not reintroduce a token claim here.
 
 // buildLegacyClaims is the legacy fallback: reads custom:repos attribute.
 // Alias for backwards compatibility with tests.
