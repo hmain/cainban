@@ -143,8 +143,10 @@ func TestSignBadgeURL_WithSecret(t *testing.T) {
 	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
 
 	sig := SignBadgeURL("hmain/cainban", 0)
-	if len(sig) != 16 {
-		t.Errorf("signature should be 16 chars, got %d: %q", len(sig), sig)
+	// Full HMAC-SHA256 digest is 32 bytes = 64 hex chars (RFC L2: the old
+	// 16-char/64-bit truncation was too short).
+	if len(sig) != 64 {
+		t.Errorf("signature should be 64 hex chars (full SHA-256), got %d: %q", len(sig), sig)
 	}
 
 	// Same inputs should produce same signature
@@ -440,5 +442,27 @@ func TestBadgeHandler_Head(t *testing.T) {
 	}
 	if ct := rec.Header().Get("Content-Type"); ct != "image/svg+xml" {
 		t.Errorf("HEAD Content-Type = %q, want image/svg+xml", ct)
+	}
+}
+
+// TestValidateBadgeSignature_RejectsTruncatedMAC is the RFC L2 guard: the badge
+// signature is now the FULL HMAC-SHA256 digest, and a truncated prefix of a
+// valid signature (the old 16-char form) must NOT validate.
+func TestValidateBadgeSignature_RejectsTruncatedMAC(t *testing.T) {
+	os.Setenv("CAINBAN_BADGE_SECRET", "test-secret-123")
+	defer os.Unsetenv("CAINBAN_BADGE_SECRET")
+
+	repo := "hmain/cainban"
+	full := SignBadgeURL(repo, 0)
+	if len(full) != 64 {
+		t.Fatalf("expected 64-char full MAC, got %d", len(full))
+	}
+	// The full signature validates.
+	if !ValidateBadgeSignature(repo, full, 0) {
+		t.Fatal("full signature should validate")
+	}
+	// A 16-char truncation (the old weak form) must be rejected.
+	if ValidateBadgeSignature(repo, full[:16], 0) {
+		t.Fatal("a 16-char truncated signature must NOT validate (RFC L2)")
 	}
 }

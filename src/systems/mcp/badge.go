@@ -49,7 +49,10 @@ func SignBadgeURL(repo string, expiry int64) string {
 	}
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write([]byte(msg))
-	return hex.EncodeToString(h.Sum(nil))[:16] // truncate to 16 chars
+	// Full 256-bit digest (RFC L2): a 64-bit truncation was brute-forceable
+	// offline. hmac.Equal in ValidateBadgeSignature keeps the compare
+	// constant-time. (Previously-issued 16-char URLs must be regenerated.)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // ValidateBadgeSignature checks if sig is valid for the given repo and expiry.
