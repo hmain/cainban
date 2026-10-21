@@ -314,6 +314,8 @@ func authenticateWS(ctx context.Context, conn *websocket.Conn, resolver *auth.Re
 	// the bearer token and the target repo. This keeps WS and MCP auth on ONE
 	// code path (signature-first validation + repos-claim authorization), so
 	// the two can never drift.
+	// #nosec G704 -- this request is never sent; it is a synthetic *http.Request
+	// built only to feed the in-process auth resolver. No outbound call is made.
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "/ws/"+repo, nil)
 	if err != nil {
 		return nil, fmt.Errorf("auth: %w", err)

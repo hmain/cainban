@@ -172,6 +172,9 @@ func NewGitHubDevicePollHandler(cfg GitHubAuthConfig) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
+		// #nosec G117 -- this is the OAuth device-flow poll response: returning
+		// the access token to the client that initiated THIS device flow is the
+		// protocol's purpose. Sent once, over no-store, to its own initiator.
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 }

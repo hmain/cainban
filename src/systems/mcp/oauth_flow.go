@@ -138,8 +138,9 @@ func (f *OAuthFlow) Run(ctx context.Context) (*OAuthFlowResult, error) {
 	mux.HandleFunc("/health", f.handleHealth)
 
 	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second, // mitigate Slowloris (G112)
 	}
 
 	// Start server in background

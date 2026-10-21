@@ -13,12 +13,19 @@ linters:
     - unused
     - misspell
     - unconvert
+    - gosec
   settings:
     errcheck:
       check-type-assertions: false
       check-blank: false
     misspell:
       locale: US
+    gosec:
+      excludes:
+        # G101 fires on constant NAMES and public URLs that match a secret
+        # pattern (e.g. github/oauth.go oauthTokenURL, test token fixtures) —
+        # none are real credentials.
+        - G101
   exclusions:
     generated: lax
     rules:
@@ -28,6 +35,21 @@ linters:
       - path: cmd/
         linters:
           - errcheck
+      # Test files: unhandled errors (os.Setenv), fixed-perm temp dirs/files,
+      # and variable URLs/paths pointing at httptest servers or t.TempDir() are
+      # all acceptable in tests and not a production attack surface.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "(G104|G107|G301|G304|G306)"
+      # CLI entrypoints take operator-supplied local paths/URLs; gosec's taint
+      # analysis (path traversal / file inclusion / SSRF / log injection) flags
+      # these as untrusted, but the operator runs their own CLI against their
+      # own filesystem. Scoped to cmd/ only, mirroring the errcheck exclusion.
+      - path: cmd/
+        linters:
+          - gosec
+        text: "(G104|G107|G204|G304|G703|G704|G705|G706)"
 
 formatters:
   enable:

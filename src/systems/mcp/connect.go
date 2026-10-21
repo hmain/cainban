@@ -125,8 +125,11 @@ func WriteMCPConfig(client, serverName string, serverConfig map[string]any) erro
 		return fmt.Errorf("unknown MCP client: %s", client)
 	}
 
-	// Read existing config if present
+	// Read existing config if present.
+	// configPath is resolved from a known client id + the operator's own $HOME;
+	// this is a local CLI writing the user's own config.
 	var existingData []byte
+	// #nosec G304 -- see above: local CLI reading the operator's own config path.
 	if data, err := os.ReadFile(configPath); err == nil {
 		existingData = data
 	}
@@ -137,14 +140,15 @@ func WriteMCPConfig(client, serverName string, serverConfig map[string]any) erro
 		return err
 	}
 
-	// Ensure directory exists
-	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+	// Ensure directory exists (0700: the merged config can carry tokens).
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o700); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	// Write atomically
+	// Write atomically. 0600 because the merged MCP config may contain bearer
+	// tokens / secrets — it must not be world- or group-readable.
 	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, merged, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, merged, 0o600); err != nil {
 		return fmt.Errorf("failed to write config: %w", err)
 	}
 
@@ -181,5 +185,7 @@ func OpenBrowser(url string) error {
 		args = []string{url}
 	}
 
+	// #nosec G204 -- cmd is a fixed platform opener (open/xdg-open/cmd) and the
+	// only variable arg is a URL this CLI itself constructed; local operator action.
 	return exec.Command(cmd, args...).Start()
 }

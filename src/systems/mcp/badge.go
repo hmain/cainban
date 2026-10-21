@@ -293,6 +293,7 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		if err != nil {
 			// Malformed path: still a 200 SVG so an embed degrades gracefully.
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderUnauthorizedBadge(label, style)))
 			return
 		}
@@ -307,6 +308,7 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		if badgeSecret() == "" {
 			// Signing not configured - return "not configured" badge
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderNotConfiguredBadge(label, style)))
 			return
 		}
@@ -314,6 +316,7 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		if !ValidateBadgeSignature(repo, sig, expiry) {
 			// Invalid or missing signature
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderUnauthorizedBadge(label, style)))
 			return
 		}
@@ -323,11 +326,13 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 			// Repo not found / unreadable: a "not found" badge, NOT a 404, so a
 			// README <img> shows a badge instead of a broken image.
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderNotFoundBadge(label, style)))
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
+		// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 		_, _ = w.Write([]byte(RenderBadgeSVG(label, counts, style, color)))
 	})
 }
