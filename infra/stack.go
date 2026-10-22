@@ -174,9 +174,14 @@ func NewCainbanStack(scope constructs.Construct, id string, props *CainbanStackP
 		},
 	)
 
-	// CORS allowed origins (RFC M6): derived from the SPA/connect origins in
-	// context rather than a wildcard. The data plane is gated by in-Lambda auth,
-	// but a wildcard origin is needless attack surface.
+	// CORS allowed origins (RFC M6): from the spaCallbackUrls context value
+	// (cdk.json), reduced to scheme+host, rather than a wildcard — the data
+	// plane is gated by in-Lambda auth, but a wildcard origin is needless attack
+	// surface. The allowlist MUST include the deployed Amplify connect-page
+	// origin or API Gateway answers its preflight with no
+	// Access-Control-Allow-Origin and the browser blocks the call (caught by
+	// verify-deploy.sh). The literal default here is only a bare fallback for a
+	// context-less synth; the real value lives in cdk.json.
 	corsOrigins := deriveCorsOrigins(ctxOr("spaCallbackUrls", "http://localhost:5173/,https://cainban.awiant.tech/"))
 
 	mcpAPI := awsapigatewayv2.NewHttpApi(stack, jsii.String("McpHttpApi"), &awsapigatewayv2.HttpApiProps{
