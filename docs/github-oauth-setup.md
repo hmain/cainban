@@ -97,7 +97,7 @@ Initiates the device flow.
 
 **Request** (optional body):
 ```json
-{"scope": "user:email read:user repo"}
+{"scope": "read:user user:email read:org"}
 ```
 
 **Response**:
@@ -140,11 +140,45 @@ Polls for completion. Call every `interval` seconds.
 
 ## Scope requirements
 
-The default scope is `user:email read:user repo`:
+The default scope is `read:user user:email read:org` — deliberately narrow.
+cainban only performs a **read-only** permission check
+(`GET /repos/{owner}/{repo}`), so it never requests the broad `repo` scope,
+which would grant full read/write to all your repositories.
 
+- `read:user` — Read user profile (for username / identity)
 - `user:email` — Read email address (for identity)
-- `read:user` — Read user profile (for username)
-- `repo` — Full repo access (required for permission checks on private repos)
+- `read:org` — Read org membership (lets the check see **organization** private
+  repos you belong to)
+
+### What this covers
+
+| Repo class | Works with the default scope? |
+| --- | --- |
+| Public repos (any owner) | ✅ yes |
+| Organization private repos you're a member of | ✅ yes (via `read:org`) |
+| **Personal** private repos | ⚠️ no — classic scopes can't expose these without `repo` |
+
+### Personal private repos: use a fine-grained PAT
+
+Because no classic scope short of the broad `repo` can expose a *personal*
+private repo to the permission check, use a **fine-grained Personal Access
+Token** for those instead of the device flow:
+
+1. GitHub → **Settings → Developer settings → Personal access tokens →
+   Fine-grained tokens → Generate new token**.
+2. **Resource owner:** your account. **Repository access:** *Only select
+   repositories* → pick the repo(s) you want cainban to track.
+3. **Repository permissions:** set **Metadata → Read-only**. Leave everything
+   else at *No access*. (Metadata read is enough for the permission check;
+   cainban never needs contents access.)
+4. Generate, copy the `github_pat_…` token, and configure it as your cainban
+   bearer token exactly like a device-flow token.
+
+cainban's permission checker accepts any user token, so a fine-grained PAT
+works with no server change — and it's strictly narrower than `repo`: it only
+exposes the repos you explicitly selected, read-only metadata.
+
+See `docs/rfc-github-scope-narrowing.md` for the full rationale.
 
 ---
 
