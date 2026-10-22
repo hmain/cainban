@@ -115,7 +115,12 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 			return nil, err // 401
 		}
 	} else {
-		// Cognito JWT: signature-first validation
+		// Non-GitHub token: only accepted when a Cognito Validator is configured.
+		// In GitHub-only mode (validator == nil) a non-GitHub bearer is rejected
+		// — there is no Cognito identity path.
+		if r.validator == nil {
+			return nil, unauthenticated("not a GitHub token", nil)
+		}
 		identity, err = r.validator.Validate(token)
 		if err != nil {
 			return nil, err // 401

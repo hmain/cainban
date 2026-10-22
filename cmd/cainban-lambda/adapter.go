@@ -125,38 +125,20 @@ func resourceMetadataURL() string {
 	return base + mcp.WellKnownProtectedResourcePath
 }
 
-// buildResolver constructs the signature-first auth resolver from env. It fails
-// (rather than serving an unauthenticated endpoint) if issuer/audience are
-// missing — there is no fail-open path.
+// buildResolver constructs the GitHub-only auth resolver from env. cainban no
+// longer uses Cognito: identity comes from the user's GitHub token (validated
+// via GET /user by the resolver's GitHubValidator) and authorization comes from
+// the GitHub App installation token (the RepoVerifier). The App secret is
+// REQUIRED — there is no fail-open path and no user-token authorization
+// fallback.
 func buildResolver() (*auth.Resolver, error) {
-	issuer := strings.TrimSpace(os.Getenv(envAuthIssuer))
-	audiences := splitAudiences(os.Getenv(envAuthAudience))
-	if issuer == "" || len(audiences) == 0 {
-		return nil, fmt.Errorf("both %s and %s must be set (no unauthenticated endpoint)", envAuthIssuer, envAuthAudience)
+	v := appVerifierFromEnv(context.Background())
+	if v == nil {
+		return nil, fmt.Errorf("%s must be set: GitHub App authorization is required (no unauthenticated or user-token path)", envGitHubAppSecretName)
 	}
-	jwksURL := strings.TrimSpace(os.Getenv(envAuthJWKSURL))
-	if jwksURL == "" {
-		jwksURL = strings.TrimRight(issuer, "/") + "/.well-known/jwks.json"
-	}
-
-	validator, err := auth.NewValidator(auth.Config{
-		Issuer:    issuer,
-		Audiences: audiences,
-		Keys:      auth.NewJWKSCache(jwksURL),
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	// GitHub App authorization: when the cainban/github-app secret is present,
-	// authorize via the App installation token (RepoVerifier) instead of the
-	// user token. The user's token / JWT establishes IDENTITY; the App decides
-	// access. A malformed secret fails cold start (no silent fallback to a
-	// weaker path).
-	if v := appVerifierFromEnv(context.Background()); v != nil {
-		return auth.NewResolverWithApp(validator, v), nil
-	}
-	return auth.NewResolver(validator), nil
+	// Validator is nil: GitHub-only. The resolver validates the GitHub bearer
+	// token for identity; a non-GitHub token is rejected (no Cognito path).
+	return auth.NewResolverWithApp(nil, v), nil
 }
 
 // envGitHubAppSecretName is the Secrets Manager secret holding the GitHub App
@@ -192,21 +174,6 @@ func ensureDynamoBackend() string {
 	prev := os.Getenv(store.EnvBackend)
 	_ = os.Setenv(store.EnvBackend, store.BackendDynamoDB)
 	return prev
-}
-
-// splitAudiences parses a comma-separated CAINBAN_AUTH_AUDIENCE into a list of
-// accepted app-client-id audiences (trimmed, non-empty). This lets one Cognito
-// pool that issues tokens to several app clients — the machine client AND the
-// browser SPA client — be validated by one authorizer/Lambda. A single value
-// (no commas) yields a one-element list, preserving the prior behavior.
-func splitAudiences(raw string) []string {
-	out := []string{}
-	for _, p := range strings.Split(raw, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 // githubAuthConfig loads the GitHub OAuth credentials from Secrets Manager for

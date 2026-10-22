@@ -122,6 +122,27 @@ func TestAppAuth_VerifierError_FailClosed(t *testing.T) {
 	}
 }
 
+// TestAppAuth_GitHubOnly_RejectsNonGitHubToken proves that in GitHub-only mode
+// (no Cognito Validator) a non-GitHub bearer token is a 401 — there is no
+// Cognito identity path to fall through to, and the resolver must not nil-panic
+// on the absent validator.
+func TestAppAuth_GitHubOnly_RejectsNonGitHubToken(t *testing.T) {
+	mv := &mockVerifier{allow: true}
+	r := NewResolverWithApp(nil, mv) // nil validator == GitHub-only
+
+	// A plain (non-gho_/ghp_/github_pat_) bearer is not a GitHub token.
+	_, err := r.Resolve(bearerReq(t, "not-a-github-token", "acme/repo-a"), "")
+	if err == nil {
+		t.Fatal("expected 401 for non-GitHub token in GitHub-only mode")
+	}
+	if HTTPStatus(err) != 401 {
+		t.Errorf("status = %d, want 401", HTTPStatus(err))
+	}
+	if mv.callCount != 0 {
+		t.Errorf("verifier must not be called for a rejected token, got %d", mv.callCount)
+	}
+}
+
 // TestAppAuth_MissingLogin_Denied proves a token with no github_user cannot be
 // verified and is denied (401) without any verifier call.
 func TestAppAuth_MissingLogin_Denied(t *testing.T) {
