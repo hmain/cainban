@@ -1,47 +1,109 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
+
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
 
 	"github.com/hmain/cainban/src/systems/auth"
+	"github.com/hmain/cainban/src/systems/github"
 	"github.com/hmain/cainban/src/systems/store"
 )
 
-// Auth env vars the CDK stack sets from the SAME Cognito user pool as the MCP
-// Lambda, so a WebSocket $connect validates the exact tokens the MCP endpoint
-// accepts. Mirrors cmd/cainban-lambda/adapter.go (kept as its own copy because
-// package main cannot be imported across command dirs).
-const (
-	envAuthIssuer   = "CAINBAN_AUTH_ISSUER"   // e.g. https://cognito-idp.<region>.amazonaws.com/<poolId>
-	envAuthAudience = "CAINBAN_AUTH_AUDIENCE" // comma-separated Cognito app client ids
-	envAuthJWKSURL  = "CAINBAN_AUTH_JWKS_URL" // optional override; else <issuer>/.well-known/jwks.json
-)
+// envGitHubAppSecretName is the Secrets Manager secret holding the GitHub App
+// credentials used for App-based authorization at $connect. Mirrors the MCP
+// Lambda (kept as its own copy because package main cannot be imported across
+// command dirs).
+const envGitHubAppSecretName = "CAINBAN_GITHUB_APP_SECRET_NAME"
 
-// buildResolver constructs the signature-first auth resolver from env. It fails
-// (rather than accepting any connection) if issuer/audience are missing — there
-// is no fail-open path.
+// buildResolver constructs the GitHub-only auth resolver from env. $connect
+// validates the caller's GitHub token for identity and authorizes the target
+// repo via the GitHub App installation token. The App secret is REQUIRED — a
+// missing/broken secret is fatal at cold start, never an endpoint that accepts
+// any connection.
 func buildResolver() (*auth.Resolver, error) {
-	issuer := strings.TrimSpace(os.Getenv(envAuthIssuer))
-	audiences := splitAudiences(os.Getenv(envAuthAudience))
-	if issuer == "" || len(audiences) == 0 {
-		return nil, fmt.Errorf("both %s and %s must be set (no unauthenticated endpoint)", envAuthIssuer, envAuthAudience)
+	secretName := strings.TrimSpace(os.Getenv(envGitHubAppSecretName))
+	if secretName == "" {
+		return nil, fmt.Errorf("%s must be set: GitHub App authorization is required", envGitHubAppSecretName)
 	}
-	jwksURL := strings.TrimSpace(os.Getenv(envAuthJWKSURL))
-	if jwksURL == "" {
-		jwksURL = strings.TrimRight(issuer, "/") + "/.well-known/jwks.json"
-	}
-
-	validator, err := auth.NewValidator(auth.Config{
-		Issuer:    issuer,
-		Audiences: audiences,
-		Keys:      auth.NewJWKSCache(jwksURL),
-	})
+	secret, err := loadJSONSecret(context.Background(), secretName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("load GitHub App secret %q: %w", secretName, err)
 	}
-	return auth.NewResolver(validator), nil
+	v, err := appVerifierFromSecret(secret)
+	if err != nil {
+		return nil, fmt.Errorf("invalid GitHub App secret %q: %w", secretName, err)
+	}
+	// Validator is nil: GitHub-only (identity from the GitHub bearer token).
+	return auth.NewResolverWithApp(nil, v), nil
+}
+
+// appVerifier adapts a *github.Verifier to auth.RepoVerifier (login string ->
+// github.Principal), breaking the auth<->github import cycle. Mirror of the MCP
+// Lambda's adapter.
+type appVerifier struct {
+	v *github.Verifier
+}
+
+func (a *appVerifier) VerifyRepoAccess(ctx context.Context, owner, repo, login string) (bool, error) {
+	return a.v.VerifyRepoAccess(ctx, owner, repo, github.Principal{Login: login})
+}
+
+// appVerifierFromSecret builds the App RepoVerifier from the cainban/github-app
+// secret map. A malformed secret (non-numeric app_id, missing key) is an error
+// so it fails at cold start.
+func appVerifierFromSecret(secret map[string]string) (*appVerifier, error) {
+	appIDRaw := strings.TrimSpace(secret["app_id"])
+	if appIDRaw == "" {
+		return nil, fmt.Errorf("github app secret: missing app_id")
+	}
+	appID, err := strconv.ParseInt(appIDRaw, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("github app secret: app_id %q is not numeric: %w", appIDRaw, err)
+	}
+	key := strings.TrimSpace(secret["private_key"])
+	if key == "" {
+		return nil, fmt.Errorf("github app secret: missing private_key")
+	}
+	client, err := github.NewClient(github.AppConfig{
+		AppID:         appID,
+		PrivateKeyPEM: []byte(key),
+		ClientID:      strings.TrimSpace(secret["client_id"]),
+		ClientSecret:  strings.TrimSpace(secret["client_secret"]),
+	}, &http.Client{Timeout: 10 * time.Second})
+	if err != nil {
+		return nil, fmt.Errorf("github app secret: build client: %w", err)
+	}
+	return &appVerifier{v: github.NewVerifier(client)}, nil
+}
+
+// loadJSONSecret loads a JSON object secret from Secrets Manager as a map.
+func loadJSONSecret(ctx context.Context, secretName string) (map[string]string, error) {
+	cfg, err := awsconfig.LoadDefaultConfig(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load AWS config: %w", err)
+	}
+	client := secretsmanager.NewFromConfig(cfg)
+	out, err := client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{SecretId: &secretName})
+	if err != nil {
+		return nil, fmt.Errorf("get secret: %w", err)
+	}
+	if out.SecretString == nil || *out.SecretString == "" {
+		return nil, fmt.Errorf("secret %q has no SecretString", secretName)
+	}
+	var result map[string]string
+	if err := json.Unmarshal([]byte(*out.SecretString), &result); err != nil {
+		return nil, fmt.Errorf("parse secret JSON: %w", err)
+	}
+	return result, nil
 }
 
 // ensureDynamoBackend forces CAINBAN_BACKEND=dynamodb for this process. Returns
@@ -50,18 +112,4 @@ func ensureDynamoBackend() string {
 	prev := os.Getenv(store.EnvBackend)
 	_ = os.Setenv(store.EnvBackend, store.BackendDynamoDB)
 	return prev
-}
-
-// splitAudiences parses a comma-separated CAINBAN_AUTH_AUDIENCE into a list of
-// accepted app-client-id audiences (trimmed, non-empty), so one Cognito pool
-// issuing tokens to several app clients (machine, SPA, CLI) is validated by one
-// resolver. A single value yields a one-element list.
-func splitAudiences(raw string) []string {
-	out := []string{}
-	for _, p := range strings.Split(raw, ",") {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
