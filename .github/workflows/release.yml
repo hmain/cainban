@@ -41,7 +41,7 @@ jobs:
         GOOS=windows GOARCH=amd64 go build -ldflags="${LDFLAGS}" -o cainban-windows-amd64.exe cmd/cainban/main.go
     
     - name: Create Release
-      uses: softprops/action-gh-release@v1
+      uses: softprops/action-gh-release@v3
       with:
         files: |
           cainban-linux-amd64
