@@ -111,7 +111,7 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	badge := NewBadgeHandler(func(context.Context, string) (BadgeCounts, error) {
 		return BadgeCounts{Todo: 1, Doing: 2, Done: 3}, nil
 	})
-	mux := PublicMux(testResourceCfg(), testAuthServerCfg(), testClientCfg(), GitHubAuthConfig{}, badge, protected)
+	mux := PublicMux(testResourceCfg(), testClientCfg(), GitHubAuthConfig{}, badge, protected)
 
 	// (a) well-known: public 200. The Lambda sees the bare route path (API
 	// Gateway routes by path; no stage/host prefix reaches the handler).
@@ -120,14 +120,6 @@ func TestPublicMux_WellKnownBypassesAuth(t *testing.T) {
 	mux.ServeHTTP(wkRec, wkReq)
 	if wkRec.Code != http.StatusOK {
 		t.Errorf("well-known status = %d, want 200", wkRec.Code)
-	}
-
-	// (a2) the RFC 8414 AS-metadata shim is ALSO public: 200, no token.
-	asReq := httptest.NewRequest(http.MethodGet, WellKnownAuthServerPath, nil)
-	asRec := httptest.NewRecorder()
-	mux.ServeHTTP(asRec, asReq)
-	if asRec.Code != http.StatusOK {
-		t.Errorf("as-metadata status = %d, want 200 (must be public, no auth)", asRec.Code)
 	}
 
 	// (a3) the cainban client-config doc is ALSO public: 200, no token.

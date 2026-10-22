@@ -94,9 +94,9 @@ func main() {
 	// discovery must work before a client has any token), while EVERY other
 	// route goes through signature-first JWT auth + repo-scoped tenant
 	// resolution. On a 401, the authed path advertises the metadata URL in the
-	// WWW-Authenticate challenge so a spec-compliant MCP client can discover the
-	// authorization server. Both the metadata document and the challenge pointer
-	// are DERIVED from env (CAINBAN_MCP_RESOURCE + CAINBAN_AUTH_ISSUER), never
+	// WWW-Authenticate challenge. Under GitHub-only auth there is no OAuth
+	// authorization server to discover; the document and challenge carry only the
+	// `resource` indicator, DERIVED from env (CAINBAN_MCP_RESOURCE), never
 	// hardcoded.
 	authed := server.HandlerWithAuthChallenge(resolver, resourceMetadataURL())
 	// Public, unauthenticated dynamic status badge endpoint
@@ -111,7 +111,7 @@ func main() {
 	if githubAuth.ClientID != "" {
 		log.Printf("cainban-lambda: GitHub device flow enabled")
 	}
-	handler := mcp.PublicMux(resourceMetadataConfig(), authServerMetadataConfig(), clientConfigConfig(), githubAuth, badge, authed)
+	handler := mcp.PublicMux(resourceMetadataConfig(), clientConfigConfig(), githubAuth, badge, authed)
 	adapter := httpadapter.NewV2(handler)
 
 	// This Lambda is fronted by an API Gateway v2 HTTP API (payload format 2.0),

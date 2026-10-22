@@ -61,15 +61,21 @@ type ResourceMetadataConfig struct {
 	// resource server: the shim points at Cognito's real authorize/token/jwks;
 	// the client runs the flow against Cognito. See docs/mcp-oauth-setup.md for
 	// the resolved discovery URL.
+	//
+	// GitHub-only: there is no OAuth authorization server, so this is left empty
+	// and the document omits `authorization_servers`.
 	AuthorizationServer string
 }
 
 // protectedResourceMetadata is the RFC 9728 Protected Resource Metadata
-// document. Field order/tags follow the RFC's JSON member names exactly.
+// document. Field order/tags follow the RFC's JSON member names exactly. Under
+// the GitHub-only model there is no OAuth authorization server or scope set, so
+// those members are omitempty and dropped when empty — the document still
+// identifies the `resource` and the bearer method.
 type protectedResourceMetadata struct {
 	Resource               string   `json:"resource"`
-	AuthorizationServers   []string `json:"authorization_servers"`
-	ScopesSupported        []string `json:"scopes_supported"`
+	AuthorizationServers   []string `json:"authorization_servers,omitempty"`
+	ScopesSupported        []string `json:"scopes_supported,omitempty"`
 	BearerMethodsSupported []string `json:"bearer_methods_supported"`
 }
 
@@ -84,13 +90,18 @@ type protectedResourceMetadata struct {
 func NewResourceMetadataHandler(cfg ResourceMetadataConfig) http.Handler {
 	// Canonicalize the resource per RFC 8707: no trailing slash.
 	resource := strings.TrimRight(strings.TrimSpace(cfg.Resource), "/")
-	authServer := strings.TrimSpace(cfg.AuthorizationServer)
 
 	doc := protectedResourceMetadata{
 		Resource:               resource,
-		AuthorizationServers:   []string{authServer},
-		ScopesSupported:        MCPResourceScopes,
 		BearerMethodsSupported: []string{"header"},
+	}
+	// GitHub-only: advertise an authorization server / scopes only if one is
+	// configured (it is not, post-Cognito). Keeping this conditional avoids
+	// emitting an empty-string entry while leaving the hook for a future OAuth
+	// authorization server.
+	if as := strings.TrimSpace(cfg.AuthorizationServer); as != "" {
+		doc.AuthorizationServers = []string{as}
+		doc.ScopesSupported = MCPResourceScopes
 	}
 	// Marshal once at construction — the document is static per process.
 	body, _ := json.Marshal(doc)
@@ -116,33 +127,32 @@ func NewResourceMetadataHandler(cfg ResourceMetadataConfig) http.Handler {
 }
 
 // PublicMux returns the top-level HTTP handler for the MCP Lambda: it serves the
-// RFC 9728 protected-resource metadata AND the RFC 8414 authorization-server
-// metadata shim publicly at their well-known paths, and routes EVERY other
-// request through authed (HandlerWithAuth). This is what lets the well-known
-// paths BYPASS AuthMiddleware while no other route does — the well-known
-// branches are matched before, and never fall through to, the authenticated
-// handler.
+// RFC 9728 protected-resource metadata and cainban's client-config document
+// publicly at their well-known paths, and routes EVERY other request through
+// authed (HandlerWithAuth). This is what lets the well-known paths BYPASS
+// AuthMiddleware while no other route does — the well-known branches are matched
+// before, and never fall through to, the authenticated handler. (The RFC 8414
+// authorization-server shim was removed in the GitHub-only migration.)
 //
-// resourceCfg / authServerCfg / clientCfg are derived from env by the entrypoint
-// (McpApiUrl origin + CAINBAN_AUTH_ISSUER + CAINBAN_HOSTED_UI_DOMAIN +
-// CAINBAN_MCP_CLI_CLIENT_ID). authed is the fully-authenticated MCP handler
-// (Server.HandlerWithAuth).
-func PublicMux(resourceCfg ResourceMetadataConfig, authServerCfg AuthServerMetadataConfig, clientCfg ClientConfigConfig, githubAuthCfg GitHubAuthConfig, badge http.Handler, authed http.Handler) http.Handler {
+// resourceCfg / clientCfg are derived from env by the entrypoint (McpApiUrl
+// origin for the protected-resource doc; McpApiUrl for the client-config doc).
+// authed is the fully-authenticated MCP handler (Server.HandlerWithAuth).
+func PublicMux(resourceCfg ResourceMetadataConfig, clientCfg ClientConfigConfig, githubAuthCfg GitHubAuthConfig, badge http.Handler, authed http.Handler) http.Handler {
 	metadata := NewResourceMetadataHandler(resourceCfg)
-	authServerMeta := NewAuthServerMetadataHandler(authServerCfg)
 	clientConfig := NewClientConfigHandler(clientCfg)
 	mux := http.NewServeMux()
 	// Exact-match the well-known paths so they are served publicly; the metadata
 	// handlers themselves enforce GET/HEAD.
+	//
+	// NOTE: the RFC 8414 authorization-server metadata shim was removed in the
+	// GitHub-only migration. It existed solely to re-advertise Cognito's OAuth
+	// authorize/token endpoints with S256 PKCE; with no Cognito there is no
+	// authorization server to discover (clients authenticate with a GitHub token
+	// out of band). The RFC 9728 protected-resource doc + 401 challenge stay.
 	mux.Handle(WellKnownProtectedResourcePath, metadata)
-	// RFC 8414 authorization-server metadata shim — PUBLIC. This is the document
-	// that advertises code_challenge_methods_supported:["S256"] (which Cognito's
-	// own discovery omits), unblocking a spec-compliant MCP client.
-	mux.Handle(WellKnownAuthServerPath, authServerMeta)
 	// cainban's own MCP client auto-config document — PUBLIC. Returns the MCP
-	// URL, client id, resolved authorize/token endpoints, and pre-computed
-	// per-client config snippets so an agent (or the connect page) can configure
-	// itself in one fetch instead of hand-assembling JSON.
+	// URL and pre-computed per-client config snippets so an agent (or the connect
+	// page) can configure itself in one fetch instead of hand-assembling JSON.
 	mux.Handle(WellKnownClientConfigPath, clientConfig)
 	// GitHub Device Flow endpoints — PUBLIC, no auth. These allow CLI clients to
 	// authenticate with GitHub directly (no Cognito federation). The device flow
