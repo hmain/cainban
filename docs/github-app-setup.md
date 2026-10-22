@@ -1,22 +1,27 @@
 # cainban — GitHub App setup (operator checklist)
 
 cainban uses a GitHub App to verify user permissions at runtime. When a user
-makes a request, cainban checks the GitHub API to see if they have push access
-to the requested repo. This guide walks you through registering the App and
-loading its credentials into AWS Secrets Manager.
+makes a request, cainban uses the **App's own installation token** to check
+whether that user has access to the requested repo. The user never hands cainban
+a GitHub token — they only prove their identity. This guide walks you through
+registering the App and loading its credentials into AWS Secrets Manager.
 
-> **GitHub-native permissions:** Authorization is checked at runtime via
-> GitHub API calls (cached for 5 minutes). Users can access any repo they have
-> push access to on GitHub — no separate "connect" step required.
+> **App-based authorization:** Authorization is decided server-side with the
+> App installation token (not a user token), cached briefly. A user is
+> authorized for `owner/repo` when the App is installed on that repo AND the
+> user is an org member or a repo collaborator with read+ access. See
+> `docs/rfc-github-app-authorization.md` for the model and rollout.
 
 ---
 
 ## Why a GitHub App
 
 cainban checks a user's access to `owner/repo` on the server at request time. A
-GitHub App authenticates as itself with an App JWT to make API calls that verify
-whether a user has push permission to a repository. This check happens on every
-request (with 5-minute caching) rather than storing grants in a database.
+GitHub App authenticates as itself with an App JWT, mints a short-lived
+installation token, and uses it to verify coverage (the App is installed on the
+repo) and entitlement (the user is an org member or a repo collaborator). This
+check happens on every request (with brief caching) rather than storing grants
+in a database — and crucially, it needs no GitHub token from the user.
 
 ---
 
@@ -100,36 +105,43 @@ aws secretsmanager put-secret-value \
 rm -f /tmp/cainban-github-app.json
 ```
 
-## 7. Enable GitHub-native permissions
+## 7. Enable App-based authorization
 
-Set the environment variable on the MCP Lambda to enable the new auth mode:
-
-```sh
-aws lambda update-function-configuration \
-  --function-name cainban-mcp \
-  --environment "Variables={CAINBAN_USE_GITHUB_PERMISSIONS=true,...}"
-```
-
-Or add it to the CDK stack and redeploy.
+> **Status:** the App authorization path is being wired in per
+> `docs/rfc-github-app-authorization.md`. The legacy
+> `CAINBAN_USE_GITHUB_PERMISSIONS=true` flag selected the **user-token**
+> (`ghperm`) path, which this model replaces — do not rely on it for the App
+> path. The App path reads its credentials from the `cainban/github-app` secret
+> loaded above; once the resolver wiring (RFC Task C) ships, it is selected by
+> the Lambda at cold start when that secret is present. Prefer setting mode in
+> the CDK stack and redeploying with `make deploy` over an out-of-band
+> `update-function-configuration`, so the live config matches infra-as-code.
 
 ---
 
 ## How it works at runtime
 
-1. User authenticates via Cognito (Entra federation)
-2. Their Cognito token includes `github_user` and `github_token` claims
-3. When they request a repo, the MCP Lambda:
-   - Extracts the GitHub identity from the token
-   - Calls GitHub API to check if the user has push permission
-   - Caches the result for 5 minutes
-   - Grants or denies access based on the GitHub response
+1. User authenticates via Cognito (GitHub federation); their token carries the
+   non-secret `github_user` (login) claim — never a GitHub token.
+2. When they request `owner/repo`, the MCP Lambda:
+   - Reads the user's login from the validated token (identity only)
+   - Mints an App JWT, looks up the repo's installation, and gets an
+     installation token
+   - Uses the installation token to check: is the user an org member, or a repo
+     collaborator with read+ access?
+   - Caches the decision briefly (short TTL on grants to bound revocation)
+   - Grants or denies — fail closed on any API error
+
+No user GitHub token is ever sent to cainban or stored. The App's repository
+permissions stay **read-only** (Metadata + Administration).
 
 ## Rotation & revocation
 
 - **Rotate the private key**: generate a new key on the App page, update the
   secret, then delete the old key on GitHub.
 - **Revoke access to a repo**: remove the user's access in GitHub, or uninstall
-  the App from the repo. The permission cache expires in 5 minutes.
+  the App from the repo. The decision cache uses a short grant TTL, so a
+  revocation takes effect quickly (bounded by that TTL).
 
 ## Security notes
 

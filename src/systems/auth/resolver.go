@@ -49,6 +49,17 @@ type Resolver struct {
 	validator       *Validator
 	githubValidator *GitHubValidator
 	permChecker     *ghperm.PermissionChecker // nil when UseGitHubPermissions is false
+	appVerifier     RepoVerifier              // App-backed authz; when set it supersedes permChecker
+}
+
+// RepoVerifier answers "is this GitHub login entitled to owner/repo?" using the
+// GitHub App installation token (coverage + org-member/collaborator). It is a
+// LOCAL interface so the resolver does not import src/systems/github (which
+// imports auth for NormalizeRepo — importing it here would cycle). The Lambda
+// wiring adapts a *github.Verifier to this interface. FAIL CLOSED: an error
+// means deny; (false, nil) is a definitive deny.
+type RepoVerifier interface {
+	VerifyRepoAccess(ctx context.Context, owner, repo, login string) (bool, error)
 }
 
 // NewResolver wraps a Validator. GitHub token validation is enabled by default.
@@ -58,8 +69,19 @@ func NewResolver(v *Validator) *Resolver {
 
 // NewResolverWithGitHub creates a Resolver that uses GitHub for authorization.
 // The permChecker is used when UseGitHubPermissions is true.
+//
+// DEPRECATED (RFC github-app-authorization): this wires the user-token (ghperm)
+// authorization path, which is being retired in favor of NewResolverWithApp.
 func NewResolverWithGitHub(v *Validator, permChecker *ghperm.PermissionChecker) *Resolver {
 	return &Resolver{validator: v, githubValidator: NewGitHubValidator(), permChecker: permChecker}
+}
+
+// NewResolverWithApp creates a Resolver that authorizes via the GitHub App
+// installation token (RepoVerifier) instead of the user's token. The user's
+// token (or Cognito JWT) still establishes IDENTITY; authorization is the App's
+// server-side check. This is the GitHub-App authorization model.
+func NewResolverWithApp(v *Validator, verifier RepoVerifier) *Resolver {
+	return &Resolver{validator: v, githubValidator: NewGitHubValidator(), appVerifier: verifier}
 }
 
 // Resolve is the full auth pipeline for one request:
@@ -149,10 +171,53 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 // it uses the GitHub API (via PermissionChecker). Otherwise, it checks the legacy
 // repos claim.
 func (r *Resolver) authorize(ctx context.Context, identity *Identity, target string, forceGitHub bool) error {
+	// App-backed authorization supersedes the user-token path when configured.
+	if r.appVerifier != nil && (forceGitHub || UseGitHubPermissions) {
+		return r.authorizeViaApp(ctx, identity, target)
+	}
 	if forceGitHub || UseGitHubPermissions {
 		return r.authorizeViaGitHub(ctx, identity, target)
 	}
 	return r.authorizeViaReposClaim(identity, target)
+}
+
+// authorizeViaApp authorizes the target repo using the GitHub App installation
+// token via the RepoVerifier. It needs only the caller's GitHub LOGIN
+// (identity) — never the caller's token. A missing login is a 401 (no verifiable
+// identity); a verifier error is a 401 (fail closed); a definitive negative is a
+// 403.
+func (r *Resolver) authorizeViaApp(ctx context.Context, identity *Identity, target string) error {
+	login := strings.TrimSpace(identity.GitHubUser)
+	if login == "" {
+		log.Printf("cainban auth: 401 missing github_user for app authz (sub=%q)", identity.Subject)
+		return unauthenticated("missing GitHub identity", nil)
+	}
+	owner, repo, ok := splitRepo(target)
+	if !ok {
+		log.Printf("cainban auth: 403 malformed target for app authz (sub=%q repo=%q)", identity.Subject, target)
+		return forbidden("invalid target repo: " + target)
+	}
+	allowed, err := r.appVerifier.VerifyRepoAccess(ctx, owner, repo, login)
+	if err != nil {
+		log.Printf("cainban auth: 401 app verify failed (sub=%q login=%q repo=%q): %v", identity.Subject, login, target, err)
+		return unauthenticated("permission check failed", err)
+	}
+	if !allowed {
+		log.Printf("cainban auth: 403 app denies access (sub=%q login=%q repo=%q)", identity.Subject, login, target)
+		return forbidden("caller not authorized for repo " + target)
+	}
+	return nil
+}
+
+// splitRepo splits a normalized "owner/repo" into its parts. target is already
+// normalized by resolveTarget, so a missing "/" is a programming/caller error
+// surfaced as !ok.
+func splitRepo(target string) (owner, repo string, ok bool) {
+	parts := strings.SplitN(target, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 // authorizeViaGitHub checks GitHub API for write permission.
