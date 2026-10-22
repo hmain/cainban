@@ -147,7 +147,43 @@ func buildResolver() (*auth.Resolver, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// GitHub App authorization: when the cainban/github-app secret is present,
+	// authorize via the App installation token (RepoVerifier) instead of the
+	// user token. The user's token / JWT establishes IDENTITY; the App decides
+	// access. A malformed secret fails cold start (no silent fallback to a
+	// weaker path).
+	if v := appVerifierFromEnv(context.Background()); v != nil {
+		return auth.NewResolverWithApp(validator, v), nil
+	}
 	return auth.NewResolver(validator), nil
+}
+
+// envGitHubAppSecretName is the Secrets Manager secret holding the GitHub App
+// credentials (app_id, private_key, client_id, client_secret) used for App-based
+// authorization. Optional: when unset, App authorization is not wired and the
+// resolver falls back to its default path.
+const envGitHubAppSecretName = "CAINBAN_GITHUB_APP_SECRET_NAME"
+
+// appVerifierFromEnv loads the GitHub App secret named by
+// CAINBAN_GITHUB_APP_SECRET_NAME and builds the App RepoVerifier. Returns nil
+// when the env var is unset (App authz not configured). A set-but-broken secret
+// is fatal (panics at cold start) rather than silently serving a weaker authz
+// path — an auth downgrade must never be silent.
+func appVerifierFromEnv(ctx context.Context) auth.RepoVerifier {
+	secretName := strings.TrimSpace(os.Getenv(envGitHubAppSecretName))
+	if secretName == "" {
+		return nil
+	}
+	secret, err := loadJSONSecret(ctx, secretName)
+	if err != nil {
+		panic(fmt.Sprintf("cainban-lambda: cannot load GitHub App secret %q: %v", secretName, err))
+	}
+	v, err := appVerifierFromSecret(secret)
+	if err != nil {
+		panic(fmt.Sprintf("cainban-lambda: invalid GitHub App secret %q: %v", secretName, err))
+	}
+	return v
 }
 
 // ensureDynamoBackend forces CAINBAN_BACKEND=dynamodb for this process. Returns
