@@ -23,12 +23,10 @@ import (
 
 // FetchedClientConfig is the parsed client-config document plus the resolved
 // base URL it was fetched from. It is the public result of DiscoverClientConfig.
+// Under GitHub-only auth there are no OAuth endpoints/client id to carry — only
+// the MCP URL and the per-client snippets.
 type FetchedClientConfig struct {
-	MCPURL                string
-	ClientID              string
-	AuthorizationEndpoint string
-	TokenEndpoint         string
-	RedirectURIHint       string
+	MCPURL string
 	// Raw is the decoded document, exposing the per-client config snippets.
 	Raw clientConfigDoc
 }
@@ -86,18 +84,14 @@ func DiscoverClientConfig(ctx context.Context, baseURL string) (*FetchedClientCo
 	}
 
 	return &FetchedClientConfig{
-		MCPURL:                doc.MCPURL,
-		ClientID:              doc.ClientID,
-		AuthorizationEndpoint: doc.AuthorizationEndpoint,
-		TokenEndpoint:         doc.TokenEndpoint,
-		RedirectURIHint:       doc.RedirectURIHint,
-		Raw:                   doc,
+		MCPURL: doc.MCPURL,
+		Raw:    doc,
 	}, nil
 }
 
 // RenderConfig returns the config text for the named format, ready to write to
 // the client's config file (or stdout). format is one of: json, kirocrew,
-// kirocrew-exfil-gate, kirocrew-dashboard, claude, kiro-ide, cursor, vscode.
+// kirocrew-dashboard, claude, kiro-ide, cursor, vscode, stdio.
 //
 // The returned string is the exact file content for file-based formats, the
 // shell command for `claude`, and the full document for `json`.
@@ -107,8 +101,6 @@ func (f *FetchedClientConfig) RenderConfig(format string) (string, error) {
 		return marshalIndent(f.Raw)
 	case "kirocrew":
 		return marshalIndent(f.Raw.Configs.Kirocrew)
-	case "kirocrew-exfil-gate":
-		return marshalIndent(f.Raw.Configs.KirocrewExfilGate)
 	case "kirocrew-dashboard":
 		return marshalIndent(f.Raw.Configs.KirocrewDashboard)
 	case "kiro-ide", "kiro":
@@ -119,13 +111,13 @@ func (f *FetchedClientConfig) RenderConfig(format string) (string, error) {
 		return marshalIndent(f.Raw.Configs.VSCode)
 	case "claude", "claude-code":
 		if f.Raw.Configs.ClaudeCodeCommand == "" {
-			return "", fmt.Errorf("no claude command available (server did not advertise a client id)")
+			return "", fmt.Errorf("no claude command available (server did not advertise an MCP URL)")
 		}
 		return f.Raw.Configs.ClaudeCodeCommand, nil
 	case "stdio", "local":
 		return marshalIndent(f.Raw.Configs.Stdio)
 	default:
-		return "", fmt.Errorf("unknown format %q (want: json, kirocrew, kirocrew-exfil-gate, kirocrew-dashboard, claude, kiro-ide, cursor, vscode, stdio)", format)
+		return "", fmt.Errorf("unknown format %q (want: json, kirocrew, kirocrew-dashboard, claude, kiro-ide, cursor, vscode, stdio)", format)
 	}
 }
 

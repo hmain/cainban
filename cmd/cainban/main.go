@@ -1143,60 +1143,16 @@ func handleConnect(args []string) {
 	}
 	fmt.Fprintf(os.Stderr, "✓ Detected MCP client: %s\n", client)
 
-	// Step 3: Run OAuth flow (unless skipped)
-	if !skipOAuth {
-		fmt.Fprintln(os.Stderr, "🔐 Starting OAuth authentication...")
-
-		// Parse callback port from the redirect URI hint (default 3334)
-		callbackPort := 3334
-		if cfg.RedirectURIHint != "" {
-			// Extract port from http://127.0.0.1:PORT/path
-			if parts := strings.Split(cfg.RedirectURIHint, ":"); len(parts) >= 3 {
-				portPart := strings.Split(parts[2], "/")[0]
-				if p, err := strconv.Atoi(portPart); err == nil {
-					callbackPort = p
-				}
-			}
-		}
-
-		flowCfg := mcp.OAuthFlowConfig{
-			CallbackPort:    callbackPort,
-			CallbackPath:    "/oauth/callback",
-			AuthorizeURL:    cfg.AuthorizationEndpoint,
-			TokenURL:        cfg.TokenEndpoint,
-			ClientID:        cfg.ClientID,
-			Scopes:          []string{"openid", "email", "profile"},
-			SkipBrowserOpen: noBrowser,
-		}
-
-		flow := mcp.NewOAuthFlow(flowCfg)
-
-		if noBrowser {
-			fmt.Fprintln(os.Stderr, "")
-			fmt.Fprintln(os.Stderr, "Open this URL in your browser:")
-			fmt.Fprintln(os.Stderr, flow.AuthorizeURL())
-			fmt.Fprintln(os.Stderr, "")
-		} else {
-			fmt.Fprintln(os.Stderr, "Opening browser for authentication...")
-			if err := mcp.OpenBrowser(flow.AuthorizeURL()); err != nil {
-				fmt.Fprintln(os.Stderr, "")
-				fmt.Fprintln(os.Stderr, "Could not open browser. Please visit:")
-				fmt.Fprintln(os.Stderr, flow.AuthorizeURL())
-				fmt.Fprintln(os.Stderr, "")
-			}
-		}
-
-		flowCtx, flowCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer flowCancel()
-
-		result, err := flow.Run(flowCtx)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "❌ OAuth failed: %v\n", err)
-			os.Exit(1)
-		}
-		_ = result // We don't need to store the tokens; the MCP client handles token management
-		fmt.Fprintln(os.Stderr, "✓ Authentication complete")
-	}
+	// Step 3: Authentication is GitHub-only.
+	//
+	// There is no Cognito OAuth flow to run here any more. cainban authenticates
+	// with the user's own GitHub token (obtained via the GitHub Device Flow or a
+	// fine-grained PAT) sent as the MCP bearer. The MCP client manages that token
+	// itself; this CLI only writes the server config. The --skip-oauth / browser
+	// flags are retained as no-ops for backward compatibility.
+	_ = skipOAuth
+	_ = noBrowser
+	fmt.Fprintln(os.Stderr, "ℹ️  GitHub-only auth: supply your GitHub token to the MCP client (device flow or a fine-grained PAT). See docs/github-oauth-setup.md.")
 
 	// Step 4: Build and write config
 	fmt.Fprintf(os.Stderr, "📝 Writing config for %s...\n", client)

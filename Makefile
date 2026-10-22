@@ -51,17 +51,6 @@ lambda:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
 		-o .build/lambda/bootstrap ./cmd/cainban-lambda
 
-# Build the Cognito pre-token-generation trigger bootstrap (pure Go, arm64,
-# provided.al2023). Output goes to .build/pretoken/bootstrap, packaged by the
-# CDK stack via Code.fromAsset("../.build/pretoken"). This trigger maps a user's
-# custom:repos / custom:default_repo attributes into the top-level repos /
-# default_repo claims the auth validator authorizes against.
-.PHONY: pretoken
-pretoken:
-	mkdir -p .build/pretoken
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GOBUILD) -tags lambda.norpc \
-		-o .build/pretoken/bootstrap ./cmd/cainban-pretoken
-
 # Build the API Gateway WebSocket API Lambda bootstrap (pure Go, arm64,
 # provided.al2023). Output goes to .build/ws/bootstrap, packaged by the CDK
 # stack via Code.fromAsset("../.build/ws"). This is the $connect/$disconnect/
@@ -74,9 +63,10 @@ ws:
 		-o .build/ws/bootstrap ./cmd/cainban-ws-lambda
 
 # Build every Lambda bundle the CDK stack packages. Run before `cdk synth`/`cdk deploy`.
-# NOTE: connect Lambda was removed in Phase 5 (GitHub-native permissions).
+# NOTE: the Cognito pre-token trigger was removed in the GitHub-only migration
+# (authorization is the GitHub App installation token; there is no Cognito pool).
 .PHONY: bundles
-bundles: lambda pretoken ws
+bundles: lambda ws
 
 # Verify the LIVE API edge after a deploy: asserts the CORS preflight succeeds
 # (unauthenticated OPTIONS -> 2xx with CORS headers) AND that the data path is

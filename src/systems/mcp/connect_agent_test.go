@@ -9,30 +9,27 @@ import (
 	"testing"
 )
 
-// newClientConfigServer stands up a test server that serves the three public
-// discovery documents the connect-agent flow reads, so DiscoverClientConfig can
-// be exercised end to end against a real HTTP endpoint.
+// newClientConfigServer stands up a test server that serves the public
+// discovery documents the connect-agent flow reads (the RFC 9728
+// protected-resource doc + the client-config doc), so DiscoverClientConfig can
+// be exercised end to end against a real HTTP endpoint. The RFC 8414 auth-server
+// shim was removed in the GitHub-only migration, so it is not served here.
 func newClientConfigServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	mux := http.NewServeMux()
 	mux.Handle(WellKnownProtectedResourcePath, NewResourceMetadataHandler(testResourceCfg()))
-	mux.Handle(WellKnownAuthServerPath, NewAuthServerMetadataHandler(testAuthServerCfg()))
-	// The served client-config must advertise the SERVER's own URL as mcp_url,
-	// which the test rewrites once the server is up (below).
 	srv := httptest.NewServer(mux)
 	// Re-register client-config now that we know the server URL, so mcp_url
 	// matches the real origin a client fetched from.
 	mux.Handle(WellKnownClientConfigPath, NewClientConfigHandler(ClientConfigConfig{
-		MCPURL:         srv.URL,
-		CLIClientID:    testCLIClientID,
-		HostedUIDomain: testHostedUI,
+		MCPURL: srv.URL,
 	}))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
 // TestDiscoverClientConfig_HappyPath proves discovery against a real MCP server
-// resolves and returns the client id + endpoints.
+// resolves and returns the MCP URL.
 func TestDiscoverClientConfig_HappyPath(t *testing.T) {
 	srv := newClientConfigServer(t)
 
@@ -40,14 +37,8 @@ func TestDiscoverClientConfig_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverClientConfig: %v", err)
 	}
-	if got.ClientID != testCLIClientID {
-		t.Errorf("ClientID = %q, want %q", got.ClientID, testCLIClientID)
-	}
 	if got.MCPURL != srv.URL {
 		t.Errorf("MCPURL = %q, want %q", got.MCPURL, srv.URL)
-	}
-	if want := testHostedUI + "/oauth2/authorize"; got.AuthorizationEndpoint != want {
-		t.Errorf("AuthorizationEndpoint = %q, want %q", got.AuthorizationEndpoint, want)
 	}
 }
 
@@ -82,7 +73,7 @@ func TestRenderConfig_Formats(t *testing.T) {
 		t.Fatalf("discover: %v", err)
 	}
 
-	jsonFormats := []string{"json", "kirocrew", "kirocrew-exfil-gate", "kirocrew-dashboard", "kiro-ide", "cursor", "vscode"}
+	jsonFormats := []string{"json", "kirocrew", "kirocrew-dashboard", "kiro-ide", "cursor", "vscode"}
 	for _, f := range jsonFormats {
 		out, err := cfg.RenderConfig(f)
 		if err != nil {

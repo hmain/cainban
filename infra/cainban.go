@@ -1,12 +1,12 @@
 // Command infra is the AWS CDK (Go) app for cainban's serverless stack.
 //
-// It provisions the DynamoDB task table and grants table, three ARM64
-// provided.al2023 Lambdas (the stateless MCP handler, the connect API, and the
-// Cognito pre-token trigger), two API Gateway v2 HTTP APIs (MCP + connect) each
-// fronted by a managed Cognito JWT authorizer (Authorization: Bearer <jwt>, no
-// SigV4) — the connect callback route is authorizer-exempt (HMAC state auth) —
-// a Cognito user pool, a placeholder GitHub App secret, least-privilege IAM per
-// function, reserved-concurrency caps, and explicit CloudWatch log groups.
+// It provisions the DynamoDB task table, two ARM64 provided.al2023 Lambdas (the
+// stateless MCP handler and the WebSocket connection registry), an API Gateway
+// v2 HTTP API (MCP) with NO managed authorizer — auth is GitHub-only and
+// enforced in the Lambda (Authorization: Bearer <github_token>, no SigV4, no
+// Cognito) — a WebSocket API, the GitHub App + OAuth secrets, least-privilege
+// IAM per function, reserved-concurrency caps, and explicit CloudWatch log
+// groups. Authorization is the GitHub App installation token.
 //
 // Deploy target is selected by CAINBAN_ENV:
 //
@@ -75,7 +75,7 @@ func main() {
 				Account: jsii.String(cfg.Account),
 				Region:  jsii.String(cfg.Region),
 			},
-			Description: jsii.String("cainban: DynamoDB + grants table + arm64 Lambdas (MCP/connect/pre-token) + Cognito auth + GitHub App connect; HTTP APIs fronted by a managed Cognito JWT authorizer (Bearer JWT, no SigV4); connect callback authorizer-exempt (HMAC state)"),
+			Description: jsii.String("cainban: DynamoDB + arm64 Lambdas (MCP + WebSocket) + GitHub-only auth (GitHub token identity, GitHub App installation-token authorization); HTTP API with in-Lambda auth (Bearer GitHub token, no SigV4, no Cognito)"),
 		},
 	})
 
