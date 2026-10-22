@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // mockVerifier is a test double for the App-backed RepoVerifier. It records the
@@ -31,6 +32,21 @@ func newAppResolver(t *testing.T, ts *testSigner, mv *mockVerifier) *Resolver {
 	t.Helper()
 	v := newValidator(t, ts)
 	return NewResolverWithApp(v, mv)
+}
+
+// gitHubClaims returns claims carrying a GitHub identity (github_user). After
+// the GitHub-only migration, authorization uses the App verifier keyed by this
+// login; the token itself is identity-only.
+func gitHubClaims() tokenClaims {
+	return tokenClaims{
+		Issuer:      "https://issuer.test/pool",
+		Subject:     "user-1",
+		Audience:    "test-audience",
+		Expiry:      fixedNow.Add(time.Hour).Unix(),
+		IssuedAt:    fixedNow.Add(-time.Minute).Unix(),
+		GitHubUser:  "octocat",
+		DefaultRepo: "acme/repo-a",
+	}
 }
 
 // TestAppAuth_Authorized proves a repo the App verifier grants resolves to a

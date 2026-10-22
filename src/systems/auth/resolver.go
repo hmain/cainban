@@ -2,16 +2,10 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
-
-	"github.com/hmain/cainban/src/systems/ghperm"
 )
 
 // repoKeys returns the authorized repo set as a slice for diagnostic logging.
@@ -48,8 +42,7 @@ var UseGitHubPermissions = os.Getenv("CAINBAN_USE_GITHUB_PERMISSIONS") == "true"
 type Resolver struct {
 	validator       *Validator
 	githubValidator *GitHubValidator
-	permChecker     *ghperm.PermissionChecker // nil when UseGitHubPermissions is false
-	appVerifier     RepoVerifier              // App-backed authz; when set it supersedes permChecker
+	appVerifier     RepoVerifier // App-backed authorization (GitHub App installation token)
 }
 
 // RepoVerifier answers "is this GitHub login entitled to owner/repo?" using the
@@ -65,15 +58,6 @@ type RepoVerifier interface {
 // NewResolver wraps a Validator. GitHub token validation is enabled by default.
 func NewResolver(v *Validator) *Resolver {
 	return &Resolver{validator: v, githubValidator: NewGitHubValidator()}
-}
-
-// NewResolverWithGitHub creates a Resolver that uses GitHub for authorization.
-// The permChecker is used when UseGitHubPermissions is true.
-//
-// DEPRECATED (RFC github-app-authorization): this wires the user-token (ghperm)
-// authorization path, which is being retired in favor of NewResolverWithApp.
-func NewResolverWithGitHub(v *Validator, permChecker *ghperm.PermissionChecker) *Resolver {
-	return &Resolver{validator: v, githubValidator: NewGitHubValidator(), permChecker: permChecker}
 }
 
 // NewResolverWithApp creates a Resolver that authorizes via the GitHub App
@@ -171,12 +155,18 @@ func (r *Resolver) Resolve(req *http.Request, argRepo string) (*Tenant, error) {
 // it uses the GitHub API (via PermissionChecker). Otherwise, it checks the legacy
 // repos claim.
 func (r *Resolver) authorize(ctx context.Context, identity *Identity, target string, forceGitHub bool) error {
-	// App-backed authorization supersedes the user-token path when configured.
+	// App-backed authorization (GitHub App installation token) is the GitHub
+	// authorization path. It supersedes the legacy repos claim whenever a GitHub
+	// token is presented (forceGitHub) or GitHub permissions are enabled.
 	if r.appVerifier != nil && (forceGitHub || UseGitHubPermissions) {
 		return r.authorizeViaApp(ctx, identity, target)
 	}
 	if forceGitHub || UseGitHubPermissions {
-		return r.authorizeViaGitHub(ctx, identity, target)
+		// GitHub authorization requested but no App verifier wired: fail closed
+		// rather than silently granting. (The user-token ghperm path was removed
+		// in the GitHub-App migration.)
+		log.Printf("cainban auth: 401 GitHub authorization requested but no App verifier configured (sub=%q)", identity.Subject)
+		return unauthenticated("authorization unavailable", nil)
 	}
 	return r.authorizeViaReposClaim(identity, target)
 }
@@ -218,50 +208,6 @@ func splitRepo(target string) (owner, repo string, ok bool) {
 		return "", "", false
 	}
 	return parts[0], parts[1], true
-}
-
-// authorizeViaGitHub checks GitHub API for write permission.
-// When a PermissionChecker is configured, it uses that. Otherwise, it falls back
-// to a direct GitHub API call using the token from the identity.
-func (r *Resolver) authorizeViaGitHub(ctx context.Context, identity *Identity, target string) error {
-	if identity.GitHubUser == "" {
-		log.Printf("cainban auth: 401 missing github_user (sub=%q)", identity.Subject)
-		return unauthenticated("missing GitHub identity", nil)
-	}
-	if identity.GitHubToken == "" {
-		log.Printf("cainban auth: 401 missing github_token (sub=%q)", identity.Subject)
-		return unauthenticated("missing GitHub token", nil)
-	}
-
-	// Use PermissionChecker if available, otherwise fall back to direct check
-	if r.permChecker != nil {
-		canWrite, err := r.permChecker.CanWrite(ctx, identity.GitHubUser, identity.GitHubToken, target)
-		if err != nil {
-			log.Printf("cainban auth: 401 GitHub permission check failed (sub=%q user=%q repo=%q): %v",
-				identity.Subject, identity.GitHubUser, target, err)
-			return unauthenticated("permission check failed", err)
-		}
-		if !canWrite {
-			log.Printf("cainban auth: 403 GitHub denies write access (sub=%q user=%q repo=%q)",
-				identity.Subject, identity.GitHubUser, target)
-			return forbidden("caller not authorized for repo " + target)
-		}
-		return nil
-	}
-
-	// Direct GitHub API check when no PermissionChecker configured
-	canWrite, err := checkGitHubRepoPermission(ctx, identity.GitHubToken, target)
-	if err != nil {
-		log.Printf("cainban auth: 401 GitHub permission check failed (sub=%q user=%q repo=%q): %v",
-			identity.Subject, identity.GitHubUser, target, err)
-		return unauthenticated("permission check failed", err)
-	}
-	if !canWrite {
-		log.Printf("cainban auth: 403 GitHub denies write access (sub=%q user=%q repo=%q)",
-			identity.Subject, identity.GitHubUser, target)
-		return forbidden("caller not authorized for repo " + target)
-	}
-	return nil
 }
 
 // authorizeViaReposClaim checks the legacy repos claim from the JWT.
@@ -326,58 +272,4 @@ func bearerToken(req *http.Request) (string, error) {
 		return "", unauthenticated("Authorization header is not a Bearer token", nil)
 	}
 	return strings.TrimSpace(h[len(prefix):]), nil
-}
-
-// checkGitHubRepoPermission checks if the token has write access to a repo
-// by calling GitHub's /repos/:owner/:repo endpoint and checking the permissions
-// object. This is a fallback when no PermissionChecker is configured.
-func checkGitHubRepoPermission(ctx context.Context, token, repo string) (bool, error) {
-	parts := strings.Split(repo, "/")
-	if len(parts) != 2 {
-		return false, fmt.Errorf("invalid repo format: %s", repo)
-	}
-	owner, repoName := parts[0], parts[1]
-
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s", owner, repoName)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "cainban")
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return false, nil // Repo doesn't exist or no access
-	}
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
-	}
-
-	// Parse the response to check permissions
-	var repoResp struct {
-		Permissions struct {
-			Admin    bool `json:"admin"`
-			Maintain bool `json:"maintain"`
-			Push     bool `json:"push"`
-			Triage   bool `json:"triage"`
-			Pull     bool `json:"pull"`
-		} `json:"permissions"`
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	if err := json.Unmarshal(body, &repoResp); err != nil {
-		return false, err
-	}
-
-	// Write access requires push, maintain, or admin
-	return repoResp.Permissions.Push || repoResp.Permissions.Maintain || repoResp.Permissions.Admin, nil
 }
