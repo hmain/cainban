@@ -55,8 +55,10 @@ func GetStringSecret(ctx context.Context, nameEnvVar string) string {
 
 	cfg, err := awsconfig.LoadDefaultConfig(ctx)
 	if err != nil {
+		// Do NOT cache on a transient error (RFC L3): caching "" here would
+		// permanently disable the feature until process restart. Leave the key
+		// absent so the next call retries the fetch.
 		fmt.Printf("secrets: failed to load AWS config for %s: %v\n", nameEnvVar, err)
-		stringSecretCache[secretName] = ""
 		return ""
 	}
 
@@ -65,8 +67,8 @@ func GetStringSecret(ctx context.Context, nameEnvVar string) string {
 		SecretId: &secretName,
 	})
 	if err != nil {
+		// Transient fetch error: do not negative-cache — retry next call (RFC L3).
 		fmt.Printf("secrets: failed to get secret %s: %v\n", secretName, err)
-		stringSecretCache[secretName] = ""
 		return ""
 	}
 
@@ -74,6 +76,7 @@ func GetStringSecret(ctx context.Context, nameEnvVar string) string {
 	if out.SecretString != nil {
 		value = *out.SecretString
 	}
+	// Only a SUCCESSFUL fetch is cached (including a legitimately empty secret).
 	stringSecretCache[secretName] = value
 	return value
 }

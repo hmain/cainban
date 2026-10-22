@@ -5,6 +5,8 @@ package ghperm
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"time"
 )
@@ -39,15 +41,33 @@ type CacheEntry struct {
 
 // PermissionCache stores GitHub permission lookups with TTL.
 // Implementations must be safe for concurrent use.
+//
+// tokenFP is a fingerprint of the GitHub token that produced the decision (see
+// TokenFingerprint). It is part of the cache identity so two tokens for the
+// same login that differ in SCOPE (e.g. a broad PAT vs a fine-grained token
+// with no access to this repo) never share a cached decision (RFC M3).
 type PermissionCache interface {
-	// Get returns the cached permission for user+repo, or nil if not cached/expired.
-	Get(ctx context.Context, githubUser, repo string) *CacheEntry
+	// Get returns the cached permission for user+repo+tokenFP, or nil if not cached/expired.
+	Get(ctx context.Context, githubUser, tokenFP, repo string) *CacheEntry
 
 	// Set stores a permission with the given TTL.
-	Set(ctx context.Context, githubUser, repo string, perm Permission, ttl time.Duration)
+	Set(ctx context.Context, githubUser, tokenFP, repo string, perm Permission, ttl time.Duration)
 
 	// Delete removes a cache entry (used on explicit revocation signal).
-	Delete(ctx context.Context, githubUser, repo string)
+	Delete(ctx context.Context, githubUser, tokenFP, repo string)
+}
+
+// TokenFingerprint returns a short, non-reversible fingerprint of a GitHub
+// token for use in cache keys. It is a SHA-256 hash truncated to 128 bits and
+// hex-encoded — enough to distinguish tokens without ever storing or logging
+// token material. The empty token maps to a fixed empty-marker so a missing
+// token cannot collide with a real one.
+func TokenFingerprint(token string) string {
+	if token == "" {
+		return "notoken"
+	}
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:16])
 }
 
 // MemoryCache is a thread-safe in-memory PermissionCache.
@@ -71,11 +91,11 @@ func NewMemoryCache(now func() time.Time) *MemoryCache {
 	}
 }
 
-// Get returns the cached permission for user+repo, or nil if not cached or expired.
-func (m *MemoryCache) Get(ctx context.Context, githubUser, repo string) *CacheEntry {
+// Get returns the cached permission for user+tokenFP+repo, or nil if not cached or expired.
+func (m *MemoryCache) Get(ctx context.Context, githubUser, tokenFP, repo string) *CacheEntry {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	key := cacheKey(githubUser, repo)
+	key := cacheKey(githubUser, tokenFP, repo)
 	entry, ok := m.entries[key]
 	if !ok {
 		return nil
@@ -87,10 +107,10 @@ func (m *MemoryCache) Get(ctx context.Context, githubUser, repo string) *CacheEn
 }
 
 // Set stores a permission with the given TTL.
-func (m *MemoryCache) Set(ctx context.Context, githubUser, repo string, perm Permission, ttl time.Duration) {
+func (m *MemoryCache) Set(ctx context.Context, githubUser, tokenFP, repo string, perm Permission, ttl time.Duration) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	key := cacheKey(githubUser, repo)
+	key := cacheKey(githubUser, tokenFP, repo)
 	m.entries[key] = CacheEntry{
 		Permission: perm,
 		ExpiresAt:  m.now().Add(ttl),
@@ -98,13 +118,15 @@ func (m *MemoryCache) Set(ctx context.Context, githubUser, repo string, perm Per
 }
 
 // Delete removes a cache entry.
-func (m *MemoryCache) Delete(ctx context.Context, githubUser, repo string) {
+func (m *MemoryCache) Delete(ctx context.Context, githubUser, tokenFP, repo string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.entries, cacheKey(githubUser, repo))
+	delete(m.entries, cacheKey(githubUser, tokenFP, repo))
 }
 
-// cacheKey builds the cache key for a user+repo pair.
-func cacheKey(githubUser, repo string) string {
-	return "ghperm:" + githubUser + ":" + repo
+// cacheKey builds the cache key for a user+tokenFP+repo triple. The token
+// fingerprint is included so two different-scope tokens for the same login do
+// not share a decision (RFC M3).
+func cacheKey(githubUser, tokenFP, repo string) string {
+	return "ghperm:" + githubUser + ":" + tokenFP + ":" + repo
 }

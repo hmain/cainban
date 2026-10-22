@@ -351,8 +351,9 @@ func (s *Server) ServeHTTP(addr string) error {
 	}
 
 	httpServer := &http.Server{
-		Addr:    loopbackAddr,
-		Handler: handler,
+		Addr:              loopbackAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second, // mitigate Slowloris (G112)
 	}
 	fmt.Printf("cainban MCP server (stateless, Streamable HTTP) listening on http://%s\n", loopbackAddr)
 	return httpServer.ListenAndServe()

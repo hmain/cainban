@@ -15,10 +15,10 @@ func TestMemoryCache_GetSet(t *testing.T) {
 	ctx := context.Background()
 
 	// Set a permission
-	cache.Set(ctx, "octocat", "acme/frontend", PermissionWrite, 5*time.Minute)
+	cache.Set(ctx, "octocat", "tok", "acme/frontend", PermissionWrite, 5*time.Minute)
 
 	// Get should return it
-	entry := cache.Get(ctx, "octocat", "acme/frontend")
+	entry := cache.Get(ctx, "octocat", "tok", "acme/frontend")
 	if entry == nil {
 		t.Fatal("expected entry, got nil")
 	}
@@ -37,7 +37,7 @@ func TestMemoryCache_GetMiss(t *testing.T) {
 	ctx := context.Background()
 
 	// Get non-existent entry
-	entry := cache.Get(ctx, "octocat", "acme/frontend")
+	entry := cache.Get(ctx, "octocat", "tok", "acme/frontend")
 	if entry != nil {
 		t.Errorf("expected nil, got %+v", entry)
 	}
@@ -56,13 +56,13 @@ func TestMemoryCache_Expiry(t *testing.T) {
 	ctx := context.Background()
 
 	// Set with 5 minute TTL
-	cache.Set(ctx, "octocat", "acme/frontend", PermissionWrite, 5*time.Minute)
+	cache.Set(ctx, "octocat", "tok", "acme/frontend", PermissionWrite, 5*time.Minute)
 
 	// Still valid after 4 minutes
 	mu.Lock()
 	now = now.Add(4 * time.Minute)
 	mu.Unlock()
-	if entry := cache.Get(ctx, "octocat", "acme/frontend"); entry == nil {
+	if entry := cache.Get(ctx, "octocat", "tok", "acme/frontend"); entry == nil {
 		t.Error("expected entry to still be valid")
 	}
 
@@ -70,7 +70,7 @@ func TestMemoryCache_Expiry(t *testing.T) {
 	mu.Lock()
 	now = now.Add(2 * time.Minute) // now 6 min from original
 	mu.Unlock()
-	if entry := cache.Get(ctx, "octocat", "acme/frontend"); entry != nil {
+	if entry := cache.Get(ctx, "octocat", "tok", "acme/frontend"); entry != nil {
 		t.Errorf("expected nil (expired), got %+v", entry)
 	}
 }
@@ -81,11 +81,11 @@ func TestMemoryCache_Delete(t *testing.T) {
 	ctx := context.Background()
 
 	// Set then delete
-	cache.Set(ctx, "octocat", "acme/frontend", PermissionWrite, 5*time.Minute)
-	cache.Delete(ctx, "octocat", "acme/frontend")
+	cache.Set(ctx, "octocat", "tok", "acme/frontend", PermissionWrite, 5*time.Minute)
+	cache.Delete(ctx, "octocat", "tok", "acme/frontend")
 
 	// Should be gone
-	if entry := cache.Get(ctx, "octocat", "acme/frontend"); entry != nil {
+	if entry := cache.Get(ctx, "octocat", "tok", "acme/frontend"); entry != nil {
 		t.Errorf("expected nil after delete, got %+v", entry)
 	}
 }
@@ -96,7 +96,7 @@ func TestMemoryCache_DeleteNonExistent(t *testing.T) {
 	ctx := context.Background()
 
 	// Delete non-existent should not panic
-	cache.Delete(ctx, "octocat", "acme/frontend")
+	cache.Delete(ctx, "octocat", "tok", "acme/frontend")
 }
 
 func TestMemoryCache_Overwrite(t *testing.T) {
@@ -105,10 +105,10 @@ func TestMemoryCache_Overwrite(t *testing.T) {
 	ctx := context.Background()
 
 	// Set then overwrite
-	cache.Set(ctx, "octocat", "acme/frontend", PermissionRead, 5*time.Minute)
-	cache.Set(ctx, "octocat", "acme/frontend", PermissionAdmin, 10*time.Minute)
+	cache.Set(ctx, "octocat", "tok", "acme/frontend", PermissionRead, 5*time.Minute)
+	cache.Set(ctx, "octocat", "tok", "acme/frontend", PermissionAdmin, 10*time.Minute)
 
-	entry := cache.Get(ctx, "octocat", "acme/frontend")
+	entry := cache.Get(ctx, "octocat", "tok", "acme/frontend")
 	if entry == nil {
 		t.Fatal("expected entry")
 	}
@@ -128,11 +128,11 @@ func TestMemoryCache_ConcurrentAccess(t *testing.T) {
 		wg.Add(2)
 		go func() {
 			defer wg.Done()
-			cache.Set(ctx, "user1", "repo1", PermissionWrite, time.Minute)
+			cache.Set(ctx, "user1", "tok", "repo1", PermissionWrite, time.Minute)
 		}()
 		go func() {
 			defer wg.Done()
-			_ = cache.Get(ctx, "user1", "repo1")
+			_ = cache.Get(ctx, "user1", "tok", "repo1")
 		}()
 	}
 	wg.Wait()
@@ -145,11 +145,11 @@ func TestMemoryCache_DifferentUsers(t *testing.T) {
 	ctx := context.Background()
 
 	// Same repo, different users
-	cache.Set(ctx, "alice", "acme/frontend", PermissionWrite, 5*time.Minute)
-	cache.Set(ctx, "bob", "acme/frontend", PermissionRead, 5*time.Minute)
+	cache.Set(ctx, "alice", "tok", "acme/frontend", PermissionWrite, 5*time.Minute)
+	cache.Set(ctx, "bob", "tok", "acme/frontend", PermissionRead, 5*time.Minute)
 
-	aliceEntry := cache.Get(ctx, "alice", "acme/frontend")
-	bobEntry := cache.Get(ctx, "bob", "acme/frontend")
+	aliceEntry := cache.Get(ctx, "alice", "tok", "acme/frontend")
+	bobEntry := cache.Get(ctx, "bob", "tok", "acme/frontend")
 
 	if aliceEntry == nil || aliceEntry.Permission != PermissionWrite {
 		t.Errorf("expected alice to have write, got %v", aliceEntry)
@@ -165,11 +165,11 @@ func TestMemoryCache_DifferentRepos(t *testing.T) {
 	ctx := context.Background()
 
 	// Same user, different repos
-	cache.Set(ctx, "octocat", "acme/frontend", PermissionWrite, 5*time.Minute)
-	cache.Set(ctx, "octocat", "acme/backend", PermissionAdmin, 5*time.Minute)
+	cache.Set(ctx, "octocat", "tok", "acme/frontend", PermissionWrite, 5*time.Minute)
+	cache.Set(ctx, "octocat", "tok", "acme/backend", PermissionAdmin, 5*time.Minute)
 
-	frontendEntry := cache.Get(ctx, "octocat", "acme/frontend")
-	backendEntry := cache.Get(ctx, "octocat", "acme/backend")
+	frontendEntry := cache.Get(ctx, "octocat", "tok", "acme/frontend")
+	backendEntry := cache.Get(ctx, "octocat", "tok", "acme/backend")
 
 	if frontendEntry == nil || frontendEntry.Permission != PermissionWrite {
 		t.Errorf("expected frontend to have write, got %v", frontendEntry)
@@ -182,19 +182,20 @@ func TestMemoryCache_DifferentRepos(t *testing.T) {
 func TestCacheKey_Format(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		user string
-		repo string
-		want string
+		user    string
+		tokenFP string
+		repo    string
+		want    string
 	}{
-		{"octocat", "acme/frontend", "ghperm:octocat:acme/frontend"},
-		{"alice", "org/repo-name", "ghperm:alice:org/repo-name"},
-		{"user-123", "OWNER/REPO", "ghperm:user-123:OWNER/REPO"},
+		{"octocat", "fp1", "acme/frontend", "ghperm:octocat:fp1:acme/frontend"},
+		{"alice", "fp2", "org/repo-name", "ghperm:alice:fp2:org/repo-name"},
+		{"user-123", "fp3", "OWNER/REPO", "ghperm:user-123:fp3:OWNER/REPO"},
 	}
 
 	for _, tc := range tests {
-		got := cacheKey(tc.user, tc.repo)
+		got := cacheKey(tc.user, tc.tokenFP, tc.repo)
 		if got != tc.want {
-			t.Errorf("cacheKey(%q, %q) = %q, want %q", tc.user, tc.repo, got, tc.want)
+			t.Errorf("cacheKey(%q, %q, %q) = %q, want %q", tc.user, tc.tokenFP, tc.repo, got, tc.want)
 		}
 	}
 }

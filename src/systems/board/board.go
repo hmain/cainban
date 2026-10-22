@@ -67,6 +67,7 @@ func (s *System) GetBoardPath(boardName string) string {
 func (s *System) GetCurrentBoard() (string, error) {
 	currentFile := filepath.Join(s.configDir, "current-board")
 
+	// #nosec G304 -- fixed filename under the app's own config dir; no user input in the path.
 	data, err := os.ReadFile(currentFile)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -85,7 +86,7 @@ func (s *System) GetCurrentBoard() (string, error) {
 
 // SetCurrentBoard sets the active board
 func (s *System) SetCurrentBoard(boardName string) error {
-	if err := os.MkdirAll(s.configDir, 0755); err != nil {
+	if err := os.MkdirAll(s.configDir, 0o750); err != nil {
 		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
@@ -98,7 +99,7 @@ func (s *System) SetCurrentBoard(boardName string) error {
 		return nil
 	}
 
-	return os.WriteFile(currentFile, []byte(boardName), 0644)
+	return os.WriteFile(currentFile, []byte(boardName), 0o600)
 }
 
 // CreateBoard creates a new board
@@ -109,7 +110,7 @@ func (s *System) CreateBoard(name, description string) (*Board, error) {
 
 	// Create boards directory
 	boardsDir := filepath.Join(s.configDir, "boards")
-	if err := os.MkdirAll(boardsDir, 0755); err != nil {
+	if err := os.MkdirAll(boardsDir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create boards directory: %w", err)
 	}
 

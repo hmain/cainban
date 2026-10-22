@@ -13,12 +13,24 @@ linters:
     - unused
     - misspell
     - unconvert
+    - gosec
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    - noctx
+    - errorlint
   settings:
     errcheck:
       check-type-assertions: false
       check-blank: false
     misspell:
       locale: US
+    gosec:
+      excludes:
+        # G101 fires on constant NAMES and public URLs that match a secret
+        # pattern (e.g. github/oauth.go oauthTokenURL, test token fixtures) —
+        # none are real credentials.
+        - G101
   exclusions:
     generated: lax
     rules:
@@ -28,6 +40,36 @@ linters:
       - path: cmd/
         linters:
           - errcheck
+      # Test files: unhandled errors (os.Setenv), fixed-perm temp dirs/files,
+      # and variable URLs/paths pointing at httptest servers or t.TempDir() are
+      # all acceptable in tests and not a production attack surface.
+      - path: _test\.go
+        linters:
+          - gosec
+        text: "(G104|G107|G301|G304|G306)"
+      # CLI entrypoints take operator-supplied local paths/URLs; gosec's taint
+      # analysis (path traversal / file inclusion / SSRF / log injection) flags
+      # these as untrusted, but the operator runs their own CLI against their
+      # own filesystem. Scoped to cmd/ only, mirroring the errcheck exclusion.
+      - path: cmd/
+        linters:
+          - gosec
+        text: "(G104|G107|G204|G304|G703|G704|G705|G706)"
+      # Test files: httptest requests, net.Listen, and http.Get against local
+      # test servers don't need context plumbing or body-close rigor.
+      - path: _test\.go
+        linters:
+          - noctx
+          - bodyclose
+          - rowserrcheck
+      # Local SQLite CLI layer: the database/sql calls here (migrations, the
+      # single-process local board store) have no request context to thread —
+      # adding context.Context through the whole local storage/task layer is a
+      # tracked follow-up (RFC A3 note), not a security fix. The serverless path
+      # is DynamoDB (context-aware SDK), not this layer.
+      - path: src/systems/(storage|task)/
+        linters:
+          - noctx
 
 formatters:
   enable:

@@ -3,6 +3,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/hmain/cainban/src/systems/github"
@@ -87,10 +88,13 @@ func NewGitHubDeviceStartHandler(cfg GitHubAuthConfig) http.Handler {
 			}
 		}
 
-		// Default scope for cainban: user identity + repo access.
+		// Default scope: user identity + repo access for private repos.
+		// The 'repo' scope is broad (full control) but required for private repo
+		// permission checks. The token is stored only on the user's machine in
+		// their MCP client config, never on cainban servers.
 		scope := req.Scope
 		if scope == "" {
-			scope = "user:email read:user repo"
+			scope = "read:user user:email repo"
 		}
 
 		dcr, err := oauth.StartDeviceFlow(r.Context(), scope)
@@ -142,7 +146,9 @@ func NewGitHubDevicePollHandler(cfg GitHubAuthConfig) http.Handler {
 		tokens, err := oauth.PollDeviceToken(r.Context(), req.DeviceCode)
 		if err != nil {
 			// Check if it's a device auth error (pending, slow_down, expired, denied).
-			if dae, ok := err.(*github.DeviceAuthError); ok {
+			// errors.As (not a bare type assertion) so a wrapped error is still matched.
+			var dae *github.DeviceAuthError
+			if errors.As(err, &dae) {
 				resp := GitHubDevicePollPendingResponse{
 					Error:            dae.Code,
 					ErrorDescription: dae.Description,
@@ -169,6 +175,9 @@ func NewGitHubDevicePollHandler(cfg GitHubAuthConfig) http.Handler {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Cache-Control", "no-store")
+		// #nosec G117 -- this is the OAuth device-flow poll response: returning
+		// the access token to the client that initiated THIS device flow is the
+		// protocol's purpose. Sent once, over no-store, to its own initiator.
 		_ = json.NewEncoder(w).Encode(resp)
 	})
 }

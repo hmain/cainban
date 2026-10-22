@@ -9,6 +9,19 @@ import (
 	"github.com/hmain/cainban/src/systems/auth"
 )
 
+// STATUS (RFC M4): the GitHub App verification path — Verifier.VerifyRepoAccess,
+// the App-JWT minting in jwt.go (mintAppJWT), and the App-authenticated Client
+// methods (InstallationToken, RepoInstallationID, …) — currently has NO
+// production caller. The live serverless authorization model is GitHub-native
+// direct-token checks (see src/systems/ghperm + src/systems/auth/resolver.go),
+// NOT this App-install path. This code is retained deliberately as the scaffold
+// for a GitHub-App connect flow; it is NOT dead-by-accident. Before wiring it in,
+// confirm it is the intended model; if the App path is abandoned, delete this
+// file, the App half of jwt.go, and the App-only Client methods together so the
+// live model stays unambiguous. Do not delete piecemeal — client.go also holds
+// the user-token install-discovery methods (UserInstallations /
+// InstallationRepositories / AppSlug) a connect flow would use.
+//
 // Verifier answers "does this principal genuinely have access to owner/repo?"
 // against the GitHub App API. It is expressed ENTIRELY in terms of the Client
 // interface, so it is unit-tested with a mocked Client and never touches the

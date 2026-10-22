@@ -8,24 +8,33 @@ import (
 	"time"
 )
 
-// DefaultTTL is the default cache TTL if none is specified.
+// DefaultTTL is the default cache TTL for DENIAL decisions if none is
+// specified. Denials are safe to cache longer (they only slow re-granting).
 const DefaultTTL = 5 * time.Minute
+
+// DefaultGrantTTL is the default cache TTL for WRITE-capable (grant) decisions.
+// It is deliberately short so a GitHub access revocation takes effect quickly:
+// a grant kept for the full DefaultTTL would keep authorizing writes for that
+// long after the forge revoked access (RFC M3). Bounds the revocation window.
+const DefaultGrantTTL = 30 * time.Second
 
 // PermissionChecker answers "can this user write to this repo?" using GitHub
 // as the source of truth, with caching to avoid per-request API latency.
 type PermissionChecker struct {
-	client GitHubClient
-	cache  PermissionCache
-	ttl    time.Duration
-	now    func() time.Time
+	client   GitHubClient
+	cache    PermissionCache
+	ttl      time.Duration // denial TTL
+	grantTTL time.Duration // write-grant TTL (short, bounds revocation window)
+	now      func() time.Time
 }
 
 // CheckerConfig configures a PermissionChecker.
 type CheckerConfig struct {
-	Client GitHubClient
-	Cache  PermissionCache
-	TTL    time.Duration    // default: 5 minutes
-	Now    func() time.Time // default: time.Now
+	Client   GitHubClient
+	Cache    PermissionCache
+	TTL      time.Duration    // denial TTL (default: 5 minutes)
+	GrantTTL time.Duration    // write-grant TTL (default: 30 seconds)
+	Now      func() time.Time // default: time.Now
 }
 
 // NewChecker creates a PermissionChecker.
@@ -40,15 +49,20 @@ func NewChecker(cfg CheckerConfig) (*PermissionChecker, error) {
 	if ttl <= 0 {
 		ttl = DefaultTTL
 	}
+	grantTTL := cfg.GrantTTL
+	if grantTTL <= 0 {
+		grantTTL = DefaultGrantTTL
+	}
 	now := cfg.Now
 	if now == nil {
 		now = time.Now
 	}
 	return &PermissionChecker{
-		client: cfg.Client,
-		cache:  cfg.Cache,
-		ttl:    ttl,
-		now:    now,
+		client:   cfg.Client,
+		cache:    cfg.Cache,
+		ttl:      ttl,
+		grantTTL: grantTTL,
+		now:      now,
 	}, nil
 }
 
@@ -81,8 +95,12 @@ func (c *PermissionChecker) GetPermission(ctx context.Context, githubUser, githu
 		return PermissionNone, fmt.Errorf("ghperm: invalid repo: %w", err)
 	}
 
+	// The token fingerprint is part of the cache identity so a different-scope
+	// token for the same login cannot reuse this token's decision (RFC M3).
+	tokenFP := TokenFingerprint(githubToken)
+
 	// Check cache
-	if entry := c.cache.Get(ctx, githubUser, normalized); entry != nil {
+	if entry := c.cache.Get(ctx, githubUser, tokenFP, normalized); entry != nil {
 		return entry.Permission, nil
 	}
 
@@ -95,10 +113,29 @@ func (c *PermissionChecker) GetPermission(ctx context.Context, githubUser, githu
 		return PermissionNone, fmt.Errorf("ghperm: github api: %w", err)
 	}
 
-	// Cache result (including denials to prevent enumeration)
-	c.cache.Set(ctx, githubUser, normalized, perm, c.ttl)
+	// Cache result. Write-capable GRANTS get the short grantTTL so a revocation
+	// takes effect quickly; DENIALS (and read-only) get the longer ttl (they are
+	// cached to prevent enumeration and are safe to hold — they only slow a
+	// later re-grant) (RFC M3).
+	ttl := c.ttl
+	if perm.CanWrite() {
+		ttl = c.grantTTL
+	}
+	c.cache.Set(ctx, githubUser, tokenFP, normalized, perm, ttl)
 
 	return perm, nil
+}
+
+// InvalidatePermission removes any cached decision for a user+token+repo. It is
+// the wired revocation hook (RFC M3): call it when access is known to have
+// changed (e.g. a disconnect/webhook) so the next request re-checks GitHub
+// instead of waiting out the TTL.
+func (c *PermissionChecker) InvalidatePermission(ctx context.Context, githubUser, githubToken, repo string) {
+	normalized, err := normalizeRepo(repo)
+	if err != nil {
+		return
+	}
+	c.cache.Delete(ctx, githubUser, TokenFingerprint(githubToken), normalized)
 }
 
 // normalizeRepo validates and normalizes a repo string.

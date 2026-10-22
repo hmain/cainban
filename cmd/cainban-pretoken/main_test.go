@@ -336,3 +336,31 @@ func assertDefaultRepoClaim(t *testing.T, got map[string]string, wantDefaultRepo
 		t.Errorf("default_repo = %q, want %q", def, wantDefaultRepo)
 	}
 }
+
+// TestBuildGitHubClaims_NeverEmitsToken is the security guard for RFC M1: the
+// GitHub access token is a bearer credential, and Cognito JWTs are SIGNED, not
+// ENCRYPTED, so anything placed in a claim is base64-readable by any holder of
+// the token. buildGitHubClaims must therefore NEVER emit a github_token claim,
+// even when a custom:github_token attribute is populated. It may still carry
+// the non-secret github_user and default_repo claims.
+func TestBuildGitHubClaims_NeverEmitsToken(t *testing.T) {
+	var event events.CognitoEventUserPoolsPreTokenGenV2_0
+	event.Request.UserAttributes = map[string]string{
+		attrIdentities:        `[{"providerName":"GitHub","userId":"12345","providerType":"OIDC"}]`,
+		"custom:github_token": "ghp_super_secret_token_value",
+		attrDefaultRepo:       "acme/repo-a",
+	}
+
+	got := buildGitHubClaims(event)
+
+	if v, has := got[claimGitHubToken]; has {
+		t.Fatalf("github_token claim MUST NOT be emitted, but was present (=%q) — a signed JWT leaks it to any bearer", v)
+	}
+	// Sanity: the non-secret claims are still produced.
+	if got[claimDefaultRepo] != "acme/repo-a" {
+		t.Errorf("default_repo = %q, want acme/repo-a", got[claimDefaultRepo])
+	}
+	if _, has := got[claimGitHubUser]; !has {
+		t.Errorf("github_user claim should still be present")
+	}
+}

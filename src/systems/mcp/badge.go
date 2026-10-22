@@ -49,7 +49,10 @@ func SignBadgeURL(repo string, expiry int64) string {
 	}
 	h := hmac.New(sha256.New, []byte(secret))
 	h.Write([]byte(msg))
-	return hex.EncodeToString(h.Sum(nil))[:16] // truncate to 16 chars
+	// Full 256-bit digest (RFC L2): a 64-bit truncation was brute-forceable
+	// offline. hmac.Equal in ValidateBadgeSignature keeps the compare
+	// constant-time. (Previously-issued 16-char URLs must be regenerated.)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // ValidateBadgeSignature checks if sig is valid for the given repo and expiry.
@@ -293,6 +296,7 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		if err != nil {
 			// Malformed path: still a 200 SVG so an embed degrades gracefully.
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderUnauthorizedBadge(label, style)))
 			return
 		}
@@ -307,6 +311,7 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		if badgeSecret() == "" {
 			// Signing not configured - return "not configured" badge
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderNotConfiguredBadge(label, style)))
 			return
 		}
@@ -314,6 +319,7 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 		if !ValidateBadgeSignature(repo, sig, expiry) {
 			// Invalid or missing signature
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderUnauthorizedBadge(label, style)))
 			return
 		}
@@ -323,11 +329,13 @@ func NewBadgeHandler(countFn CountFunc) http.Handler {
 			// Repo not found / unreadable: a "not found" badge, NOT a 404, so a
 			// README <img> shows a badge instead of a broken image.
 			w.WriteHeader(http.StatusOK)
+			// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 			_, _ = w.Write([]byte(renderNotFoundBadge(label, style)))
 			return
 		}
 
 		w.WriteHeader(http.StatusOK)
+		// #nosec G705 -- label is XML-escaped via escapeText and served as image/svg+xml, not text/html.
 		_, _ = w.Write([]byte(RenderBadgeSVG(label, counts, style, color)))
 	})
 }

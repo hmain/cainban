@@ -19,7 +19,7 @@ type DB struct {
 func New(dbPath string) (*DB, error) {
 	// Create directory if it doesn't exist
 	dir := filepath.Dir(dbPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return nil, fmt.Errorf("failed to create database directory: %w", err)
 	}
 
@@ -165,6 +165,9 @@ func (db *DB) migrate() error {
 			hasVersion = true
 		}
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("failed to read table info: %w", err)
+	}
 
 	// Add deleted_at column if it doesn't exist
 	if !hasDeletedAt {
@@ -221,32 +224,36 @@ func (db *DB) populateBoardTaskIDs() error {
 		if err := boards.Scan(&boardID); err != nil {
 			return err
 		}
-
-		// Get tasks for this board ordered by creation
-		tasks, err := db.conn.Query("SELECT id FROM tasks WHERE board_id = ? ORDER BY created_at, id", boardID)
-		if err != nil {
+		if err := db.populateBoardTaskIDsForBoard(boardID); err != nil {
 			return err
 		}
-
-		boardTaskID := 1
-		for tasks.Next() {
-			var taskID int
-			if err := tasks.Scan(&taskID); err != nil {
-				_ = tasks.Close()
-				return err
-			}
-
-			_, err = db.conn.Exec("UPDATE tasks SET board_task_id = ? WHERE id = ?", boardTaskID, taskID)
-			if err != nil {
-				_ = tasks.Close()
-				return err
-			}
-			boardTaskID++
-		}
-		_ = tasks.Close()
 	}
+	return boards.Err()
+}
 
-	return nil
+// populateBoardTaskIDsForBoard assigns sequential board-scoped ids to one
+// board's tasks. Split out of populateBoardTaskIDs so the per-board rows can be
+// closed with a plain defer (one rows value per call) instead of a manual Close
+// inside a loop.
+func (db *DB) populateBoardTaskIDsForBoard(boardID int) error {
+	tasks, err := db.conn.Query("SELECT id FROM tasks WHERE board_id = ? ORDER BY created_at, id", boardID)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tasks.Close() }()
+
+	boardTaskID := 1
+	for tasks.Next() {
+		var taskID int
+		if err := tasks.Scan(&taskID); err != nil {
+			return err
+		}
+		if _, err := db.conn.Exec("UPDATE tasks SET board_task_id = ? WHERE id = ?", boardTaskID, taskID); err != nil {
+			return err
+		}
+		boardTaskID++
+	}
+	return tasks.Err()
 }
 
 // Close closes the database connection

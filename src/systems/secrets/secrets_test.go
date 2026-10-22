@@ -152,3 +152,35 @@ func jsonQuote(s string) string {
 	out = append(out, '"')
 	return string(out)
 }
+
+// TestGetStringSecret_FallbackDoesNotPoisonCache covers the testable half of
+// RFC L3. The error-path negative-cache removal (not caching "" when Secrets
+// Manager/config load fails) needs live AWS to exercise directly; what we CAN
+// assert without AWS is that the local fallback path (no *_NAME var → direct
+// env var) returns the value and never writes the shared cache, so a later
+// call is unaffected, and that an absent secret stays absent from the cache.
+func TestGetStringSecret_FallbackDoesNotPoisonCache(t *testing.T) {
+	const nameVar = "CAINBAN_TEST_SECRET_NAME"
+	const directVar = "CAINBAN_TEST_SECRET"
+	t.Setenv(nameVar, "") // force the fallback branch
+	t.Setenv(directVar, "hunter2")
+
+	stringSecretCacheMu.Lock()
+	before := len(stringSecretCache)
+	stringSecretCacheMu.Unlock()
+
+	if got := GetStringSecret(context.Background(), nameVar); got != "hunter2" {
+		t.Fatalf("fallback value = %q, want hunter2", got)
+	}
+
+	stringSecretCacheMu.RLock()
+	after := len(stringSecretCache)
+	_, poisoned := stringSecretCache["hunter2"]
+	stringSecretCacheMu.RUnlock()
+	if after != before {
+		t.Errorf("fallback path must not write the Secrets Manager cache (size %d -> %d)", before, after)
+	}
+	if poisoned {
+		t.Error("fallback value leaked into the secret-name cache")
+	}
+}

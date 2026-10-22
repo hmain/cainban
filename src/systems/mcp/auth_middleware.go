@@ -149,15 +149,49 @@ func peekToolName(r *http.Request) (string, []byte, error) {
 	if err != nil {
 		return "", body, err
 	}
-	var rpc struct {
+	type rpcCall struct {
 		Method string `json:"method"`
 		Params struct {
 			Name string `json:"name"`
 		} `json:"params"`
 	}
+
+	// A JSON-RPC BATCH is a top-level array. A single-object unmarshal fails on
+	// it, which previously let a batch sail past the read-only gate (RFC L1):
+	// the handler backstop still blocked the write, but the edge gate's stated
+	// contract ("a write tool is rejected before next runs") did not hold. We
+	// now inspect each element; the FIRST tools/call naming a tool is returned
+	// so the caller's allowlist check can reject a batched write at the edge.
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) > 0 && trimmed[0] == '[' {
+		var batch []rpcCall
+		if jerr := json.Unmarshal(trimmed, &batch); jerr != nil {
+			// Malformed batch: don't guess — let the SDK handler reject it. The
+			// handler-layer read-only backstop still protects writes.
+			return "", body, nil
+		}
+		// Prefer surfacing a NON-allowlisted (write) tool so a batch mixing
+		// reads and a write is still rejected at the edge; fall back to the
+		// first tools/call tool name otherwise.
+		firstTool := ""
+		for _, c := range batch {
+			if c.Method != "tools/call" || c.Params.Name == "" {
+				continue
+			}
+			if !widgetToolAllowed(c.Params.Name) {
+				return c.Params.Name, body, nil
+			}
+			if firstTool == "" {
+				firstTool = c.Params.Name
+			}
+		}
+		return firstTool, body, nil
+	}
+
+	var rpc rpcCall
 	if jerr := json.Unmarshal(body, &rpc); jerr != nil {
-		// Not parseable as a single JSON-RPC object (could be a batch or
-		// malformed). Let the SDK handler deal with it; do not block here.
+		// Not parseable as a single JSON-RPC object. Let the SDK handler deal
+		// with it; the handler-layer backstop still protects writes.
 		return "", body, nil
 	}
 	if rpc.Method != "tools/call" {
