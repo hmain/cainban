@@ -48,3 +48,17 @@ repos:
         types: [go]  
         args: [test, -race, ./...]
         pass_filenames: false
+
+      # Shift-left security gate: the GitHub device-flow default scope must never
+      # re-acquire the broad classic `repo` scope (full read/write to every
+      # repo). cainban only does a read-only permission check. The default lives
+      # in github_auth.go as defaultDeviceScope; this hook fails the commit if a
+      # bare `repo` scope token reappears there. See
+      # docs/rfc-github-scope-narrowing.md. (TestDefaultDeviceScopeNeverHasRepo
+      # is the test-side counterpart.)
+      - id: no-broad-repo-scope
+        name: no broad github repo scope in device default
+        entry: bash -c 'if grep -nE "(\"repo\"|\"repo | repo\"| repo )" src/systems/mcp/github_auth.go; then echo "ERROR: broad github repo scope found in github_auth.go - cainban must stay read-only. See docs/rfc-github-scope-narrowing.md"; exit 1; fi'
+        language: system
+        files: ^src/systems/mcp/github_auth\.go$
+        pass_filenames: false

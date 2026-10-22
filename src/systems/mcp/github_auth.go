@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/hmain/cainban/src/systems/github"
 )
@@ -17,8 +18,31 @@ type GitHubAuthConfig struct {
 
 // GitHubDeviceStartRequest is the request body for POST /auth/github/device.
 type GitHubDeviceStartRequest struct {
-	// Scope is optional; defaults to "user:email read:user repo" for cainban.
+	// Scope is optional; defaults to defaultDeviceScope for cainban.
 	Scope string `json:"scope,omitempty"`
+}
+
+// defaultDeviceScope is the narrowed default OAuth scope cainban requests in the
+// device flow. It deliberately OMITS the broad classic `repo` scope: cainban
+// only performs a READ-ONLY permission check (ghperm.PermissionChecker calls
+// GET /repos/{owner}/{repo} and reads the `permissions` object), so it needs
+// identity (read:user, user:email) plus org read (read:org) to see org private
+// repos — never write access to repository contents. Personal private repos are
+// handled out-of-band with a fine-grained PAT (Metadata: Read-only); see
+// docs/rfc-github-scope-narrowing.md. Changing this to re-add `repo` is a
+// security regression guarded by TestDefaultDeviceScopeNeverHasRepo and a
+// pre-commit grep hook.
+const defaultDeviceScope = "read:user user:email read:org"
+
+// resolveDeviceScope returns the scope to request for a device flow: the
+// caller's explicit scope when non-empty (trimmed), else the narrowed
+// defaultDeviceScope. It is a pure function so the scope policy is unit-tested
+// without a live GitHub call.
+func resolveDeviceScope(requested string) string {
+	if s := strings.TrimSpace(requested); s != "" {
+		return s
+	}
+	return defaultDeviceScope
 }
 
 // GitHubDeviceStartResponse is returned when initiating the device flow.
@@ -88,14 +112,12 @@ func NewGitHubDeviceStartHandler(cfg GitHubAuthConfig) http.Handler {
 			}
 		}
 
-		// Default scope: user identity + repo access for private repos.
-		// The 'repo' scope is broad (full control) but required for private repo
-		// permission checks. The token is stored only on the user's machine in
-		// their MCP client config, never on cainban servers.
-		scope := req.Scope
-		if scope == "" {
-			scope = "read:user user:email repo"
-		}
+		// Narrowed scope: identity + org read, NEVER the broad `repo` scope.
+		// cainban only does a read-only permission check; see
+		// resolveDeviceScope / docs/rfc-github-scope-narrowing.md. The token is
+		// stored only on the user's machine in their MCP client config, never on
+		// cainban servers.
+		scope := resolveDeviceScope(req.Scope)
 
 		dcr, err := oauth.StartDeviceFlow(r.Context(), scope)
 		if err != nil {
