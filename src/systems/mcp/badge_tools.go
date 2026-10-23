@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/hmain/cainban/src/systems/auth"
 )
 
 // CreateBadgeURLArgs are the arguments for the create_badge_url tool.
@@ -36,19 +38,36 @@ type CreateBadgeURLResult struct {
 // not persist anything, it simply computes a signed URL that the public badge
 // endpoint will accept.
 func (s *Server) handleCreateBadgeURL(ctx context.Context, _ *mcp.CallToolRequest, args CreateBadgeURLArgs) (*mcp.CallToolResult, *CreateBadgeURLResult, error) {
-	// Resolve the repo: use the arg if provided, else the tenant's default.
-	repo := args.Repo
-	if repo == "" {
-		repo = repoFromCtx(ctx)
+	// Scope the badge to the repo this connection is ALREADY authorized for.
+	//
+	// Under the GitHub-App authorization model a user token carries no `repos`
+	// claim; authorization is a live, per-request App check the resolver ran
+	// BEFORE this handler, and its result is the tenant's scoped repo
+	// (repoFromCtx). So the only repo we may mint a badge for is that one —
+	// re-checking an override against the (now-empty) AuthorizedRepos claim
+	// would wrongly reject every GitHub-token caller.
+	//
+	// A caller that names a DIFFERENT repo is rejected: the resolver has not
+	// authorized this connection for it. To badge another repo, point the
+	// connection at it (the X-Cainban-Repo header or a default_repo) and mint
+	// again. Local CLI/stdio has no tenant and no scope restriction.
+	scoped := repoFromCtx(ctx)
+	repo := scoped
+	if args.Repo != "" {
+		norm, err := auth.NormalizeRepo(args.Repo)
+		if err != nil {
+			return toolError("invalid repo %q: %v", args.Repo, err), nil, nil
+		}
+		if scoped != "" && norm != scoped {
+			return toolError(
+				"badges can only be created for this connection's repo (%q); reconnect scoped to %q (set the %s header or a default_repo) to badge it",
+				scoped, norm, auth.HeaderTargetRepo,
+			), nil, nil
+		}
+		repo = norm
 	}
 	if repo == "" {
 		return toolError("no repo specified and no default repo on this connection; pass the repo argument"), nil, nil
-	}
-
-	// Validate the caller is authorized for this repo by checking the partition
-	// prefix resolution (which will fail if the repo isn't authorized).
-	if _, err := partitionPrefixForCall(ctx, repo); err != nil {
-		return toolError("not authorized for repo %q: %v", repo, err), nil, nil
 	}
 
 	// Check that badge signing is configured.
