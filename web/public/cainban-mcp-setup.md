@@ -166,7 +166,6 @@ optionally `<owner>/<repo>`:
 {
   "mcpServers": {
     "cainban": {
-      "type": "http",
       "url": "<MCP_API>",
       "headers": {
         "Authorization": "Bearer <GITHUB_TOKEN>",
@@ -180,6 +179,10 @@ optionally `<owner>/<repo>`:
 Drop `X-Cainban-Repo` to pass the repo per request instead of pinning a default.
 The token is a credential — keep it only in this config file, never in chat, logs,
 or a committed file.
+
+> **`type` field:** Kiro and Kiro Crew infer the transport from `url` and
+> **reject** a `"type"` field — omit it (as above). Cursor and VS Code instead
+> want `"type": "http"` on the entry; add it for those two clients only.
 
 > **Header masking is cosmetic.** Some clients (including the Kiro Crew
 > dashboard) display every header value as `[REDACTED]`. The stored value is
@@ -236,7 +239,6 @@ it — never hand-edit the read-only projection.
    {
      "mcpServers": {
        "cainban": {
-         "type": "http",
          "url": "<MCP_API>",
          "headers": {
            "Authorization": "Bearer <GITHUB_TOKEN>",
@@ -269,10 +271,32 @@ Note: because cainban uses a bearer token (no OAuth redirect), the Kiro Crew
 exfil-gate / `oauth_endpoints.json` allowlist does **not** apply — there is no
 authorize host to allowlist.
 
-#### Kiro / Cursor / VS Code
+#### Kiro / Kiro IDE
 
-Add the same entry to the tool's MCP config (`mcp.json`, `.cursor/mcp.json`, or
-`.vscode/mcp.json`), merging into any existing `mcpServers`:
+Add the entry to Kiro's MCP config (`mcp.json`), merging into any existing
+`mcpServers`. **No `type` field** — Kiro infers HTTP transport from `url` and
+rejects a `type`:
+
+```json
+{
+  "mcpServers": {
+    "cainban": {
+      "url": "<MCP_API>",
+      "headers": {
+        "Authorization": "Bearer <GITHUB_TOKEN>",
+        "X-Cainban-Repo": "<owner>/<repo>"
+      }
+    }
+  }
+}
+```
+
+Reload the MCP servers, then verify with `list_tasks`.
+
+#### Cursor / VS Code
+
+Same entry in `.cursor/mcp.json` or `.vscode/mcp.json`, but these two clients
+**do** take `"type": "http"`:
 
 ```json
 {

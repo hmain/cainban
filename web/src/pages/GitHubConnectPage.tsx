@@ -274,10 +274,12 @@ function SuccessState({
       },
     }, null, 2),
 
+    // Kiro infers the transport from `url` (HTTP) vs `command` (stdio) — it has
+    // no `type` field, and including `"type": "http"` makes Kiro reject the
+    // entry. Mirror the Claude shape: url + headers only.
     kiro: JSON.stringify({
       mcpServers: {
         cainban: {
-          type: "http",
           url: mcpUrl,
           headers: {
             Authorization: `Bearer ${token}`,
