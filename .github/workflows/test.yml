@@ -122,3 +122,38 @@ jobs:
       run: |
         go build -o cainban ./cmd/cainban
         ./cainban version
+
+  # Gate the connect-page SPA (web/) on the SAME steps Amplify Hosting runs
+  # (amplify.yml): npm ci + the app build + the widget build, on Node 22. The Go
+  # jobs above never exercise web/, so without this a frontend change (e.g. a
+  # major dep bump) could merge green yet break the hosted build — exactly the
+  # gap that let the Vite 8 / react-router 8 bump pass backend CI while breaking
+  # `npm run build:widget`. Typecheck is added on top of the build for an
+  # explicit type-regression signal.
+  web-build:
+    name: web build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: web/package-lock.json
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Typecheck
+      run: npm run typecheck
+
+    - name: Build SPA
+      run: npm run build
+
+    - name: Build embeddable widget
+      run: npm run build:widget
