@@ -80,3 +80,6 @@ coverage.html
 rfc*.*
 **/rfc*.*
 docs/rfc*.md
+
+# Local-only operator notes (deploy targets, creds mapping) — never committed
+*.local.md
