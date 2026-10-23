@@ -16,6 +16,49 @@ import { useState, useEffect, useCallback } from "react";
 const MCP_API = import.meta.env.VITE_MCP_API || "https://cl4qelp4hf.execute-api.eu-north-1.amazonaws.com/";
 const API_BASE = MCP_API.replace(/\/$/, "");
 
+// Persist the obtained GitHub token (and optional default repo) in the user's
+// own browser so returning to the SPA shows the "connected" view with the
+// copy-config panel instead of re-running the device flow from scratch.
+//
+// This is the SAME credential the user is about to paste into their local MCP
+// client config, kept in THEIR browser's localStorage on the one page whose
+// job is to hand it to them — not sent anywhere new. "Connect a different
+// account" clears it and restarts the flow, so there is always a visible way to
+// forget the stored token.
+const STORAGE_KEY = "cainban:github-connect";
+
+interface StoredConnection {
+  token: string;
+  repo?: string;
+}
+
+function loadStored(): StoredConnection | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredConnection;
+    return parsed && typeof parsed.token === "string" && parsed.token ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveStored(conn: StoredConnection): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(conn));
+  } catch {
+    // Non-fatal: persistence is a convenience, not required for the flow.
+  }
+}
+
+function clearStored(): void {
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 type FlowState =
   | { step: "ready" }
   | { step: "pending"; userCode: string; verificationUri: string; deviceCode: string; expiresAt: number; interval: number }
@@ -23,8 +66,34 @@ type FlowState =
   | { step: "error"; message: string };
 
 export function GitHubConnectPage() {
-  const [state, setState] = useState<FlowState>({ step: "ready" });
-  const [repo, setRepo] = useState("");
+  // Restore a previously-stored connection on mount: if the user already
+  // connected, land on the "success" (connected) view instead of re-prompting.
+  const stored = loadStored();
+  const [state, setState] = useState<FlowState>(
+    stored ? { step: "success", token: stored.token } : { step: "ready" },
+  );
+  const [repo, setRepo] = useState(stored?.repo ?? "");
+
+  // Persist the repo alongside the token while connected, so a reload keeps the
+  // user's chosen default repo too.
+  const handleRepoChange = useCallback(
+    (r: string) => {
+      setRepo(r);
+      setState((s) => {
+        if (s.step === "success") saveStored({ token: s.token, repo: r });
+        return s;
+      });
+    },
+    [],
+  );
+
+  // "Connect a different account": forget the stored token and restart the flow
+  // from the ready state (the explicit re-connect path).
+  const reconnect = useCallback(() => {
+    clearStored();
+    setRepo("");
+    setState({ step: "ready" });
+  }, []);
 
   const startFlow = useCallback(async () => {
     try {
@@ -72,6 +141,9 @@ export function GitHubConnectPage() {
           const data = await res.json();
 
           if (data.access_token) {
+            // Persist so returning to the SPA restores the connected view
+            // rather than re-prompting the device flow.
+            saveStored({ token: data.access_token, repo });
             setState({ step: "success", token: data.access_token });
             return;
           }
@@ -124,7 +196,12 @@ export function GitHubConnectPage() {
         />
       )}
       {state.step === "success" && (
-        <SuccessState token={state.token} repo={repo} onRepoChange={setRepo} />
+        <SuccessState
+          token={state.token}
+          repo={repo}
+          onRepoChange={handleRepoChange}
+          onReconnect={reconnect}
+        />
       )}
       {state.step === "error" && (
         <ErrorState message={state.message} onRetry={() => setState({ step: "ready" })} />
@@ -224,10 +301,12 @@ function SuccessState({
   token,
   repo,
   onRepoChange,
+  onReconnect,
 }: {
   token: string;
   repo: string;
   onRepoChange: (r: string) => void;
+  onReconnect: () => void;
 }) {
   const [copied, setCopied] = useState<string>("");
   const [client, setClient] = useState<"claude" | "cursor" | "vscode" | "kiro" | "other">("claude");
@@ -371,8 +450,8 @@ Authorization: Bearer ${token}${repo ? `\nX-Cainban-Repo: ${repo}` : ""}`,
         </ol>
       </div>
 
-      <button className="btn link-btn" onClick={() => window.location.reload()}>
-        Connect another account
+      <button className="btn link-btn" onClick={onReconnect}>
+        Connect a different account
       </button>
     </div>
   );
