@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "cainban connect-page SPA — sign in with Microsoft Entra via the existing Cognito Hosted UI, then connect a GitHub repo and get an MCP client config. Configured against the CDK-managed Cognito pool + SpaClient (no new backend).",
+  "description": "cainban connect-page SPA — authenticate with GitHub via the device flow, then copy a ready-to-paste MCP client config. GitHub-only auth: no Cognito, no backend sign-in. The MCP bearer is the user's own GitHub token.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -12,7 +12,6 @@
     "typecheck": "tsc -b --noEmit"
   },
   "dependencies": {
-    "aws-amplify": "6.22.1",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "react-router": "^7.18.4"

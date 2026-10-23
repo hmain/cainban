@@ -1,58 +1,46 @@
 # cainban connect-page SPA (`web/`)
 
-> **Note:** The authorization model has changed. With GitHub-native permissions
-> enabled (`CAINBAN_USE_GITHUB_PERMISSIONS=true`), users can access any repo they
-> have push access to on GitHub — no separate "connect" step is required. The
-> Connect API has been removed. This SPA needs updates to work with the new model.
+A React + Vite + TypeScript single page whose one job is to get a user a
+ready-to-paste **MCP client config** for cainban. Authentication is
+**GitHub-only**: the page runs GitHub's **device flow** against the MCP API and
+hands back the user's own GitHub token as the MCP bearer. There is no Cognito,
+no Entra, no Amplify Auth, and no backend sign-in.
 
-A React + Vite + TypeScript single page that lets a user:
+What the user does:
 
-1. **Sign in with Microsoft Entra ID** via the existing Cognito **Hosted UI**
-   (`signInWithRedirect` → Entra → back with tokens).
-2. **View their kanban board** for any repo they have push access to on GitHub.
-3. Copy a ready-to-paste **MCP client config** (MCP URL + `Authorization: Bearer`
-   + `X-Cainban-Repo`).
-4. Grab an embeddable **README badge** at `/badges` — see [`docs/badges.md`](../docs/badges.md).
+1. **Connect with GitHub** (`/connect`) — the page POSTs to
+   `<MCP_API>/auth/github/device`, shows the user code + `github.com/login/device`
+   link, and polls `<MCP_API>/auth/github/device/poll` until GitHub returns a
+   token.
+2. **Copy the MCP config** — the success screen renders a per-client config
+   (Claude Desktop, Cursor, VS Code, Kiro, or generic) with
+   `Authorization: Bearer <github_token>` and an optional `X-Cainban-Repo`
+   default repo. The user pastes it into their AI client.
+3. Grab an embeddable **README badge** at `/badges` — see
+   [`docs/badges.md`](../docs/badges.md).
 
-It is configured against the **existing** CDK-managed Cognito user pool and the
-**new** public SPA app client — it does **not** use Amplify `defineAuth`/`defineData`
-to create a new backend pool. Amplify is used only as (a) the browser auth client
-(Hosted UI OAuth + token storage/refresh) and (b) Hosting/CI via `amplify.yml`.
+Authorization happens server-side on every MCP request: the Lambda validates the
+GitHub token (`GET /user`) for identity and checks repo access with the GitHub
+App installation token. The SPA never holds a Cognito token and never performs an
+OAuth redirect.
 
 ## Configuration (`VITE_*`)
 
-All configuration is injected at build time from environment variables. Copy
-`.env.example` to `.env` for local dev, or set these as Amplify Hosting
-environment variables. **None of these is a secret** — a public PKCE SPA client
-has no client secret, which is expected.
+Injected at build time. Copy `.env.example` to `.env` for local dev, or set it as
+an Amplify Hosting environment variable. There are no secrets.
 
 | Env var | Source (CDK stack output) | Example |
 | --- | --- | --- |
-| `VITE_USER_POOL_ID` | `UserPoolId` | `eu-north-1_knwIJmOs6` |
-| `VITE_USER_POOL_CLIENT_ID` | `SpaClientId` | (the SPA client id) |
-| `VITE_COGNITO_DOMAIN` | `HostedUiDomain` (strip `https://`) | `cainban-emawiant-528757808822.auth.eu-north-1.amazoncognito.com` |
 | `VITE_MCP_API` | `McpApiUrl` | `https://cl4qelp4hf.execute-api.eu-north-1.amazonaws.com/` |
-| `VITE_MCP_CLI_CLIENT_ID` (optional) | `McpCliClientId` | `79jr68h816vb3bcbgi6ueum2ht` |
-| `VITE_REDIRECT_URL` (optional) | your app URL | `http://localhost:5173/` |
 
-Read the outputs after deploy with:
-
-```
-cd infra
-cdk deploy --profile aws-test-hamin \
-  -c entraIssuer=https://login.microsoftonline.com/<tenant>/v2.0 \
-  -c entraClientId=<entra-app-client-id>
-```
-
-`HostedUiDomain` is printed as `https://<prefix>.auth.eu-north-1.amazoncognito.com`;
-set `VITE_COGNITO_DOMAIN` to that value **without** the `https://`.
+Read the output after deploy with `cd infra && cdk deploy` (see `infra/README.md`).
 
 ## Develop
 
 ```
 cd web
 npm install
-cp .env.example .env   # fill in the values from the stack outputs
+cp .env.example .env   # set VITE_MCP_API to the McpApiUrl output
 npm run dev            # http://localhost:5173
 ```
 
@@ -62,35 +50,13 @@ npm run dev            # http://localhost:5173
 cd web
 npm ci
 npm run build          # tsc -b && vite build -> web/dist
+npm run build:widget   # embeddable board widget -> web/dist/widget
 ```
 
 ## Deploy (Amplify Hosting)
 
-`amplify.yml` (at the repo root) builds `web/` with Node 22 and publishes
-`web/dist`. Connect this repo to an Amplify app, set the `VITE_*` env vars above
-in the Amplify console, and deploy. There is no Amplify backend — identity stays
-owned by the CDK stack.
-
-## Operator steps (one-time, post-deploy)
-
-1. **Deploy the stack** (`infra/`) with the real Entra `-c entraIssuer=…` and
-   `-c entraClientId=…`. Note the `HostedUiDomain`, `EntraRedirectUri`,
-   `SpaClientId` outputs.
-2. **Register the redirect URI in Entra**: in the Entra app registration, add the
-   `EntraRedirectUri` output (`<HostedUiDomain>/oauth2/idpresponse`) as a Web
-   redirect URI.
-3. **Fill the OIDC secret**: put the Entra app's `client_id` and `client_secret`
-   into the `cainban/entra-oidc` Secrets Manager secret (created empty by CDK).
-4. **Register the SPA callback URL**: after the first Amplify deploy you get the
-   app URL. Add it to the SPA client's callback/logout URLs by redeploying with
-   `-c spaCallbackUrls=<amplify-url>,http://localhost:5173/`
-   `-c spaLogoutUrls=<amplify-url>,http://localhost:5173/`, then set
-   `VITE_REDIRECT_URL` to the Amplify URL.
-5. **Set the Amplify env vars** (`VITE_*`) from the stack outputs and rebuild.
-
-## SaaS pluggability
-
-Adding a second customer's OIDC IdP is additive in the CDK: append an
-`oidcProviderSpec` entry (its own placeholder secret) in `infra/stack.go`. The SPA
-would then let the user pick which provider to sign in with (today it targets the
-single `EntraAwiant` provider directly).
+`amplify.yml` (repo root) builds `web/` with Node 22 and publishes `web/dist`.
+Connect this repo to an Amplify app, set `VITE_MCP_API` in the Amplify console,
+and deploy. There is no Amplify backend and no identity provider to wire up — the
+Amplify app origin must be in the MCP API's CORS allowlist (`spaCallbackUrls`
+context in `infra/cdk.json`) so the browser can reach the device-flow endpoints.
