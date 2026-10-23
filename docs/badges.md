@@ -84,6 +84,12 @@ that you prepend your API URL to.
 
 The tool requires authentication, so only authorized users can create valid badge URLs.
 
+A badge is scoped to **the repo your MCP connection is pointed at** — the one the
+server authorized for your token on this request (via the `X-Cainban-Repo`
+header or a `default_repo`). Omit the `repo` argument to badge that repo, or pass
+it explicitly as long as it matches. Naming a *different* repo is rejected; point
+the connection at that repo and run `create_badge_url` again.
+
 ### Configuration
 
 Set the `CAINBAN_BADGE_SECRET` environment variable to enable badge signing.
@@ -160,7 +166,7 @@ Generate signed badge URLs via the MCP API:
 
 | Argument | Required | Default | Description |
 | -------- | -------- | ------- | ----------- |
-| `repo` | No | Connection's default | The `owner/repo` to create a badge for. Must be authorized by your token. |
+| `repo` | No | Connection's repo | The `owner/repo` to create a badge for. Must match the repo this connection is scoped to; a different repo is rejected. |
 | `expires_in` | No | `30d` | Duration until expiry: `7d`, `30d`, `1y`, or `0` for no expiry. Max: 1 year. |
 | `style` | No | `flat` | Badge style: `flat`, `flat-square`, `plastic`. |
 | `label` | No | `cainban` | Left-side label text. |
