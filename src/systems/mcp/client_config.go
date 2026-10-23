@@ -54,7 +54,9 @@ type stdioServersDoc struct {
 // mcpServerEntry is the shape of a single MCP server entry both Kiro Crew's
 // on-disk mcp.json and the Kiro/Cursor/VS Code config files use. Under
 // GitHub-only auth there is no OAuth block — the client supplies its GitHub
-// token as the bearer out of band.
+// token as the bearer out of band. `Type` ("http") is set for Cursor/VS Code
+// but OMITTED for Kiro, which infers the transport from `url` and rejects a
+// `type` field (omitempty keeps it out of the Kiro entries).
 type mcpServerEntry struct {
 	Type    string            `json:"type,omitempty"`
 	URL     string            `json:"url"`
@@ -79,12 +81,13 @@ type clientConfigDoc struct {
 
 // clientConfigs holds the ready-to-write config for each supported client.
 type clientConfigs struct {
-	// Kirocrew is the ~/.kiro/crew/mcp.json entry (type + url).
+	// Kirocrew is the ~/.kiro/crew/mcp.json entry (url only — Kiro has no
+	// `type` field and rejects one).
 	Kirocrew mcpServersDoc `json:"kirocrew"`
 	// KirocrewDashboard is the Add-Custom-Server paste-box form (url only).
 	KirocrewDashboard mcpServersDoc `json:"kirocrew_dashboard"`
-	// KiroIDE / Cursor / VSCode share the file-based shape, identical content,
-	// kept as separate keys so the connect page can label them.
+	// KiroIDE is the Kiro settings mcp.json entry (url only, like Kirocrew).
+	// Cursor / VSCode take the `"type": "http"` file-based shape.
 	KiroIDE mcpServersDoc `json:"kiro_ide"`
 	Cursor  mcpServersDoc `json:"cursor"`
 	VSCode  mcpServersDoc `json:"vscode"`
@@ -136,12 +139,17 @@ func buildClientConfigDoc(cfg ClientConfigConfig) clientConfigDoc {
 	// The file-based server entry (Kiro Crew on-disk, Kiro IDE, Cursor, VS Code).
 	// GitHub-only: just the HTTP URL — the client sends its GitHub token as the
 	// bearer; there is no OAuth block to pre-fill.
-	fileEntry := mcpServerEntry{
-		Type: "http",
-		URL:  mcpURL,
+	// Kiro (Kiro IDE and Kiro Crew on-disk) infers the transport from `url`
+	// (HTTP) vs `command` (stdio): it has NO `type` field and REJECTS an entry
+	// carrying `"type": "http"`. So the Kiro entry is url-only. Cursor and VS
+	// Code, by contrast, do take `"type": "http"`.
+	kiroEntry := mcpServerEntry{URL: mcpURL}
+	kiroDoc := func() mcpServersDoc {
+		return mcpServersDoc{MCPServers: map[string]mcpServerEntry{"cainban": kiroEntry}}
 	}
-	fileDoc := func() mcpServersDoc {
-		return mcpServersDoc{MCPServers: map[string]mcpServerEntry{"cainban": fileEntry}}
+	httpEntry := mcpServerEntry{Type: "http", URL: mcpURL}
+	httpDoc := func() mcpServersDoc {
+		return mcpServersDoc{MCPServers: map[string]mcpServerEntry{"cainban": httpEntry}}
 	}
 
 	// The dashboard paste-box entry: url only (that surface rejects `type`).
@@ -171,11 +179,11 @@ func buildClientConfigDoc(cfg ClientConfigConfig) clientConfigDoc {
 	return clientConfigDoc{
 		MCPURL: mcpURL,
 		Configs: clientConfigs{
-			Kirocrew:          fileDoc(),
+			Kirocrew:          kiroDoc(),
 			KirocrewDashboard: mcpServersDoc{MCPServers: map[string]mcpServerEntry{"cainban": dashEntry}},
-			KiroIDE:           fileDoc(),
-			Cursor:            fileDoc(),
-			VSCode:            fileDoc(),
+			KiroIDE:           kiroDoc(),
+			Cursor:            httpDoc(),
+			VSCode:            httpDoc(),
 			ClaudeCodeCommand: claudeCmd,
 			Stdio:             stdioDoc,
 		},

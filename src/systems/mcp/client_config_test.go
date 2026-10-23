@@ -50,20 +50,56 @@ func TestClientConfig_PublicOKValidJSON(t *testing.T) {
 }
 
 // TestClientConfig_KirocrewSnippet proves the Kiro Crew on-disk config snippet
-// is the GitHub-only shape: type=http and the url, with NO oauth block (the
-// client sends its GitHub token as the bearer).
+// is the GitHub-only shape: url only with NO oauth block (the client sends its
+// GitHub token as the bearer). Kiro infers HTTP transport from `url` and
+// REJECTS a `type` field, so the Kiro Crew / Kiro IDE entries must NOT carry
+// one.
 func TestClientConfig_KirocrewSnippet(t *testing.T) {
 	doc := buildClientConfigDoc(testClientCfg())
 
-	entry, ok := doc.Configs.Kirocrew.MCPServers["cainban"]
-	if !ok {
-		t.Fatalf("kirocrew config missing cainban server entry")
+	for _, which := range []struct {
+		name string
+		doc  mcpServersDoc
+	}{
+		{"kirocrew", doc.Configs.Kirocrew},
+		{"kiro_ide", doc.Configs.KiroIDE},
+	} {
+		entry, ok := which.doc.MCPServers["cainban"]
+		if !ok {
+			t.Fatalf("%s config missing cainban server entry", which.name)
+		}
+		if entry.Type != "" {
+			t.Errorf("%s type = %q, want empty (Kiro rejects a type field)", which.name, entry.Type)
+		}
+		if entry.URL != testMcpURL {
+			t.Errorf("%s url = %q, want %q", which.name, entry.URL, testMcpURL)
+		}
+		// Belt and suspenders: the marshaled Kiro snippet must have no `type` key.
+		b, _ := json.Marshal(which.doc)
+		if strings.Contains(string(b), `"type"`) {
+			t.Errorf("%s snippet must not contain a type key: %s", which.name, b)
+		}
 	}
-	if entry.Type != "http" {
-		t.Errorf("kirocrew type = %q, want http", entry.Type)
-	}
-	if entry.URL != testMcpURL {
-		t.Errorf("kirocrew url = %q, want %q", entry.URL, testMcpURL)
+}
+
+// TestClientConfig_CursorVSCodeHaveType proves Cursor and VS Code DO carry
+// `"type": "http"` — unlike Kiro, those clients expect it.
+func TestClientConfig_CursorVSCodeHaveType(t *testing.T) {
+	doc := buildClientConfigDoc(testClientCfg())
+	for _, which := range []struct {
+		name string
+		doc  mcpServersDoc
+	}{
+		{"cursor", doc.Configs.Cursor},
+		{"vscode", doc.Configs.VSCode},
+	} {
+		entry := which.doc.MCPServers["cainban"]
+		if entry.Type != "http" {
+			t.Errorf("%s type = %q, want http", which.name, entry.Type)
+		}
+		if entry.URL != testMcpURL {
+			t.Errorf("%s url = %q, want %q", which.name, entry.URL, testMcpURL)
+		}
 	}
 }
 
